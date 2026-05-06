@@ -1,0 +1,94 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  # ── Move: build & test ──────────────────────────────────────────────
+  move:
+    name: "Move (${{ matrix.package }})"
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        package:
+          - myso_messaging_stack
+          - example_app
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install MySo CLI
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/the-social-proof-foundation/mysoup/main/install.sh | sh
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+          export PATH="$HOME/.local/bin:$PATH"
+          mysoup install myso@testnet-v1.68.1 -y
+
+      - name: Build
+        run: myso move build
+        working-directory: move/packages/${{ matrix.package }}
+
+      - name: Test
+        run: myso move test
+        working-directory: move/packages/${{ matrix.package }}
+
+  # ── TypeScript: lint, build, unit tests ─────────────────────────────
+  typescript:
+    name: TypeScript
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ts-sdks
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          package_json_file: ts-sdks/package.json
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: ts-sdks/pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Build
+        run: pnpm build
+
+      - name: Test (unit + typecheck)
+        run: pnpm test
+
+  # ── Rust: fmt, clippy, test ─────────────────────────────────────────
+  rust:
+    name: Rust
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: relayer
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+
+      - name: Check formatting
+        run: cargo fmt --check
+
+      - name: Clippy
+        run: cargo clippy -- -D warnings
+
+      - name: Test
+        run: cargo test --verbose

@@ -1,0 +1,15 @@
+target/
+.git/
+.github/
+.claude/
+e2e/
+docs/
+diagrams/
+*.md
+!README.md
+.env*
+.DS_Store
+.vscode/
+.idea/
+mutants.out*
+*.log

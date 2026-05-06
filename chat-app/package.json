@@ -1,0 +1,40 @@
+{
+  "name": "chat-app",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build:deps": "cd ../ts-sdks && pnpm install --frozen-lockfile && pnpm --filter @socialproof/myso-messaging-stack build",
+    "build": "pnpm build:deps && tsc -b && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@socialproof/bcs": "^0.0.2",
+    "@socialproof/dapp-kit": "^0.0.4",
+    "@socialproof/myso-messaging-stack": "link:../ts-sdks/packages/myso-messaging-stack",
+    "@socialproof/myso-groups": "^0.0.2",
+    "@socialproof/mydata": "^0.0.4",
+    "@socialproof/myso": "^0.0.4",
+    "@tailwindcss/vite": "^4.2.1",
+    "@tanstack/react-query": "^5.90.21",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "tailwindcss": "^4.2.1"
+  },
+  "devDependencies": {
+    "@types/react": "^19.1.0",
+    "@types/react-dom": "^19.1.0",
+    "@vitejs/plugin-react": "^4.5.2",
+    "typescript": "~5.8.3",
+    "vite": "^6.3.5"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ],
+    "overrides": {
+      "picomatch@>=4.0.0 <4.0.4": "^4.0.4"
+    }
+  }
+}

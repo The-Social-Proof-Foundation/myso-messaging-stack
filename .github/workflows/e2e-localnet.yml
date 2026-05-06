@@ -1,0 +1,26 @@
+# E2E tests on localnet (SDK + relayer + chain)
+#
+# Currently deferred: the relayer uses gRPC streaming to subscribe to MySo events,
+# but testcontainers networking does not reliably expose gRPC ports between
+# containers. This makes the relayer unable to connect to the localnet's gRPC
+# endpoint from within its own container.
+#
+# Once this is resolved (e.g. via shared Docker network or a non-gRPC event
+# polling mode in the relayer), this workflow should run:
+#   pnpm --filter @socialproof/myso-messaging-stack test:e2e:localnet
+#
+# See: ts-sdks/packages/myso-messaging-stack/test/e2e/setup-localnet.ts
+
+name: E2E (localnet) — deferred
+
+on:
+  workflow_dispatch:
+
+jobs:
+  placeholder:
+    name: E2E localnet (not yet functional)
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          echo "E2E localnet tests are deferred due to gRPC+testcontainers networking limitations."
+          echo "See .github/workflows/e2e-localnet.yml for details."

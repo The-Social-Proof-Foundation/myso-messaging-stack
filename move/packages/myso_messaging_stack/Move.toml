@@ -1,0 +1,17 @@
+[package]
+name = "myso_messaging_stack"
+edition = "2024.beta"
+
+[dependencies]
+myso_groups = { git = "https://github.com/the-social-proof-foundation/myso-groups.git", subdir = "move/packages/myso_groups", rev = "main" }
+mysons = { r.mvr = "@mysons/core" }
+
+[addresses]
+myso_messaging_stack = "0x0"
+
+[dev-addresses]
+myso_messaging_stack = "0x0"
+
+[environments]
+mainnet = { chain-id = "35834a8a" }
+testnet = { chain-id = "4c78adac" }

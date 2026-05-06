@@ -1,0 +1,81 @@
+{
+	"info": {
+		"_postman_id": "d9e20529-3de8-492e-845b-bbf67a80736e",
+		"name": "Messaging Relayer",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+		"_exporter_id": "24737635",
+		"_collection_link": "https://ssp-prod.postman.co/workspace/Mystens-Workspace~9cb2de0b-26cf-441f-8850-167cff082005/collection/24737635-d9e20529-3de8-492e-845b-bbf67a80736e?action=share&source=collection_link&creator=24737635"
+	},
+	"item": [
+		{
+			"name": "create_message",
+			"request": {
+				"method": "GET",
+				"header": []
+			},
+			"response": []
+		},
+		{
+			"name": "get_message",
+			"request": {
+				"method": "GET",
+				"header": []
+			},
+			"response": []
+		},
+		{
+			"name": "health",
+			"request": {
+				"method": "GET",
+				"header": []
+			},
+			"response": []
+		},
+		{
+			"name": "update_message",
+			"request": {
+				"method": "GET",
+				"header": []
+			},
+			"response": []
+		},
+		{
+			"name": "delete_message",
+			"request": {
+				"method": "GET",
+				"header": []
+			},
+			"response": []
+		}
+	],
+	"event": [
+		{
+			"listen": "prerequest",
+			"script": {
+				"type": "text/javascript",
+				"packages": {},
+				"requests": {},
+				"exec": [
+					""
+				]
+			}
+		},
+		{
+			"listen": "test",
+			"script": {
+				"type": "text/javascript",
+				"packages": {},
+				"requests": {},
+				"exec": [
+					""
+				]
+			}
+		}
+	],
+	"variable": [
+		{
+			"key": "SERVICE_HOST",
+			"value": ""
+		}
+	]
+}

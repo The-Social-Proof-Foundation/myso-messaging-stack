@@ -1,0 +1,82 @@
+name: Changesets
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+concurrency: ${{ github.workflow }}-${{ github.ref }}
+
+permissions:
+  id-token: write
+  contents: write
+  packages: write
+  pull-requests: write
+  issues: read
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ts-sdks
+    steps:
+      - name: checkout code repository
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # Pin v4.1.1
+        with:
+          fetch-depth: 0
+      - uses: pnpm/action-setup@a3252b78c470c02df07e9d59298aecedc3ccdd6d # pin@v3.0.0
+        with:
+          package_json_file: ts-sdks/package.json
+      - name: Install Nodejs
+        uses: actions/setup-node@60edb5dd545a775178f52524783378180af0d1f8 # pin@v4.0.2
+        with:
+          node-version: '24'
+          cache: 'pnpm'
+          cache-dependency-path: ts-sdks/pnpm-lock.yaml
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Check for pending changesets
+        id: changesets
+        run: |
+          # Check if there are any changeset files (excluding README.md and config.json)
+          CHANGESET_COUNT=$(find .changeset -name "*.md" ! -name "README.md" 2>/dev/null | wc -l)
+          if [ "$CHANGESET_COUNT" -gt 0 ]; then
+            echo "pending=true" >> $GITHUB_OUTPUT
+            echo "Found $CHANGESET_COUNT pending changeset(s)"
+          else
+            echo "pending=false" >> $GITHUB_OUTPUT
+            echo "No pending changesets"
+          fi
+      - name: Check if version needs publishing
+        if: steps.changesets.outputs.pending == 'false'
+        id: publish-check
+        run: |
+          LOCAL_VERSION=$(node -p "require('./packages/myso-messaging-stack/package.json').version")
+          NPM_VERSION=$(npm view @socialproof/myso-messaging-stack version 2>/dev/null || echo "0.0.0")
+          if [ "$LOCAL_VERSION" != "$NPM_VERSION" ]; then
+            echo "needed=true" >> $GITHUB_OUTPUT
+          else
+            echo "needed=false" >> $GITHUB_OUTPUT
+          fi
+          echo "Local: $LOCAL_VERSION, npm: $NPM_VERSION"
+      - name: Version packages
+        if: steps.changesets.outputs.pending == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          pnpm changeset-version
+      - name: Create Release Pull Request
+        if: steps.changesets.outputs.pending == 'true'
+        uses: peter-evans/create-pull-request@v7
+        with:
+          title: 'Version Packages'
+          commit-message: 'Version Packages'
+          branch: changeset-release/main
+          body: |
+            This PR was opened by the Changesets workflow. When you're ready to release, merge this PR.
+      - name: Publish to npm
+        if: steps.publish-check.outputs.needed == 'true'
+        run: pnpm release
+        env:
+          NPM_TOKEN: ''

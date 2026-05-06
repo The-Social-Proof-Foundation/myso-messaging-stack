@@ -1,0 +1,69 @@
+{
+	"name": "@socialproof/myso-messaging-stack",
+	"version": "0.0.2",
+	"private": false,
+	"description": "Permissioned Messaging Groups",
+	"license": "Apache-2.0",
+	"author": "The Social Proof Foundation <brandon@socialproof.foundation>",
+	"type": "module",
+	"main": "./dist/index.mjs",
+	"types": "./dist/index.d.mts",
+	"exports": {
+		".": {
+			"types": "./dist/index.d.mts",
+			"import": "./dist/index.mjs"
+		}
+	},
+	"sideEffects": false,
+	"files": [
+		"dist"
+	],
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/the-social-proof-foundation/myso-messaging-stack.git"
+	},
+	"bugs": {
+		"url": "https://github.com/the-social-proof-foundation/myso-messaging-stack/issues/new"
+	},
+	"publishConfig": {
+		"access": "public"
+	},
+	"scripts": {
+		"clean": "rm -rf tsconfig.tsbuildinfo ./dist",
+		"build": "rm -rf dist && tsc --noEmit && tsdown",
+		"codegen:summaries": "(cd ../../../move/packages/myso_messaging_stack && myso move summary)",
+		"codegen:patch": "node scripts/patch-address-mappings.js",
+		"codegen:generate": "myso-ts-codegen generate",
+		"codegen": "pnpm codegen:summaries && pnpm codegen:patch && pnpm codegen:generate && pnpm lint:fix",
+		"prettier:check": "prettier -c --ignore-unknown .",
+		"prettier:fix": "prettier -w --ignore-unknown .",
+		"oxlint:check": "oxlint .",
+		"oxlint:fix": "oxlint --fix .",
+		"vitest": "vitest",
+		"test": "pnpm test:typecheck && pnpm test:unit",
+		"test:typecheck": "tsc -p ./test",
+		"test:unit": "vitest run unit",
+		"test:integration": "vitest run --config vitest.integration.localnet.config.mts",
+		"test:e2e": "TEST_NETWORK=testnet vitest run --config vitest.e2e.config.mts",
+		"test:e2e:testnet": "TEST_NETWORK=testnet vitest run --config vitest.e2e.config.mts",
+		"lint": "pnpm run oxlint:check && pnpm run prettier:check",
+		"lint:fix": "pnpm run oxlint:fix && pnpm run prettier:fix"
+	},
+	"devDependencies": {
+		"@types/node": "^25.0.3",
+		"@socialproof/bcs": "^0.0.2",
+		"@socialproof/codegen": "^0.0.4",
+		"@socialproof/myso-groups": "^0.0.2",
+		"@socialproof/mydata": "^0.0.4",
+		"@socialproof/myso": "^0.0.4",
+		"testcontainers": "^11.13.0",
+		"typescript": "^5.9.3",
+		"vitest": "^4.0.18"
+	},
+	"peerDependencies": {
+		"@socialproof/bcs": "^0.0.2",
+		"@socialproof/myso-groups": "^0.0.2",
+		"@socialproof/mydata": "^0.0.4",
+		"@socialproof/myso": "^0.0.4"
+	}
+}

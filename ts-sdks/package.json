@@ -1,0 +1,58 @@
+{
+	"name": "@socialproof/ts-sdks",
+	"private": true,
+	"license": "Apache-2.0",
+	"scripts": {
+		"test": "turbo run test",
+		"test:e2e": "turbo run test:e2e --concurrency=1",
+		"changeset-version": "pnpm changeset version && pnpm --filter @socialproof/* codegen:version",
+		"prettier:check": "prettier -c --ignore-unknown .",
+		"prettier:fix": "prettier -w --ignore-unknown .",
+		"prettier:fix:watch": "onchange '**' -i -f add -f change -j 5 -- prettier -w --ignore-unknown {{file}}",
+		"oxlint:check": "oxlint .",
+		"oxlint:fix": "oxlint --fix .",
+		"lint": "pnpm run oxlint:check && pnpm run prettier:check",
+		"lint:fix": "pnpm run oxlint:fix && pnpm run prettier:fix",
+		"build": "turbo run build",
+		"release": "pnpm turbo run build --filter \"./packages/*\" && pnpm changeset publish"
+	},
+	"packageManager": "pnpm@10.17.0",
+	"pnpm": {
+		"overrides": {
+			"minimatch@>=5.0.0 <5.1.8": "^5.1.8",
+			"minimatch@>=9.0.0 <9.0.7": "^9.0.7",
+			"rollup@>=4.0.0 <4.59.0": "^4.59.0",
+			"lodash@>=4.0.0 <=4.17.22": "^4.17.23",
+			"undici@>=7.0.0 <7.24.0": "^7.24.0",
+			"picomatch@<2.3.2": "^2.3.2",
+			"picomatch@>=4.0.0 <4.0.4": "^4.0.4",
+			"brace-expansion@>=2.0.0 <2.0.3": "^2.0.3",
+			"yaml@>=2.0.0 <2.8.3": "^2.8.3"
+		}
+	},
+	"engines": {
+		"pnpm": ">=10.17.0"
+	},
+	"manypkg": {
+		"ignoredRules": [
+			"INTERNAL_MISMATCH",
+			"ROOT_HAS_DEV_DEPENDENCIES"
+		]
+	},
+	"devDependencies": {
+		"@changesets/cli": "^2.29.8",
+		"@ianvs/prettier-plugin-sort-imports": "^4.7.0",
+		"@manypkg/cli": "^0.25.1",
+		"@testcontainers/postgresql": "^11.13.0",
+		"concurrently": "^9.2.1",
+		"oxlint": "^1.39.0",
+		"oxlint-tsgolint": "^0.11.0",
+		"prettier": "^3.7.4",
+		"prettier-plugin-tailwindcss": "^0.7.2",
+		"testcontainers": "^11.13.0",
+		"tsx": "^4.21.0",
+		"tsdown": "^0.20.0-beta.1",
+		"turbo": "^2.7.4",
+		"typescript": "^5.9.3"
+	}
+}
