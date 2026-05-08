@@ -2,10 +2,10 @@
 module example_app::custom_mydata_policy_tests;
 
 use myso_groups::permissioned_group::PermissionedGroup;
-use myso_messaging_stack::messaging::{Self, Messaging, MessagingNamespace};
-use myso_messaging_stack::encryption_history::EncryptionHistory;
-use myso_messaging_stack::group_manager::GroupManager;
-use myso_messaging_stack::version::{Self, Version};
+use myso_messaging::messaging::{Self, Messaging, MessagingNamespace};
+use myso_messaging::encryption_history::EncryptionHistory;
+use myso_messaging::group_manager::GroupManager;
+use myso_messaging::version::{Self, Version};
 use myso::vec_set;
 use example_app::custom_mydata_policy;
 use myso::clock;
@@ -44,7 +44,7 @@ fun setup_group(ts: &mut Scenario): (ID, ID) {
     let mut namespace = ts.take_shared<MessagingNamespace>();
     let version = ts.take_shared<Version>();
     let group_manager = ts.take_shared<GroupManager>();
-    let (group, encryption_history) = messaging::create_group(
+    let (group, encryption_history, msg_log) = messaging::create_group(
         &version,
         &mut namespace,
         &group_manager,
@@ -58,6 +58,7 @@ fun setup_group(ts: &mut Scenario): (ID, ID) {
     let encryption_history_id = object::id(&encryption_history);
     transfer::public_share_object(group);
     transfer::public_share_object(encryption_history);
+    destroy(msg_log);
     ts::return_shared(version);
     ts::return_shared(group_manager);
     ts::return_shared(namespace);
@@ -189,7 +190,7 @@ fun mydata_approve_wrong_group() {
     let mut namespace = ts.take_shared<MessagingNamespace>();
     let version = ts.take_shared<Version>();
     let group_manager = ts.take_shared<GroupManager>();
-    let (group1, encryption_history1) = messaging::create_group(
+    let (group1, encryption_history1, msg_log1) = messaging::create_group(
         &version,
         &mut namespace,
         &group_manager,
@@ -202,8 +203,9 @@ fun mydata_approve_wrong_group() {
     let group1_id = object::id(&group1);
     transfer::public_share_object(group1);
     transfer::public_share_object(encryption_history1);
+    destroy(msg_log1);
 
-    let (group2, encryption_history2) = messaging::create_group(
+    let (group2, encryption_history2, msg_log2) = messaging::create_group(
         &version,
         &mut namespace,
         &group_manager,
@@ -217,6 +219,7 @@ fun mydata_approve_wrong_group() {
     let enc_history2_id = object::id(&encryption_history2);
     transfer::public_share_object(group2);
     transfer::public_share_object(encryption_history2);
+    destroy(msg_log2);
     ts::return_shared(version);
     ts::return_shared(group_manager);
     ts::return_shared(namespace);

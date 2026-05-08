@@ -1,13 +1,14 @@
 #[test_only]
-module myso_messaging_stack::mydata_policies_tests;
+module myso_messaging::mydata_policies_tests;
 
-use myso_messaging_stack::encryption_history::EncryptionHistory;
-use myso_messaging_stack::group_manager::GroupManager;
-use myso_messaging_stack::messaging::{Self, Messaging, MessagingNamespace, MessagingReader, MessagingSender};
-use myso_messaging_stack::mydata_policies;
-use myso_messaging_stack::version::{Self, Version};
+use myso_messaging::encryption_history::EncryptionHistory;
+use myso_messaging::group_manager::GroupManager;
+use myso_messaging::messaging::{Self, Messaging, MessagingNamespace, MessagingReader, MessagingSender};
+use myso_messaging::mydata_policies;
+use myso_messaging::version::{Self, Version};
 use myso_groups::permissioned_group::PermissionedGroup;
 use std::string;
+use std::unit_test::destroy;
 use myso::bcs;
 use myso::test_scenario as ts;
 use myso::vec_set;
@@ -43,7 +44,7 @@ fun setup_group(ts: &mut ts::Scenario): ID {
     let mut namespace = ts.take_shared<MessagingNamespace>();
     let version = ts.take_shared<Version>();
     let group_manager = ts.take_shared<GroupManager>();
-    let (group, encryption_history) = messaging::create_group(
+    let (group, encryption_history, msg_log) = messaging::create_group(
         &version,
         &mut namespace,
         &group_manager,
@@ -56,6 +57,7 @@ fun setup_group(ts: &mut ts::Scenario): ID {
     let group_id = object::id(&group);
     transfer::public_share_object(group);
     transfer::public_share_object(encryption_history);
+    destroy(msg_log);
     ts::return_shared(version);
     ts::return_shared(group_manager);
     ts::return_shared(namespace);
@@ -250,7 +252,7 @@ fun mydata_approve_reader_mismatched_encryption_history_fails() {
     let mut namespace = ts.take_shared<MessagingNamespace>();
     let version = ts.take_shared<Version>();
     let group_manager = ts.take_shared<GroupManager>();
-    let (group1, encryption_history1) = messaging::create_group(
+    let (group1, encryption_history1, msg_log1) = messaging::create_group(
         &version,
         &mut namespace,
         &group_manager,
@@ -264,9 +266,10 @@ fun mydata_approve_reader_mismatched_encryption_history_fails() {
     let encryption_history1_id = object::id(&encryption_history1);
     transfer::public_share_object(group1);
     transfer::public_share_object(encryption_history1);
+    destroy(msg_log1);
 
     // Create second group
-    let (group2, encryption_history2) = messaging::create_group(
+    let (group2, encryption_history2, msg_log2) = messaging::create_group(
         &version,
         &mut namespace,
         &group_manager,
@@ -279,6 +282,7 @@ fun mydata_approve_reader_mismatched_encryption_history_fails() {
     let encryption_history2_id = object::id(&encryption_history2);
     transfer::public_share_object(group2);
     transfer::public_share_object(encryption_history2);
+    destroy(msg_log2);
     ts::return_shared(version);
     ts::return_shared(group_manager);
     ts::return_shared(namespace);

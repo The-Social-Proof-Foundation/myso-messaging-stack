@@ -27,7 +27,7 @@
  * - `MessagingEditor`: Edit messages
  * - `MessagingDeleter`: Delete messages
  * - `EncryptionKeyRotator`: Rotate encryption keys
- * - `MySoNsAdmin`: Manage MySoNS reverse lookups on the group
+ * - `GroupHandleAdmin`: Register or clear the group handle in `GroupHandleRegistry`
  * - `MetadataAdmin`: Edit group metadata (name, data)
  *
  * ## Security
@@ -64,8 +64,8 @@ export const MessagingEditor = new MoveTuple({
 	name: `${$moduleName}::MessagingEditor`,
 	fields: [bcs.bool()],
 });
-export const MySoNsAdmin = new MoveTuple({
-	name: `${$moduleName}::MySoNsAdmin`,
+export const GroupHandleAdmin = new MoveTuple({
+	name: `${$moduleName}::GroupHandleAdmin`,
 	fields: [bcs.bool()],
 });
 export const MetadataAdmin = new MoveTuple({
@@ -119,7 +119,8 @@ export interface CreateGroupOptions {
  *
  * # Returns
  *
- * Tuple of `(PermissionedGroup<Messaging>, EncryptionHistory)`.
+ * Tuple of `(PermissionedGroup<Messaging>, EncryptionHistory, MessageLog)`.
+ * The third value is the per-group **paid escrow** shared object (`message_log`), not a digest log.
  *
  * # Note
  *
@@ -360,92 +361,64 @@ export function archiveGroup(options: ArchiveGroupOptions) {
 			arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
 		});
 }
-export interface SetMySonsReverseLookupArguments {
-	groupManager: RawTransactionArgument<string>;
+export interface SetGroupHandleArguments {
+	version: RawTransactionArgument<string>;
+	groupHandleRegistry: RawTransactionArgument<string>;
 	group: RawTransactionArgument<string>;
-	mysons: RawTransactionArgument<string>;
-	domainName: RawTransactionArgument<string>;
+	handle: RawTransactionArgument<string>;
 }
-export interface SetMySonsReverseLookupOptions {
+export interface SetGroupHandleOptions {
 	package?: string;
 	arguments:
-		| SetMySonsReverseLookupArguments
+		| SetGroupHandleArguments
 		| [
-				groupManager: RawTransactionArgument<string>,
+				version: RawTransactionArgument<string>,
+				groupHandleRegistry: RawTransactionArgument<string>,
 				group: RawTransactionArgument<string>,
-				mysons: RawTransactionArgument<string>,
-				domainName: RawTransactionArgument<string>,
+				handle: RawTransactionArgument<string>,
 		  ];
 }
 /**
- * Sets a MySoNS reverse lookup on a messaging group. The caller must have
- * `MySoNsAdmin` permission on the group. The `GroupManager` actor internally holds
- * `ObjectAdmin` to access the group UID.
- *
- * # Parameters
- *
- * - `group_manager`: Reference to the shared `GroupManager` actor
- * - `group`: Mutable reference to the `PermissionedGroup<Messaging>`
- * - `mysons`: Mutable reference to the MySoNS shared object
- * - `domain_name`: The domain name to set as reverse lookup
- * - `ctx`: Transaction context
- *
- * # Aborts
- *
- * - `ENotPermitted`: if caller doesn't have `MySoNsAdmin`
+ * Registers or replaces the canonical handle for this group in `GroupHandleRegistry`.
+ * Caller must have `GroupHandleAdmin`.
  */
-export function setMySonsReverseLookup(options: SetMySonsReverseLookupOptions) {
+export function setGroupHandle(options: SetGroupHandleOptions) {
 	const packageAddress = options.package ?? '@local-pkg/myso-messaging-stack';
 	const argumentsTypes = [null, null, null, '0x1::string::String'] satisfies (string | null)[];
-	const parameterNames = ['groupManager', 'group', 'mysons', 'domainName'];
+	const parameterNames = ['version', 'groupHandleRegistry', 'group', 'handle'];
 	return (tx: Transaction) =>
 		tx.moveCall({
 			package: packageAddress,
 			module: 'messaging',
-			function: 'set_mysons_reverse_lookup',
+			function: 'set_group_handle',
 			arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
 		});
 }
-export interface UnsetMySonsReverseLookupArguments {
-	groupManager: RawTransactionArgument<string>;
+export interface ClearGroupHandleArguments {
+	version: RawTransactionArgument<string>;
+	groupHandleRegistry: RawTransactionArgument<string>;
 	group: RawTransactionArgument<string>;
-	mysons: RawTransactionArgument<string>;
 }
-export interface UnsetMySonsReverseLookupOptions {
+export interface ClearGroupHandleOptions {
 	package?: string;
 	arguments:
-		| UnsetMySonsReverseLookupArguments
+		| ClearGroupHandleArguments
 		| [
-				groupManager: RawTransactionArgument<string>,
+				version: RawTransactionArgument<string>,
+				groupHandleRegistry: RawTransactionArgument<string>,
 				group: RawTransactionArgument<string>,
-				mysons: RawTransactionArgument<string>,
 		  ];
 }
-/**
- * Unsets a MySoNS reverse lookup on a messaging group. The caller must have
- * `MySoNsAdmin` permission on the group. The `GroupManager` actor internally holds
- * `ObjectAdmin` to access the group UID.
- *
- * # Parameters
- *
- * - `group_manager`: Reference to the shared `GroupManager` actor
- * - `group`: Mutable reference to the `PermissionedGroup<Messaging>`
- * - `mysons`: Mutable reference to the MySoNS shared object
- * - `ctx`: Transaction context
- *
- * # Aborts
- *
- * - `ENotPermitted`: if caller doesn't have `MySoNsAdmin`
- */
-export function unsetMySonsReverseLookup(options: UnsetMySonsReverseLookupOptions) {
+/** Removes this group's handle from the registry. Caller must have `GroupHandleAdmin`. */
+export function clearGroupHandle(options: ClearGroupHandleOptions) {
 	const packageAddress = options.package ?? '@local-pkg/myso-messaging-stack';
 	const argumentsTypes = [null, null, null] satisfies (string | null)[];
-	const parameterNames = ['groupManager', 'group', 'mysons'];
+	const parameterNames = ['version', 'groupHandleRegistry', 'group'];
 	return (tx: Transaction) =>
 		tx.moveCall({
 			package: packageAddress,
 			module: 'messaging',
-			function: 'unset_mysons_reverse_lookup',
+			function: 'clear_group_handle',
 			arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
 		});
 }

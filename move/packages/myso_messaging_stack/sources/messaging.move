@@ -3,8 +3,8 @@
 /// Public-facing module for the messaging package. All external interactions
 /// should go through this module.
 ///
-/// Wraps `permissions_group` to provide messaging-specific permission management
-/// and `encryption_history` for key rotation.
+/// Wraps `permissions_group` to provide messaging-specific permission management,
+/// `encryption_history` for key rotation, and `message_log` for **paid** `MYSO` escrow only.
 ///
 /// ## Permissions
 ///
@@ -18,7 +18,7 @@
 /// - `MessagingEditor`: Edit messages
 /// - `MessagingDeleter`: Delete messages
 /// - `EncryptionKeyRotator`: Rotate encryption keys
-/// - `MySoNsAdmin`: Manage MySoNS reverse lookups on the group
+/// - `GroupHandleAdmin`: Register or clear this group's handle in [`group_handle_registry::GroupHandleRegistry`]
 /// - `MetadataAdmin`: Edit group metadata (name, data)
 ///
 /// ## Security
@@ -27,13 +27,15 @@
 /// - Granting a permission implicitly adds the member if they don't exist
 /// - Revoking the last permission automatically removes the member
 ///
-module myso_messaging_stack::messaging;
+module myso_messaging::messaging;
 
-use myso_messaging_stack::encryption_history::{Self, EncryptionHistory, EncryptionKeyRotator};
-use myso_messaging_stack::group_leaver::{Self, GroupLeaver};
-use myso_messaging_stack::group_manager::{Self, GroupManager};
-use myso_messaging_stack::metadata;
-use myso_messaging_stack::version::Version;
+use myso_messaging::encryption_history::{Self, EncryptionHistory, EncryptionKeyRotator};
+use myso_messaging::group_leaver::{Self, GroupLeaver};
+use myso_messaging::group_handle_registry::{Self, GroupHandleRegistry};
+use myso_messaging::group_manager::{Self, GroupManager};
+use myso_messaging::message_log::{Self, MessageLog};
+use myso_messaging::metadata;
+use myso_messaging::version::Version;
 use myso_groups::permissioned_group::{
     Self,
     PermissionedGroup,
@@ -41,10 +43,12 @@ use myso_groups::permissioned_group::{
     ObjectAdmin
 };
 use std::string::String;
+use myso::clock::Clock;
+use myso::coin::Coin;
 use myso::derived_object;
+use myso::myso::MYSO;
 use myso::package;
 use myso::vec_set::{Self, VecSet};
-use mysons::mysons::MySoNS;
 
 // === Error Codes ===
 
@@ -59,6 +63,8 @@ const EEncryptionHistoryMismatch: u64 = 2;
 /// which has a best-effort guard against removing the last `PermissionsAdmin`
 /// (see `ELastPermissionsAdmin` — note that this count includes actor-object admins).
 const EPermissionsAdminCannotLeave: u64 = 3;
+/// The `MessageLog` object does not belong to the given group.
+const EMessageLogMismatch: u64 = 4;
 
 // === Witnesses ===
 
@@ -84,8 +90,8 @@ public struct MessagingDeleter() has drop;
 /// Permission to edit messages in the group.
 public struct MessagingEditor() has drop;
 
-/// Permission to manage MySoNS reverse lookups on the group.
-public struct MySoNsAdmin() has drop;
+/// Permission to set or clear this group's handle in the package [`GroupHandleRegistry`].
+public struct GroupHandleAdmin() has drop;
 
 /// Permission to edit group metadata (name, data).
 public struct MetadataAdmin() has drop;
@@ -107,9 +113,11 @@ fun init(otw: MESSAGING, ctx: &mut TxContext) {
 
     let group_leaver = group_leaver::new(&mut namespace.id);
     let group_manager = group_manager::new(&mut namespace.id);
+    let group_handle_registry = group_handle_registry::new(&mut namespace.id, ctx);
     transfer::share_object(namespace);
     group_leaver.share();
     group_manager.share();
+    group_handle_registry.share();
 }
 
 // === Public Functions ===
@@ -129,7 +137,7 @@ fun init(otw: MESSAGING, ctx: &mut TxContext) {
 /// - `ctx`: Transaction context
 ///
 /// # Returns
-/// Tuple of `(PermissionedGroup<Messaging>, EncryptionHistory)`.
+/// Tuple of `(PermissionedGroup<Messaging>, EncryptionHistory, MessageLog)`.
 ///
 /// # Note
 /// If `initial_members` contains the creator's address, it is silently skipped (no abort).
@@ -148,7 +156,7 @@ public fun create_group(
     initial_encrypted_dek: vector<u8>,
     initial_members: VecSet<address>,
     ctx: &mut TxContext,
-): (PermissionedGroup<Messaging>, EncryptionHistory) {
+): (PermissionedGroup<Messaging>, EncryptionHistory, MessageLog) {
     version.validate_version();
     let mut group: PermissionedGroup<Messaging> = permissioned_group::new_derived<
         Messaging,
@@ -173,7 +181,7 @@ public fun create_group(
     group.grant_permission<Messaging, PermissionsAdmin>(group_leaver_address, ctx);
 
     // Grant ObjectAdmin to the GroupManager actor so it can access the group UID
-    // for MySoNS reverse lookups and metadata management.
+    // for metadata management (dynamic field on the group UID).
     group.grant_permission<Messaging, ObjectAdmin>(
         object::id(group_manager).to_address(),
         ctx,
@@ -198,7 +206,9 @@ public fun create_group(
         ctx,
     );
 
-    (group, encryption_history)
+    let message_log = message_log::new(&mut namespace.id, uuid, object::id(&group), ctx);
+
+    (group, encryption_history, message_log)
 }
 
 /// Creates a new messaging group and shares both objects.
@@ -226,7 +236,7 @@ entry fun create_and_share_group(
     initial_members: vector<address>,
     ctx: &mut TxContext,
 ) {
-    let (group, encryption_history) = create_group(
+    let (group, encryption_history, message_log) = create_group(
         version,
         namespace,
         group_manager,
@@ -238,6 +248,7 @@ entry fun create_and_share_group(
     );
     transfer::public_share_object(group);
     transfer::public_share_object(encryption_history);
+    transfer::public_share_object(message_log);
 }
 
 /// Rotates the encryption key for a group.
@@ -331,52 +342,49 @@ entry fun archive_group(
     cap.burn();
 }
 
-// === MySoNS Functions ===
+// === Group handle registry (separate from profile usernames) ===
 
-/// Sets a MySoNS reverse lookup on a messaging group.
-/// The caller must have `MySoNsAdmin` permission on the group.
-/// The `GroupManager` actor internally holds `ObjectAdmin` to access the group UID.
+/// Registers or replaces the canonical handle for this group in the shared [`GroupHandleRegistry`].
 ///
-/// # Parameters
-/// - `group_manager`: Reference to the shared `GroupManager` actor
-/// - `group`: Mutable reference to the `PermissionedGroup<Messaging>`
-/// - `mysons`: Mutable reference to the MySoNS shared object
-/// - `domain_name`: The domain name to set as reverse lookup
-/// - `ctx`: Transaction context
+/// The caller must have `GroupHandleAdmin`. See `group_handle_registry::set_handle` for handle rules.
 ///
 /// # Aborts
-/// - `ENotPermitted`: if caller doesn't have `MySoNsAdmin`
-public fun set_mysons_reverse_lookup(
-    group_manager: &GroupManager,
+/// - `ENotPermitted`: if caller doesn't have `GroupHandleAdmin`
+/// - `EGroupArchived`: if the group is paused
+/// - `group_handle_registry::EHandleTaken` / `EInvalidHandle`: from the registry
+public fun set_group_handle(
+    version: &Version,
+    registry: &mut GroupHandleRegistry,
     group: &mut PermissionedGroup<Messaging>,
-    mysons: &mut MySoNS,
-    domain_name: String,
+    handle: String,
     ctx: &TxContext,
 ) {
-    assert!(group.has_permission<Messaging, MySoNsAdmin>(ctx.sender()), ENotPermitted);
-    group_manager::set_reverse_lookup<Messaging>(group_manager, group, mysons, domain_name);
+    version.validate_version();
+    assert_group_not_archived(group);
+    assert!(group.has_permission<Messaging, GroupHandleAdmin>(ctx.sender()), ENotPermitted);
+    group_handle_registry::set_handle(registry, object::id(group), handle);
 }
 
-/// Unsets a MySoNS reverse lookup on a messaging group.
-/// The caller must have `MySoNsAdmin` permission on the group.
-/// The `GroupManager` actor internally holds `ObjectAdmin` to access the group UID.
-///
-/// # Parameters
-/// - `group_manager`: Reference to the shared `GroupManager` actor
-/// - `group`: Mutable reference to the `PermissionedGroup<Messaging>`
-/// - `mysons`: Mutable reference to the MySoNS shared object
-/// - `ctx`: Transaction context
+/// Removes this group's handle from the registry, if any.
 ///
 /// # Aborts
-/// - `ENotPermitted`: if caller doesn't have `MySoNsAdmin`
-public fun unset_mysons_reverse_lookup(
-    group_manager: &GroupManager,
+/// - `ENotPermitted`: if caller doesn't have `GroupHandleAdmin`
+/// - `EGroupArchived`: if the group is paused
+public fun clear_group_handle(
+    version: &Version,
+    registry: &mut GroupHandleRegistry,
     group: &mut PermissionedGroup<Messaging>,
-    mysons: &mut MySoNS,
     ctx: &TxContext,
 ) {
-    assert!(group.has_permission<Messaging, MySoNsAdmin>(ctx.sender()), ENotPermitted);
-    group_manager::unset_reverse_lookup<Messaging>(group_manager, group, mysons);
+    version.validate_version();
+    assert_group_not_archived(group);
+    assert!(group.has_permission<Messaging, GroupHandleAdmin>(ctx.sender()), ENotPermitted);
+    group_handle_registry::clear_handle(registry, object::id(group));
+}
+
+/// Read-only: resolve a handle to a group object ID. Does not require `GroupHandleAdmin`.
+public fun lookup_group_by_handle(registry: &GroupHandleRegistry, handle: String): Option<ID> {
+    group_handle_registry::lookup_group_by_handle(registry, handle)
 }
 
 // === Metadata Functions ===
@@ -436,9 +444,129 @@ public fun remove_group_data(
     m.remove_data(key)
 }
 
+// === Message log (paid MYSO escrow only) ===
+
+fun assert_message_log_matches_group(log: &MessageLog, group: &PermissionedGroup<Messaging>) {
+    assert!(message_log::group_id(log) == object::id(group), EMessageLogMismatch);
+}
+
+fun assert_group_not_archived(group: &PermissionedGroup<Messaging>) {
+    assert!(!group.is_paused(), EGroupArchived);
+}
+
+/// Escrow `escrow_amount` from `payment` for a paid message. Requires `MessagingSender`.
+/// Excess coin returns to the sender.
+public fun send_paid_message_digest(
+    version: &Version,
+    group: &PermissionedGroup<Messaging>,
+    log: &mut MessageLog,
+    recipient: address,
+    payment: Coin<MYSO>,
+    escrow_amount: u64,
+    dedupe_key: vector<u8>,
+    nonce: u128,
+    clock: &Clock,
+    ctx: &mut TxContext,
+) {
+    version.validate_version();
+    assert_group_not_archived(group);
+    assert_message_log_matches_group(log, group);
+    assert!(group.has_permission<Messaging, MessagingSender>(ctx.sender()), ENotPermitted);
+    let s = ctx.sender();
+    message_log::send_paid_message(
+        log,
+        s,
+        recipient,
+        payment,
+        escrow_amount,
+        dedupe_key,
+        nonce,
+        clock,
+        ctx,
+    );
+}
+
+/// Reply to a paid message and take full escrow as coin. Caller may split fees (e.g. via
+/// [`reply_to_paid_message_claim_settled`]) or use this entry for custom routing.
+public fun reply_to_paid_message_claim_coin(
+    version: &Version,
+    group: &PermissionedGroup<Messaging>,
+    log: &mut MessageLog,
+    paid_msg_seq: u64,
+    char_count: u32,
+    dedupe_key: vector<u8>,
+    nonce: u128,
+    clock: &Clock,
+    ctx: &mut TxContext,
+): Coin<MYSO> {
+    version.validate_version();
+    assert_group_not_archived(group);
+    assert_message_log_matches_group(log, group);
+    assert!(group.has_permission<Messaging, MessagingSender>(ctx.sender()), ENotPermitted);
+    message_log::reply_to_paid_message_claim_coin(
+        log,
+        ctx.sender(),
+        paid_msg_seq,
+        char_count,
+        dedupe_key,
+        nonce,
+        clock,
+        ctx,
+    )
+}
+
+/// Reply and settle: same validation as [`reply_to_paid_message_claim_coin`], then split escrow per
+/// paid-message BPS to `platform_fee_recipient` and `ecosystem_fee_recipient` (typically addresses
+/// matching `Platform` treasury policy and `EcosystemTreasury`), with net to the paid-message recipient.
+public fun reply_to_paid_message_claim_settled(
+    version: &Version,
+    group: &PermissionedGroup<Messaging>,
+    log: &mut MessageLog,
+    paid_msg_seq: u64,
+    char_count: u32,
+    dedupe_key: vector<u8>,
+    nonce: u128,
+    clock: &Clock,
+    platform_fee_recipient: address,
+    ecosystem_fee_recipient: address,
+    ctx: &mut TxContext,
+) {
+    version.validate_version();
+    assert_group_not_archived(group);
+    assert_message_log_matches_group(log, group);
+    assert!(group.has_permission<Messaging, MessagingSender>(ctx.sender()), ENotPermitted);
+    message_log::reply_to_paid_message_claim_settled(
+        log,
+        ctx.sender(),
+        paid_msg_seq,
+        char_count,
+        dedupe_key,
+        nonce,
+        clock,
+        platform_fee_recipient,
+        ecosystem_fee_recipient,
+        ctx,
+    );
+}
+
+/// Refund expired paid escrow to the payer. Requires `MessagingSender` (payer must be a member).
+public fun refund_paid_escrow(
+    version: &Version,
+    group: &PermissionedGroup<Messaging>,
+    log: &mut MessageLog,
+    paid_msg_seq: u64,
+    clock: &Clock,
+    ctx: &mut TxContext,
+) {
+    version.validate_version();
+    assert_group_not_archived(group);
+    assert_message_log_matches_group(log, group);
+    assert!(group.has_permission<Messaging, MessagingSender>(ctx.sender()), ENotPermitted);
+    message_log::refund_paid_message(log, ctx.sender(), paid_msg_seq, clock, ctx);
+}
+
 /// Grants all messaging permissions to a member.
-/// Includes: `MessagingSender`, `MessagingReader`, `MessagingEditor`,
-/// `MessagingDeleter`, `EncryptionKeyRotator`, `MySoNsAdmin`, `MetadataAdmin`.
+/// `MessagingDeleter`, `EncryptionKeyRotator`, `GroupHandleAdmin`, `MetadataAdmin`.
 fun grant_all_messaging_permissions(
     group: &mut PermissionedGroup<Messaging>,
     member: address,
@@ -449,7 +577,7 @@ fun grant_all_messaging_permissions(
     group.grant_permission<Messaging, MessagingEditor>(member, ctx);
     group.grant_permission<Messaging, MessagingDeleter>(member, ctx);
     group.grant_permission<Messaging, EncryptionKeyRotator>(member, ctx);
-    group.grant_permission<Messaging, MySoNsAdmin>(member, ctx);
+    group.grant_permission<Messaging, GroupHandleAdmin>(member, ctx);
     group.grant_permission<Messaging, MetadataAdmin>(member, ctx);
 }
 

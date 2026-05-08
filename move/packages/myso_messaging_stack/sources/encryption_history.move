@@ -13,7 +13,7 @@
 /// - `messaging::create_group` - creates group with encryption
 /// - `messaging::rotate_encryption_key` - rotates keys
 ///
-module myso_messaging_stack::encryption_history;
+module myso_messaging::encryption_history;
 
 use std::string::String;
 use myso::derived_object;

@@ -5,7 +5,6 @@
 /// `GroupManager` is a derived singleton object from `MessagingNamespace`.
 /// It is granted `ObjectAdmin` on every group created via `messaging::create_group`,
 /// and exposes functions for:
-/// - MySoNS reverse lookup management
 /// - Metadata dynamic field management
 ///
 /// This module does NOT import `messaging.move` to avoid a circular dependency.
@@ -13,15 +12,13 @@
 /// at the call site in `messaging.move`.
 ///
 /// All public entry points are in the `messaging` module.
-module myso_messaging_stack::group_manager;
+module myso_messaging::group_manager;
 
-use myso_messaging_stack::metadata::{Self, Metadata};
+use myso_messaging::metadata::{Self, Metadata};
 use myso_groups::permissioned_group::PermissionedGroup;
 use std::string::String;
 use myso::derived_object;
 use myso::dynamic_field;
-use mysons::controller;
-use mysons::mysons::MySoNS;
 
 // === Derivation Key ===
 
@@ -67,54 +64,6 @@ public(package) fun share(self: GroupManager) {
 /// The string key used for address derivation.
 public(package) fun derivation_key(): String {
     GROUP_MANAGER_DERIVATION_KEY.to_string()
-}
-
-// === MySoNS Functions ===
-
-/// Sets a MySoNS reverse lookup on a group.
-/// The `GroupManager` must have `ObjectAdmin` on the group (granted at creation time).
-///
-/// Generic over `T: drop` so this module does not need to import `messaging.move`.
-/// Instantiated as `set_reverse_lookup<Messaging>` at the call site in `messaging.move`.
-///
-/// # Parameters
-/// - `self`: Reference to the `GroupManager` actor
-/// - `group`: Mutable reference to the group
-/// - `mysons`: Mutable reference to the MySoNS shared object
-/// - `domain_name`: The domain name to set as reverse lookup
-///
-/// # Aborts
-/// - `ENotPermitted`: if this actor doesn't have `ObjectAdmin` on the group
-public(package) fun set_reverse_lookup<T: drop>(
-    self: &GroupManager,
-    group: &mut PermissionedGroup<T>,
-    mysons: &mut MySoNS,
-    domain_name: String,
-) {
-    let uid = group.object_uid_mut<T>(&self.id);
-    controller::set_object_reverse_lookup(mysons, uid, domain_name);
-}
-
-/// Unsets a MySoNS reverse lookup on a group.
-/// The `GroupManager` must have `ObjectAdmin` on the group (granted at creation time).
-///
-/// Generic over `T: drop` so this module does not need to import `messaging.move`.
-/// Instantiated as `unset_reverse_lookup<Messaging>` at the call site in `messaging.move`.
-///
-/// # Parameters
-/// - `self`: Reference to the `GroupManager` actor
-/// - `group`: Mutable reference to the group
-/// - `mysons`: Mutable reference to the MySoNS shared object
-///
-/// # Aborts
-/// - `ENotPermitted`: if this actor doesn't have `ObjectAdmin` on the group
-public(package) fun unset_reverse_lookup<T: drop>(
-    self: &GroupManager,
-    group: &mut PermissionedGroup<T>,
-    mysons: &mut MySoNS,
-) {
-    let uid = group.object_uid_mut<T>(&self.id);
-    controller::unset_object_reverse_lookup(mysons, uid);
 }
 
 // === Metadata Functions ===

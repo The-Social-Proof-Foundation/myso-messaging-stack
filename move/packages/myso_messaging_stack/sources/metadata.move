@@ -11,7 +11,7 @@
 /// Mutable fields (editable by `MetadataAdmin` holders):
 /// - `name`: Human-readable group name
 /// - `data`: Key-value map for arbitrary extension data
-module myso_messaging_stack::metadata;
+module myso_messaging::metadata;
 
 use std::string::String;
 use myso::vec_map::{Self, VecMap};

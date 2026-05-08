@@ -60,23 +60,7 @@ export async function bootstrapLocalnet(
 		recipient: admin.address,
 	});
 
-	// The myso-tools container doesn't have mvr, so patch the Move.toml to use
-	// a git-based mysons dependency instead of the MVR one before publishing.
-	console.log('Patching Move.toml for localnet (replacing MVR mysons dep with git)...');
-	await execCommand(
-		[
-			'sed',
-			'-i',
-			's|mysons = { r.mvr = "@mysons/core" }|mysons = { git = "https://github.com/the-social-proof-foundation/mysons-contracts", subdir = "packages/mysons", rev = "2b75990bdc31472405a6bf47b40152627a1fa6c0" }|',
-			'/test-data/myso_messaging_stack/Move.toml',
-		],
-		MYSO_TOOLS_CONTAINER_ID,
-	);
-	// Remove Move.lock so it doesn't conflict with the patched dependency
-	await execCommand(
-		['rm', '-f', '/test-data/myso_messaging_stack/Move.lock'],
-		MYSO_TOOLS_CONTAINER_ID,
-	);
+	// `myso_messaging` no longer depends on mysons; publish uses Move.toml as copied into the container.
 
 	console.log('Publishing Move packages...');
 	const published = await publishPackages({

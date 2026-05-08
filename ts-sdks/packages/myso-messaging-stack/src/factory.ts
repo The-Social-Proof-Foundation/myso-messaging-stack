@@ -10,7 +10,6 @@ import { mysoMessagingStack } from './client.js';
 import {
 	TESTNET_MYSO_MESSAGING_STACK_PACKAGE_CONFIG,
 	MAINNET_MYSO_MESSAGING_STACK_PACKAGE_CONFIG,
-	type MySonsConfig,
 } from './constants.js';
 import { MySoMessagingStackClientError } from './error.js';
 import type { AttachmentsConfig } from './attachments/types.js';
@@ -48,9 +47,6 @@ export interface CreateMySoMessagingStackClientOptions<TApproveContext = void> {
 		/** Permissioned groups package config. Defaults to auto-detection for testnet/mainnet. */
 		permissionedGroups?: MySoGroupsPackageConfig;
 	};
-
-	/** MySoNS config for reverse lookup operations (auto-detected for testnet/mainnet). */
-	mysonsConfig?: MySonsConfig;
 
 	/** Relayer transport configuration. */
 	relayer: RelayerConfig;
@@ -125,7 +121,6 @@ export function createMySoMessagingStackClient<TApproveContext = void>(
 			mysoMessagingStack<TApproveContext>({
 				packageConfig: options.packageConfig?.messaging,
 				encryption: options.encryption,
-				mysonsConfig: options.mysonsConfig,
 				relayer: options.relayer,
 				attachments: options.attachments,
 				recovery: options.recovery,

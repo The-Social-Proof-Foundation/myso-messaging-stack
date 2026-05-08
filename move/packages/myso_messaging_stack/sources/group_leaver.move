@@ -12,7 +12,7 @@
 ///
 /// All public entry points are in the `messaging` module:
 /// - `messaging::leave` - removes the caller from a group
-module myso_messaging_stack::group_leaver;
+module myso_messaging::group_leaver;
 
 use myso_groups::permissioned_group::PermissionedGroup;
 use std::string::String;

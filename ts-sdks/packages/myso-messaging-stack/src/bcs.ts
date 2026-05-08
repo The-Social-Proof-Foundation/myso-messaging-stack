@@ -14,9 +14,9 @@ import {
 	MessagingReader,
 	MessagingEditor,
 	MessagingDeleter,
-	MySoNsAdmin,
+	GroupHandleAdmin,
 	MetadataAdmin,
-} from './contracts/myso_messaging_stack/messaging.js';
+} from './contracts/myso_messaging/messaging.js';
 
 // Encryption history module types
 import {
@@ -26,14 +26,14 @@ import {
 	EncryptionKeyRotator,
 	EncryptionHistoryTag,
 	PermissionedGroupTag,
-} from './contracts/myso_messaging_stack/encryption_history.js';
+} from './contracts/myso_messaging/encryption_history.js';
 
 // Metadata module types
-import { Metadata, MetadataKey } from './contracts/myso_messaging_stack/metadata.js';
+import { Metadata, MetadataKey } from './contracts/myso_messaging/metadata.js';
 
 // Actor object types
-import { GroupManager } from './contracts/myso_messaging_stack/group_manager.js';
-import { GroupLeaver } from './contracts/myso_messaging_stack/group_leaver.js';
+import { GroupManager } from './contracts/myso_messaging/group_manager.js';
+import { GroupLeaver } from './contracts/myso_messaging/group_leaver.js';
 
 // Parsed type exports
 export type ParsedMessagingNamespace = (typeof MessagingNamespace)['$inferType'];
@@ -48,7 +48,7 @@ export type ParsedEncryptionKeyRotated = (typeof EncryptionKeyRotated)['$inferTy
 export type ParsedEncryptionKeyRotator = (typeof EncryptionKeyRotator)['$inferType'];
 export type ParsedEncryptionHistoryTag = (typeof EncryptionHistoryTag)['$inferType'];
 export type ParsedPermissionedGroupTag = (typeof PermissionedGroupTag)['$inferType'];
-export type ParsedMySoNsAdmin = (typeof MySoNsAdmin)['$inferType'];
+export type ParsedGroupHandleAdmin = (typeof GroupHandleAdmin)['$inferType'];
 export type ParsedMetadataAdmin = (typeof MetadataAdmin)['$inferType'];
 export type ParsedMetadata = (typeof Metadata)['$inferType'];
 export type ParsedMetadataKey = (typeof MetadataKey)['$inferType'];
@@ -106,8 +106,8 @@ export class MySoMessagingStackBCS {
 	readonly EncryptionHistoryTag: BcsType<ParsedEncryptionHistoryTag, unknown>;
 	/** Derivation key for PermissionedGroup address */
 	readonly PermissionedGroupTag: BcsType<ParsedPermissionedGroupTag, unknown>;
-	/** Permission witness: manage MySoNS reverse lookups */
-	readonly MySoNsAdmin: BcsType<ParsedMySoNsAdmin, unknown>;
+	/** Permission witness: register or clear group handles in `GroupHandleRegistry` */
+	readonly GroupHandleAdmin: BcsType<ParsedGroupHandleAdmin, unknown>;
 	/** Permission witness: edit group metadata */
 	readonly MetadataAdmin: BcsType<ParsedMetadataAdmin, unknown>;
 
@@ -120,7 +120,7 @@ export class MySoMessagingStackBCS {
 
 	// === Actor object types ===
 
-	/** Singleton actor: manages UID access for MySoNS + metadata */
+	/** Singleton actor: manages UID access for metadata and related group fields */
 	readonly GroupManager: BcsType<ParsedGroupManager, unknown>;
 	/** Singleton actor: allows members to leave groups */
 	readonly GroupLeaver: BcsType<ParsedGroupLeaver, unknown>;
@@ -148,8 +148,8 @@ export class MySoMessagingStackBCS {
 		this.MessagingDeleter = MessagingDeleter.transform({
 			name: `${messagingModule}::MessagingDeleter`,
 		});
-		this.MySoNsAdmin = MySoNsAdmin.transform({
-			name: `${messagingModule}::MySoNsAdmin`,
+		this.GroupHandleAdmin = GroupHandleAdmin.transform({
+			name: `${messagingModule}::GroupHandleAdmin`,
 		});
 		this.MetadataAdmin = MetadataAdmin.transform({
 			name: `${messagingModule}::MetadataAdmin`,

@@ -11,9 +11,9 @@
   },
   "dependencies": {
     "@socialproof/bcs": "^0.0.2",
-    "@socialproof/dapp-kit": "^0.0.4",
-    "@socialproof/myso-messaging-stack": "link:../ts-sdks/packages/myso-messaging-stack",
-    "@socialproof/myso-groups": "^0.0.2",
+    "@socialproof/mysocial-auth": "^0.12.0",
+    "@socialproof/myso-messaging-stack": "file:../ts-sdks/packages/myso-messaging-stack",
+    "@socialproof/myso-groups": "^0.0.1",
     "@socialproof/mydata": "^0.0.4",
     "@socialproof/myso": "^0.0.4",
     "@tailwindcss/vite": "^4.2.1",

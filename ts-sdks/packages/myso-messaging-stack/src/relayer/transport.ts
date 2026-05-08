@@ -7,9 +7,17 @@ import type {
 	FetchMessageParams,
 	FetchMessagesParams,
 	FetchMessagesResult,
+	GetGroupReceiptsParams,
+	GroupReceiptState,
+	ListGroupPinsParams,
+	ListGroupReactionsParams,
+	PostGroupReceiptsParams,
+	PostGroupReactionParams,
 	RelayerMessage,
+	RelayerReactionEntry,
 	SendMessageParams,
 	SendMessageResult,
+	SetGroupPinParams,
 	SubscribeParams,
 	UpdateMessageParams,
 } from './types.js';
@@ -28,5 +36,13 @@ export interface RelayerTransport {
 	deleteMessage(params: DeleteMessageParams): Promise<void>;
 	/** Subscribe to real-time messages. Use afterOrder for resumability. */
 	subscribe(params: SubscribeParams): AsyncIterable<RelayerMessage>;
+	/** Off-chain reaction tallies (`/v1/groups/.../reactions`). */
+	listGroupReactions(params: ListGroupReactionsParams): Promise<RelayerReactionEntry[]>;
+	postGroupReaction(params: PostGroupReactionParams): Promise<void>;
+	/** Pinned `chain_seq` indices (`/v1/groups/.../pins`). */
+	listGroupPins(params: ListGroupPinsParams): Promise<number[]>;
+	setGroupPin(params: SetGroupPinParams): Promise<void>;
+	getGroupReceipts(params: GetGroupReceiptsParams): Promise<GroupReceiptState>;
+	postGroupReceipts(params: PostGroupReceiptsParams): Promise<void>;
 	disconnect(): void;
 }

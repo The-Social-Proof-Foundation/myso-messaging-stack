@@ -532,4 +532,139 @@ describe('HTTPRelayerTransport', () => {
 			expect(url).toBe('https://relayer.example.com/messages');
 		});
 	});
+
+	describe('group reactions', () => {
+		it('GET /v1/groups/:id/reactions with header auth and chain_seq query', async () => {
+			const transport = new HTTPRelayerTransport({
+				relayerUrl: MOCK_RELAYER_URL,
+				apiPrefix: '/v1',
+				fetch: mockFetch,
+			});
+			const keypair = Ed25519Keypair.generate();
+			const groupId = '0x' + 'ab'.repeat(32);
+			mockFetch.mockResolvedValueOnce(
+				new Response(
+					JSON.stringify([{ chain_seq: 1, emoji_code: 42, count: 3 }]),
+					{ status: 200 },
+				),
+			);
+
+			const rows = await transport.listGroupReactions({
+				signer: keypair,
+				groupId,
+				chainSeq: 1,
+			});
+
+			expect(rows).toEqual([{ chainSeq: 1, emojiCode: 42, count: 3 }]);
+			const url = mockFetch.mock.calls[0][0] as string;
+			expect(url).toBe(
+				`${MOCK_RELAYER_URL}/v1/groups/${groupId}/reactions?chain_seq=1`,
+			);
+		});
+
+		it('POST /v1/groups/:id/reactions with body auth', async () => {
+			const transport = new HTTPRelayerTransport({
+				relayerUrl: MOCK_RELAYER_URL,
+				apiPrefix: '/v1',
+				fetch: mockFetch,
+			});
+			mockFetch.mockResolvedValueOnce(new Response(JSON.stringify({ ok: true }), { status: 200 }));
+
+			await transport.postGroupReaction({
+				signer: defaultKeypair,
+				groupId: '0x' + 'ab'.repeat(32),
+				chainSeq: 2,
+				emojiCode: 128077,
+				add: false,
+			});
+
+			const [url, init] = mockFetch.mock.calls[0];
+			expect(url).toBe(`${MOCK_RELAYER_URL}/v1/groups/0x${'ab'.repeat(32)}/reactions`);
+			expect(init?.method).toBe('POST');
+			const body = JSON.parse(init?.body as string);
+			expect(body.chain_seq).toBe(2);
+			expect(body.emoji_code).toBe(128077);
+			expect(body.add).toBe(false);
+			expect(body.group_id).toBe('0x' + 'ab'.repeat(32));
+		});
+	});
+
+	describe('group pins', () => {
+		it('GET /v1/groups/:id/pins', async () => {
+			const transport = new HTTPRelayerTransport({
+				relayerUrl: MOCK_RELAYER_URL,
+				apiPrefix: '/v1',
+				fetch: mockFetch,
+			});
+			mockFetch.mockResolvedValueOnce(new Response(JSON.stringify([1, 3, 5]), { status: 200 }));
+
+			const pins = await transport.listGroupPins({
+				signer: defaultKeypair,
+				groupId: '0x' + 'cd'.repeat(32),
+			});
+
+			expect(pins).toEqual([1, 3, 5]);
+		});
+
+		it('POST /v1/groups/:id/pins', async () => {
+			const transport = new HTTPRelayerTransport({
+				relayerUrl: MOCK_RELAYER_URL,
+				apiPrefix: '/v1',
+				fetch: mockFetch,
+			});
+			mockFetch.mockResolvedValueOnce(new Response(JSON.stringify({ ok: true }), { status: 200 }));
+
+			await transport.setGroupPin({
+				signer: defaultKeypair,
+				groupId: '0x' + 'ef'.repeat(32),
+				chainSeq: 9,
+				pin: true,
+			});
+
+			const body = JSON.parse(mockFetch.mock.calls[0][1]?.body as string);
+			expect(body.chain_seq).toBe(9);
+			expect(body.pin).toBe(true);
+		});
+	});
+
+	describe('group receipts', () => {
+		it('GET /v1/groups/:id/receipts', async () => {
+			const transport = new HTTPRelayerTransport({
+				relayerUrl: MOCK_RELAYER_URL,
+				apiPrefix: '/v1',
+				fetch: mockFetch,
+			});
+			mockFetch.mockResolvedValueOnce(
+				new Response(JSON.stringify({ delivered_upto: 10, read_upto: 8 }), { status: 200 }),
+			);
+
+			const state = await transport.getGroupReceipts({
+				signer: defaultKeypair,
+				groupId: '0x' + '12'.repeat(32),
+			});
+
+			expect(state.deliveredUpto).toBe(10);
+			expect(state.readUpto).toBe(8);
+		});
+
+		it('POST /v1/groups/:id/receipts', async () => {
+			const transport = new HTTPRelayerTransport({
+				relayerUrl: MOCK_RELAYER_URL,
+				apiPrefix: '/v1',
+				fetch: mockFetch,
+			});
+			mockFetch.mockResolvedValueOnce(new Response(JSON.stringify({ ok: true }), { status: 200 }));
+
+			await transport.postGroupReceipts({
+				signer: defaultKeypair,
+				groupId: '0x' + '34'.repeat(32),
+				deliveredUpto: 12,
+				readUpto: 7,
+			});
+
+			const body = JSON.parse(mockFetch.mock.calls[0][1]?.body as string);
+			expect(body.delivered_upto).toBe(12);
+			expect(body.read_upto).toBe(7);
+		});
+	});
 });

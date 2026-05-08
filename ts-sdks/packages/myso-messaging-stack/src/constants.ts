@@ -37,10 +37,6 @@ export function metadataKeyType(packageId: string): string {
 /**
  * The derivation key used by `group_leaver.move` to derive the `GroupLeaver` singleton
  * from `MessagingNamespace`. Must match the Move constant `GROUP_LEAVER_DERIVATION_KEY`.
- *
- * NOTE: To avoid hardcoding this constant (and needing to keep it in sync with Move),
- * a future improvement could add a `view.ts` method that calls `group_leaver::derivation_key()`
- * via devInspect and caches the result. Deemed overengineering for now.
  */
 export const GROUP_LEAVER_DERIVATION_KEY = 'group_leaver';
 
@@ -50,28 +46,11 @@ export const GROUP_LEAVER_DERIVATION_KEY = 'group_leaver';
  */
 export const GROUP_MANAGER_DERIVATION_KEY = 'group_manager';
 
-// === MySoNS Configuration ===
-
 /**
- * Configuration for the MySoNS shared object (needed for reverse lookup operations).
- *
- * - `mysonsPackageId`: The published MySoNS package (contains `controller` module).
- * - `mysonsObjectId`: The shared `MySoNS` object ID.
+ * Derivation key for [`GroupHandleRegistry`](move/packages/myso_messaging_stack/sources/group_handle_registry.move)
+ * from `MessagingNamespace`. Must match Move `GROUP_HANDLE_REGISTRY_DERIVATION_KEY` (`b"group_handle_registry"`).
  */
-export type MySonsConfig = {
-	mysonsPackageId: string;
-	mysonsObjectId: string;
-};
-
-export const TESTNET_MYSONS_CONFIG = {
-	mysonsPackageId: '0x22fa05f21b1ad71442491220bb9338f7b7095fe35000ef88d5400d28523bdd93',
-	mysonsObjectId: '0x300369e8909b9a6464da265b9a5a9ab6fe2158a040e84e808628cde7a07ee5a3',
-} satisfies MySonsConfig;
-
-export const MAINNET_MYSONS_CONFIG = {
-	mysonsPackageId: '0xd22b24490e0bae52676651b4f56660a5ff8022a2576e0089f79b3c88d44e08f0',
-	mysonsObjectId: '0x6e0ddefc0ad98889c04bab9639e512c21766c5e6366f89e696956d9be6952871',
-} satisfies MySonsConfig;
+export const GROUP_HANDLE_REGISTRY_DERIVATION_KEY = 'group_handle_registry';
 
 /**
  * Returns full Move type paths for all messaging-specific permissions.
@@ -97,7 +76,7 @@ export function messagingPermissionTypes(packageId: string) {
 		MessagingEditor: `${packageId}::messaging::MessagingEditor`,
 		MessagingDeleter: `${packageId}::messaging::MessagingDeleter`,
 		EncryptionKeyRotator: `${packageId}::encryption_history::EncryptionKeyRotator`,
-		MySoNsAdmin: `${packageId}::messaging::MySoNsAdmin`,
+		GroupHandleAdmin: `${packageId}::messaging::GroupHandleAdmin`,
 		MetadataAdmin: `${packageId}::messaging::MetadataAdmin`,
 	} as const;
 }
@@ -107,7 +86,7 @@ export function messagingPermissionTypes(packageId: string) {
  *
  * Includes the four core messaging capabilities: send, read, edit, and delete.
  * Does **not** include group-management permissions (`EncryptionKeyRotator`,
- * `MySoNsAdmin`, `MetadataAdmin`) — grant those selectively to trusted members.
+ * `GroupHandleAdmin`, `MetadataAdmin`) — grant those selectively to trusted members.
  *
  * @param packageId - The **original (V1)** messaging package ID.
  */

@@ -12,7 +12,6 @@
  * granted `ObjectAdmin` on every group created via `messaging::create_group`, and
  * exposes functions for:
  *
- * - MySoNS reverse lookup management
  * - Metadata dynamic field management
  *
  * This module does NOT import `messaging.move` to avoid a circular dependency. The

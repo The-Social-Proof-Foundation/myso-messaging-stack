@@ -7,15 +7,15 @@ import { Transaction } from '@socialproof/myso/transactions';
 import type { MySoMessagingStackCall } from './call.js';
 import type {
 	ArchiveGroupCallOptions,
+	ClearGroupHandleCallOptions,
 	CreateGroupCallOptions,
 	InsertGroupDataCallOptions,
 	LeaveCallOptions,
 	RemoveGroupDataCallOptions,
 	RemoveMembersAndRotateKeyCallOptions,
 	RotateEncryptionKeyCallOptions,
+	SetGroupHandleCallOptions,
 	SetGroupNameCallOptions,
-	SetMySonsReverseLookupCallOptions,
-	UnsetMySonsReverseLookupCallOptions,
 } from './types.js';
 
 export interface MySoMessagingStackTransactionsOptions {
@@ -146,29 +146,29 @@ export class MySoMessagingStackTransactions {
 		return transaction;
 	}
 
-	// === MySoNS Reverse Lookup Functions ===
+	// === Group handle registry ===
 
 	/**
-	 * Creates a Transaction that sets a MySoNS reverse lookup on a group.
-	 * Requires `MySoNsAdmin` permission.
+	 * Registers or replaces this group's handle in `GroupHandleRegistry`.
+	 * Requires `GroupHandleAdmin` permission.
 	 */
-	setMySonsReverseLookup({
+	setGroupHandle({
 		transaction = new Transaction(),
 		...options
-	}: SetMySonsReverseLookupCallOptions & { transaction?: Transaction }): Transaction {
-		transaction.add(this.#call.setMySonsReverseLookup(options));
+	}: SetGroupHandleCallOptions & { transaction?: Transaction }): Transaction {
+		transaction.add(this.#call.setGroupHandle(options));
 		return transaction;
 	}
 
 	/**
-	 * Creates a Transaction that unsets a MySoNS reverse lookup on a group.
-	 * Requires `MySoNsAdmin` permission.
+	 * Clears this group's handle from `GroupHandleRegistry`.
+	 * Requires `GroupHandleAdmin` permission.
 	 */
-	unsetMySonsReverseLookup({
+	clearGroupHandle({
 		transaction = new Transaction(),
 		...options
-	}: UnsetMySonsReverseLookupCallOptions & { transaction?: Transaction }): Transaction {
-		transaction.add(this.#call.unsetMySonsReverseLookup(options));
+	}: ClearGroupHandleCallOptions & { transaction?: Transaction }): Transaction {
+		transaction.add(this.#call.clearGroupHandle(options));
 		return transaction;
 	}
 }

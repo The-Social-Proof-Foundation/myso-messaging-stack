@@ -5,4 +5,4 @@ pub mod models;
 pub mod services;
 pub mod state;
 pub mod storage;
-pub mod file-storage;
+pub mod file_storage;

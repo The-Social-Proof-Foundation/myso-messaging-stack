@@ -65,8 +65,8 @@ importers:
   ../publish:
     dependencies:
       '@socialproof/myso':
-        specifier: ^2.13.2
-        version: 2.13.2(typescript@5.9.3)
+        specifier: ^0.0.4
+        version: 0.0.4(typescript@5.9.3)
       zod:
         specifier: ^4.2.1
         version: 4.3.6
@@ -87,20 +87,20 @@ importers:
   packages/myso-messaging-stack:
     devDependencies:
       '@socialproof/bcs':
-        specifier: ^2.0.3
-        version: 2.0.3
+        specifier: ^0.0.2
+        version: 0.0.2
       '@socialproof/codegen':
-        specifier: ^0.8.3
-        version: 0.8.3
+        specifier: ^0.0.4
+        version: 0.0.4
       '@socialproof/mydata':
-        specifier: ^1.1.1
-        version: 1.1.1(@socialproof/myso@2.13.2(typescript@5.9.3))
+        specifier: ^0.0.4
+        version: 0.0.4(@socialproof/myso@0.0.4(typescript@5.9.3))
       '@socialproof/myso':
-        specifier: ^2.13.2
-        version: 2.13.2(typescript@5.9.3)
+        specifier: ^0.0.4
+        version: 0.0.4(typescript@5.9.3)
       '@socialproof/myso-groups':
         specifier: ^0.0.1
-        version: 0.0.1(@socialproof/bcs@2.0.3)(@socialproof/myso@2.13.2(typescript@5.9.3))
+        version: 0.0.1(@socialproof/bcs@0.0.2)(@socialproof/myso@0.0.4(typescript@5.9.3))
       '@types/node':
         specifier: ^25.0.3
         version: 25.0.9
@@ -531,31 +531,6 @@ packages:
     resolution: {integrity: sha512-0FOIepYR4ugPYaHwK7hDeHDkfPOBVvayt9QpvRbi2LT/h2b0GaE/gM9Gag7fsnyYyNaTZ2IGyOuVg07IYepvYQ==}
     engines: {node: '>=20.0.0'}
 
-  '@socialproof/bcs@2.0.3':
-    resolution: {integrity: sha512-dwcaL4HNAsEGpU3hKUAsXgCZp9l6++e2A3THpzoYZ8e7bsy4XH1V0dXD5dIzgNcVZiZfb6ZnDMG+gdF6+1WOQA==}
-
-  '@socialproof/codegen@0.8.3':
-    resolution: {integrity: sha512-GckdrDC/HMjd49eBs5DH/CXKALT+9AWplGCFkb4DbqM45qDp/RPmZO10hPiff+RBgA+7wiTT/xMC/1Whx8guxw==}
-    hasBin: true
-
-  '@socialproof/mydata@1.1.1':
-    resolution: {integrity: sha512-OGxEDmEuXQAzxJKz3ap1dkRSf5fD/iKpz/J8+wZlPbeSok2fVt3KPaCZngjrvqqVRn5lmQomNpzXQCKo929A3w==}
-    peerDependencies:
-      '@socialproof/myso': ^2.8.0
-
-  '@socialproof/myso-groups@0.0.1':
-    resolution: {integrity: sha512-6yck5UQjAtApWUXvgPc0WaMNatTTUxINBU92XrgawYTWZry/PAxGLvU1XjFFW+DAKbQWpkOMqu8yiuwcBybXfA==}
-    peerDependencies:
-      '@socialproof/bcs': ^2.0.3
-      '@socialproof/myso': ^2.13.0
-
-  '@socialproof/myso@2.13.2':
-    resolution: {integrity: sha512-M/H2CZJQyLyi0vvCJZ6rRzItJCsnh66v1OTI2VoBad2lau/BTuUKOEPjRpfU4YlVJcGR4h+RLCjDXV4ACuRKSA==}
-    engines: {node: '>=22'}
-
-  '@socialproof/utils@0.3.1':
-    resolution: {integrity: sha512-36KhxG284uhDdSnlkyNaS6fzKTX9FpP2WQWOwUKIRsqQFFIm2ooCf2TP1IuqrtMpkairwpiWkAS0eg7cpemVzg==}
-
   '@napi-rs/wasm-runtime@1.1.1':
     resolution: {integrity: sha512-p64ah1M1ld8xjWv3qbvFwHiFVWrq1yFvV4f7w+mzaqiR4IlSgkqhcRdHwsGgomwzBH51sRY4NEowLxnaBjcW/A==}
 
@@ -944,6 +919,31 @@ packages:
 
   '@scure/bip39@2.0.1':
     resolution: {integrity: sha512-PsxdFj/d2AcJcZDX1FXN3dDgitDDTmwf78rKZq1a6c1P1Nan1X/Sxc7667zU3U+AN60g7SxxP0YCVw2H/hBycg==}
+
+  '@socialproof/bcs@0.0.2':
+    resolution: {integrity: sha512-ahrcri+bKrOivsn6U1v5QT/3iEqi6Il0w9bQvgGJuo0eemBq/zRXXL7iOZBGwT+81bQhxwKKCORptZOxlh1oOA==}
+
+  '@socialproof/codegen@0.0.4':
+    resolution: {integrity: sha512-d9mob7jmm8kOfV/G5CR2sYELE4XQM/Bsy+1djbZhxRqfUCHMVT7wR8UtlD4qg5mDawvXiXSkNG5+boINLznzlg==}
+    hasBin: true
+
+  '@socialproof/mydata@0.0.4':
+    resolution: {integrity: sha512-MJ3Bw+l91tLIUFkLAEWvez8deHlA2QPTluNc2vMLduHglHXzejRVLd3qEa2SQgphtPeXNlCttHCM6RN0zKSOKA==}
+    peerDependencies:
+      '@socialproof/myso': ^0.0.4
+
+  '@socialproof/myso-groups@0.0.1':
+    resolution: {integrity: sha512-oU7AzSDJxDZJri+dZqZiLz3olShrmPPdBJwUELnQz8Xr2EUdTZ3aRPCEzz2E/fTux7PDFOWn7gMf3rRV8LzOTQ==}
+    peerDependencies:
+      '@socialproof/bcs': ^0.0.2
+      '@socialproof/myso': ^0.0.4
+
+  '@socialproof/myso@0.0.4':
+    resolution: {integrity: sha512-3SbHrYfv9JdoFQuKAcdWXPUc7viVeMtkmm2/fnQiK7lvg0kmFKt00JEt1apDlG1T0ltPv/uMYUv3hL+cerRDyQ==}
+    engines: {node: '>=22'}
+
+  '@socialproof/utils@0.0.2':
+    resolution: {integrity: sha512-J4mDPEQxUIbzNu9WDvLW21VRlh9F7W5GQtbjA+rit2+fdm+r5TszJ4DmvjkjfRBfFWyAl3nIaVzQGcasRIjOiw==}
 
   '@standard-schema/spec@1.1.0':
     resolution: {integrity: sha512-l2aFy5jALhniG5HgqrD6jXLi/rUWrKvqN/qJx6yoJsgKhblVd+iqqU4RCXavm/jPityDo5TCvKMnpjKnOriy0w==}
@@ -2812,65 +2812,6 @@ snapshots:
       js-yaml: 4.1.1
       tinyglobby: 0.2.15
 
-  '@socialproof/bcs@2.0.3':
-    dependencies:
-      '@socialproof/utils': 0.3.1
-      '@scure/base': 2.0.0
-
-  '@socialproof/codegen@0.8.3':
-    dependencies:
-      '@socialproof/bcs': 2.0.3
-      '@socialproof/myso': 2.13.2(typescript@5.9.3)
-      '@stricli/auto-complete': 1.2.5
-      '@stricli/core': 1.2.5
-      '@types/node': 25.0.9
-      cosmiconfig: 9.0.0(typescript@5.9.3)
-      prettier: 3.7.4
-      toml: 3.0.0
-      typescript: 5.9.3
-      zod: 4.3.6
-    transitivePeerDependencies:
-      - '@gql.tada/svelte-support'
-      - '@gql.tada/vue-support'
-
-  '@socialproof/mydata@1.1.1(@socialproof/myso@2.13.2(typescript@5.9.3))':
-    dependencies:
-      '@socialproof/bcs': 2.0.3
-      '@socialproof/myso': 2.13.2(typescript@5.9.3)
-      '@noble/curves': 2.0.1
-      '@noble/hashes': 2.0.1
-
-  '@socialproof/myso-groups@0.0.1(@socialproof/bcs@2.0.3)(@socialproof/myso@2.13.2(typescript@5.9.3))':
-    dependencies:
-      '@socialproof/bcs': 2.0.3
-      '@socialproof/myso': 2.13.2(typescript@5.9.3)
-
-  '@socialproof/myso@2.13.2(typescript@5.9.3)':
-    dependencies:
-      '@graphql-typed-document-node/core': 3.2.0(graphql@16.12.0)
-      '@socialproof/bcs': 2.0.3
-      '@socialproof/utils': 0.3.1
-      '@noble/curves': 2.0.1
-      '@noble/hashes': 2.0.1
-      '@protobuf-ts/grpcweb-transport': 2.11.1
-      '@protobuf-ts/runtime': 2.11.1
-      '@protobuf-ts/runtime-rpc': 2.11.1
-      '@scure/base': 2.0.0
-      '@scure/bip32': 2.0.1
-      '@scure/bip39': 2.0.1
-      gql.tada: 1.9.0(graphql@16.12.0)(typescript@5.9.3)
-      graphql: 16.12.0
-      poseidon-lite: 0.2.1
-      valibot: 1.2.0(typescript@5.9.3)
-    transitivePeerDependencies:
-      - '@gql.tada/svelte-support'
-      - '@gql.tada/vue-support'
-      - typescript
-
-  '@socialproof/utils@0.3.1':
-    dependencies:
-      '@scure/base': 2.0.0
-
   '@napi-rs/wasm-runtime@1.1.1':
     dependencies:
       '@emnapi/core': 1.8.1
@@ -3122,6 +3063,65 @@ snapshots:
   '@scure/bip39@2.0.1':
     dependencies:
       '@noble/hashes': 2.0.1
+      '@scure/base': 2.0.0
+
+  '@socialproof/bcs@0.0.2':
+    dependencies:
+      '@scure/base': 2.0.0
+      '@socialproof/utils': 0.0.2
+
+  '@socialproof/codegen@0.0.4':
+    dependencies:
+      '@socialproof/bcs': 0.0.2
+      '@socialproof/myso': 0.0.4(typescript@5.9.3)
+      '@stricli/auto-complete': 1.2.5
+      '@stricli/core': 1.2.5
+      '@types/node': 25.0.9
+      cosmiconfig: 9.0.0(typescript@5.9.3)
+      prettier: 3.7.4
+      toml: 3.0.0
+      typescript: 5.9.3
+      zod: 4.3.6
+    transitivePeerDependencies:
+      - '@gql.tada/svelte-support'
+      - '@gql.tada/vue-support'
+
+  '@socialproof/mydata@0.0.4(@socialproof/myso@0.0.4(typescript@5.9.3))':
+    dependencies:
+      '@noble/curves': 2.0.1
+      '@noble/hashes': 2.0.1
+      '@socialproof/bcs': 0.0.2
+      '@socialproof/myso': 0.0.4(typescript@5.9.3)
+
+  '@socialproof/myso-groups@0.0.1(@socialproof/bcs@0.0.2)(@socialproof/myso@0.0.4(typescript@5.9.3))':
+    dependencies:
+      '@socialproof/bcs': 0.0.2
+      '@socialproof/myso': 0.0.4(typescript@5.9.3)
+
+  '@socialproof/myso@0.0.4(typescript@5.9.3)':
+    dependencies:
+      '@graphql-typed-document-node/core': 3.2.0(graphql@16.12.0)
+      '@noble/curves': 2.0.1
+      '@noble/hashes': 2.0.1
+      '@protobuf-ts/grpcweb-transport': 2.11.1
+      '@protobuf-ts/runtime': 2.11.1
+      '@protobuf-ts/runtime-rpc': 2.11.1
+      '@scure/base': 2.0.0
+      '@scure/bip32': 2.0.1
+      '@scure/bip39': 2.0.1
+      '@socialproof/bcs': 0.0.2
+      '@socialproof/utils': 0.0.2
+      gql.tada: 1.9.0(graphql@16.12.0)(typescript@5.9.3)
+      graphql: 16.12.0
+      poseidon-lite: 0.2.1
+      valibot: 1.2.0(typescript@5.9.3)
+    transitivePeerDependencies:
+      - '@gql.tada/svelte-support'
+      - '@gql.tada/vue-support'
+      - typescript
+
+  '@socialproof/utils@0.0.2':
+    dependencies:
       '@scure/base': 2.0.0
 
   '@standard-schema/spec@1.1.0': {}

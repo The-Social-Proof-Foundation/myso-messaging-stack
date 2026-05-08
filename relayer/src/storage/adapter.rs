@@ -55,7 +55,7 @@ use async_trait::async_trait;
 use thiserror::Error;
 use uuid::Uuid;
 
-use crate::models::{Attachment, Message, SyncStatus};
+use crate::models::{Attachment, Message, ReactionEntry, ReceiptStateResponse, SyncStatus};
 
 /// Errors that can occur during storage operations.
 #[derive(Debug, Error)]
@@ -175,4 +175,44 @@ pub trait StorageAdapter: Send + Sync {
         status: SyncStatus,
         limit: usize,
     ) -> StorageResult<Vec<Message>>;
+
+    // === /v1 group feature mirror (off-chain; complements on-chain MessageLog) ===
+
+    async fn replace_reaction_tally(
+        &self,
+        group_id: &str,
+        chain_seq: i64,
+        emoji_code: u32,
+        add: bool,
+    ) -> StorageResult<()>;
+
+    async fn list_reactions(
+        &self,
+        group_id: &str,
+        chain_seq: Option<i64>,
+    ) -> StorageResult<Vec<ReactionEntry>>;
+
+    async fn set_pin_for_seq(&self, group_id: &str, chain_seq: i64, on: bool) -> StorageResult<()>;
+
+    async fn list_pins(&self, group_id: &str) -> StorageResult<Vec<i64>>;
+
+    async fn update_receipt_delivered(
+        &self,
+        group_id: &str,
+        member: &str,
+        upto: u64,
+    ) -> StorageResult<()>;
+
+    async fn update_receipt_read(
+        &self,
+        group_id: &str,
+        member: &str,
+        upto: u64,
+    ) -> StorageResult<()>;
+
+    async fn get_receipt_state(
+        &self,
+        group_id: &str,
+        member: &str,
+    ) -> StorageResult<ReceiptStateResponse>;
 }

@@ -7,7 +7,7 @@
  * - EncryptionKeyRotator, MetadataAdmin
  */
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { useCurrentAccount } from '@socialproof/dapp-kit';
+import { useAuthenticatedAddress } from '../contexts/MySocialAuthContext';
 import { useRequiredMessagingClient } from '../contexts/MessagingClientContext';
 
 export interface Permissions {
@@ -38,7 +38,7 @@ export interface UsePermissionsResult {
 
 export function usePermissions(groupId: string): UsePermissionsResult {
   const { client } = useRequiredMessagingClient();
-  const account = useCurrentAccount();
+  const address = useAuthenticatedAddress();
   const [permissions, setPermissions] = useState<Permissions>(DEFAULT_PERMISSIONS);
   const [loading, setLoading] = useState(true);
   const [refreshKey, setRefreshKey] = useState(0);
@@ -50,18 +50,21 @@ export function usePermissions(groupId: string): UsePermissionsResult {
   }, []);
 
   useEffect(() => {
-    if (!account) {
+    const memberAddr = address;
+    if (!memberAddr) {
       setPermissions(DEFAULT_PERMISSIONS);
       setLoading(false);
       return;
     }
+
+    const lockedMember: string = memberAddr;
 
     let cancelled = false;
     setLoading(true);
 
     async function checkPermissions() {
       try {
-        const member = account!.address;
+        const member = lockedMember;
         const view = client.groups.view;
 
         // Check each permission type in parallel
@@ -132,7 +135,7 @@ export function usePermissions(groupId: string): UsePermissionsResult {
     return () => {
       cancelled = true;
     };
-  }, [groupId, account, client, refreshKey]);
+  }, [groupId, address, client, refreshKey]);
 
   return { permissions, loading, refresh };
 }

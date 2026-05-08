@@ -16,7 +16,7 @@ const config: MySoCodegenConfig = {
 			path: '../../../move/packages/myso_messaging_stack',
 			// Explicit packageName avoids Move.toml parsing failures caused by
 			// the `r.mvr` key syntax (not supported by the toml@3 parser).
-			packageName: 'myso_messaging_stack',
+			packageName: 'myso_messaging',
 		},
 	],
 };

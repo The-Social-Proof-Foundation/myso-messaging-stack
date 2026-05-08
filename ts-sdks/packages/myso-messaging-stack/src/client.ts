@@ -11,9 +11,6 @@ import { MySoMessagingStackClientError } from './error.js';
 import {
 	TESTNET_MYSO_MESSAGING_STACK_PACKAGE_CONFIG,
 	MAINNET_MYSO_MESSAGING_STACK_PACKAGE_CONFIG,
-	TESTNET_MYSONS_CONFIG,
-	MAINNET_MYSONS_CONFIG,
-	type MySonsConfig,
 } from './constants.js';
 import { AttachmentsManager } from './attachments/attachments-manager.js';
 import type { Attachment, AttachmentFile, AttachmentHandle } from './attachments/types.js';
@@ -41,6 +38,7 @@ import type {
 import type { RecoveryTransport } from './recovery/transport.js';
 import type {
 	ArchiveGroupOptions,
+	ClearGroupHandleOptions,
 	CreateGroupOptions,
 	InsertGroupDataOptions,
 	LeaveOptions,
@@ -52,8 +50,7 @@ import type {
 	RemoveMembersAndRotateKeyOptions,
 	RotateEncryptionKeyOptions,
 	SetGroupNameOptions,
-	SetMySonsReverseLookupOptions,
-	UnsetMySonsReverseLookupOptions,
+	SetGroupHandleOptions,
 } from './types.js';
 import { MySoMessagingStackCall } from './call.js';
 import { MySoMessagingStackTransactions } from './transactions.js';
@@ -91,7 +88,6 @@ export function mysoMessagingStack<
 	mydataName = 'mydata' as MyDataName,
 	packageConfig,
 	encryption,
-	mysonsConfig,
 	relayer,
 	attachments,
 	recovery,
@@ -103,8 +99,6 @@ export function mysoMessagingStack<
 	mydataName?: MyDataName;
 	packageConfig?: MySoMessagingStackPackageConfig;
 	encryption: MySoMessagingStackEncryptionOptions<TApproveContext>;
-	/** MySoNS config for reverse lookup operations (auto-detected for testnet/mainnet). */
-	mysonsConfig?: MySonsConfig;
 	/** Relayer transport configuration. */
 	relayer: RelayerConfig;
 	/** Attachment support. When omitted, messages cannot include files. */
@@ -120,7 +114,6 @@ export function mysoMessagingStack<
 				groupsName,
 				mydataName,
 				packageConfig,
-				mysonsConfig,
 				encryption,
 				relayer,
 				attachments,
@@ -184,8 +177,6 @@ export class MySoMessagingStackClient<TApproveContext = void> {
 		this.#client = options.client;
 
 		// Use custom packageConfig if provided, otherwise determine from network
-		let mysonsConfig: MySonsConfig | undefined = options.mysonsConfig;
-
 		if (options.packageConfig) {
 			this.#packageConfig = options.packageConfig;
 		} else {
@@ -193,11 +184,9 @@ export class MySoMessagingStackClient<TApproveContext = void> {
 			switch (network) {
 				case 'testnet':
 					this.#packageConfig = TESTNET_MYSO_MESSAGING_STACK_PACKAGE_CONFIG;
-					mysonsConfig ??= TESTNET_MYSONS_CONFIG;
 					break;
 				case 'mainnet':
 					this.#packageConfig = MAINNET_MYSO_MESSAGING_STACK_PACKAGE_CONFIG;
-					mysonsConfig ??= MAINNET_MYSONS_CONFIG;
 					break;
 				default:
 					throw new MySoMessagingStackClientError(
@@ -235,7 +224,7 @@ export class MySoMessagingStackClient<TApproveContext = void> {
 			derive: this.derive,
 			permissionedGroupTypeName: groupsExt.bcs.PermissionedGroup.name,
 			encryptionHistoryTypeName: this.bcs.EncryptionHistory.name,
-			mysonsConfig,
+			messageLogTypeName: `${this.#packageConfig.originalPackageId}::message_log::MessageLog`,
 			groupsCall: groupsExt.call,
 		});
 		this.tx = new MySoMessagingStackTransactions({
@@ -250,6 +239,7 @@ export class MySoMessagingStackClient<TApproveContext = void> {
 			? options.relayer.transport
 			: new HTTPRelayerTransport({
 					relayerUrl: options.relayer.relayerUrl,
+					apiPrefix: 'apiPrefix' in options.relayer ? options.relayer.apiPrefix : undefined,
 					pollingIntervalMs: options.relayer.pollingIntervalMs,
 					fetch: options.relayer.fetch,
 					timeout: options.relayer.timeout,
@@ -876,37 +866,37 @@ export class MySoMessagingStackClient<TApproveContext = void> {
 		);
 	}
 
-	// === MySoNS Reverse Lookup Methods ===
+	// === Group handle registry ===
 
 	/**
-	 * Sets a MySoNS reverse lookup on a messaging group.
-	 * Requires `ExtensionPermissionsAdmin` permission on the group.
+	 * Registers or replaces the group's handle in `GroupHandleRegistry`.
+	 * Requires `GroupHandleAdmin` permission.
 	 */
-	async setMySonsReverseLookup({
+	async setGroupHandle({
 		signer,
 		transaction,
 		...callOptions
-	}: SetMySonsReverseLookupOptions & { transaction?: Transaction }) {
+	}: SetGroupHandleOptions & { transaction?: Transaction }) {
 		return this.#executeTransaction(
-			this.tx.setMySonsReverseLookup({ transaction, ...callOptions }),
+			this.tx.setGroupHandle({ transaction, ...callOptions }),
 			signer,
-			'set MySoNS reverse lookup',
+			'set group handle',
 		);
 	}
 
 	/**
-	 * Unsets a MySoNS reverse lookup on a messaging group.
-	 * Requires `ExtensionPermissionsAdmin` permission on the group.
+	 * Clears the group's handle from `GroupHandleRegistry`.
+	 * Requires `GroupHandleAdmin` permission.
 	 */
-	async unsetMySonsReverseLookup({
+	async clearGroupHandle({
 		signer,
 		transaction,
 		...callOptions
-	}: UnsetMySonsReverseLookupOptions & { transaction?: Transaction }) {
+	}: ClearGroupHandleOptions & { transaction?: Transaction }) {
 		return this.#executeTransaction(
-			this.tx.unsetMySonsReverseLookup({ transaction, ...callOptions }),
+			this.tx.clearGroupHandle({ transaction, ...callOptions }),
 			signer,
-			'unset MySoNS reverse lookup',
+			'clear group handle',
 		);
 	}
 }

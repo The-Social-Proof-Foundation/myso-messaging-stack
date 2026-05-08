@@ -1,6 +1,6 @@
-import {type SyntheticEvent, useState} from 'react';
-import { useSignAndExecuteTransaction } from '@socialproof/dapp-kit';
+import { type SyntheticEvent, useState } from 'react';
 import { useRequiredMessagingClient } from '../contexts/MessagingClientContext';
+import { signAndExecuteTransactionAndWait } from '../lib/sign-and-wait';
 import { addStoredGroup } from '../lib/group-store';
 
 interface CreateGroupModalProps {
@@ -14,8 +14,7 @@ export function CreateGroupModal({
   onClose,
   onGroupCreated,
 }: Readonly<CreateGroupModalProps>) {
-  const { client } = useRequiredMessagingClient();
-  const { mutateAsync: signAndExecute } = useSignAndExecuteTransaction();
+  const { client, signer } = useRequiredMessagingClient();
 
   const [name, setName] = useState('');
   const [members, setMembers] = useState('');
@@ -52,7 +51,7 @@ export function CreateGroupModal({
         ...(initialMembers.length > 0 && { initialMembers }),
       });
 
-      await signAndExecute({ transaction: tx });
+      await signAndExecuteTransactionAndWait(client, signer, tx);
 
       // Derive the on-chain groupId from the UUID
       const groupId = client.messaging.derive.groupId({ uuid });

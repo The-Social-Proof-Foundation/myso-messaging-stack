@@ -1,6 +1,6 @@
 # System Design: Groups SDK Chat Application
 
-> **Version:** 0.2 | **Date:** March 11, 2026 | **Status:** Updated
+> **Version:** 0.3 | **Date:** May 8, 2026 | **Status:** Updated
 
 A minimal chat web application showcasing the Groups SDK ecosystem (`@socialproof/myso-groups`, `@socialproof/myso-messaging-stack`, `@socialproof/mydata`) with end-to-end encryption, file attachments via File Storage, and comprehensive admin controls -- all backed by the MySo blockchain.
 
@@ -33,7 +33,7 @@ The chat application is a React SPA that runs entirely in the browser. It delega
 graph TB
     subgraph Browser["Browser (React SPA)"]
         UI[React UI<br/>Components]
-        DK["@socialproof/dapp-kit<br/>Wallet Provider"]
+        MA["@socialproof/mysocial-auth<br/>Session + OAuth popup"]
         HOOK[useMessagingClient<br/>Hook]
     end
 
@@ -49,13 +49,13 @@ graph TB
     subgraph External["External Services"]
         REL[Relayer Server<br/>Rust/Axum]
         SKS[MyData Key Servers<br/>Threshold Encryption]
-        MYSO[File Storage<br/>Decentralized Storage]
-        MYSO[MySo Full Node<br/>Testnet RPC]
+        FSTORE[File Storage<br/>Decentralized Storage]
+        MYSORPC[MySo Full Node<br/>Testnet RPC]
         GQL_API[MySo GraphQL API<br/>Indexer-backed]
     end
 
     UI --> HOOK
-    UI --> DK
+    UI --> MA
     HOOK --> MGC
     HOOK --> PGC
     MGC --> EE
@@ -64,12 +64,12 @@ graph TB
     EE --> SC
     SC --> SKS
     HRT --> REL
-    WSA --> MYSO
-    MGC --> MYSO
-    PGC --> MYSO
+    WSA --> FSTORE
+    MGC --> MYSORPC
+    PGC --> MYSORPC
     UI -->|Group discovery<br/>event queries| GQL_API
-    GQL_API -.->|Indexed from| MYSO
-    REL -.->|gRPC checkpoint<br/>subscription| MYSO
+    GQL_API -.->|Indexed from| MYSORPC
+    REL -.->|gRPC checkpoint<br/>subscription| MYSORPC
 ```
 
 **Key architectural properties:**
@@ -100,7 +100,7 @@ graph TB
 | `PermissionedGroupsView` | On-chain permission/member queries | `@socialproof/myso-groups` | `isMember`, `hasPermission`, `getMembers`, `getMembersWithPermissions` |
 | `MySoGraphQLClient` | GraphQL queries against the MySo indexer for event-based group discovery | `@socialproof/myso/graphql` | `query` (with `EventFilter`, `MoveValue.extract()`) |
 | `useMessagingClient` | React hook providing SDK client from `MessagingClientContext` | `chat-app` | Returns memoized client with `.messaging`, `.groups`, `.mydata` (or null) |
-| `useRequiredMessagingClient` | Same as above, throws if wallet is disconnected | `chat-app` | Returns non-null client |
+| `useRequiredMessagingClient` | Same as above, throws if signing key is not ready | `chat-app` | Returns `{ client, signer }` (derived keypair) |
 | `useGraphQLClient` | React hook providing the `MySoGraphQLClient` for event queries | `chat-app` | Returns singleton GraphQL client |
 | `useGroupDiscovery` | React hook querying GraphQL events to discover user's groups | `chat-app` | Returns `{ groups, loading, refresh }` |
 | `useMessages` | React hook for message CRUD + real-time subscription | `chat-app` | Returns `{ messages, sendMessage, editMessage, deleteMessage, loadMore, ... }` |
@@ -110,25 +110,29 @@ graph TB
 
 ## 3. Client Initialization Flow
 
-The SDK client is initialized once when the wallet connects. The `createMySoMessagingStackClient` factory composes three extensions in the correct dependency order. The first cryptographic operation (encrypt or decrypt) triggers session key creation, which requires a one-time wallet signature.
+The SDK client is built once a **derived `Ed25519Keypair`** is available (OAuth session plus salt service). The `createMySoMessagingStackClient` factory composes three extensions on a fresh `MySoJsonRpcClient`. Session keys use Tier 1 `{ signer }` configuration on that keypair.
 
 ```mermaid
 sequenceDiagram
     participant User
-    participant DK as dapp-kit
-    participant Hook as useMessagingClient
+    participant MA as mysocial-auth
+    participant SALT as Salt service
+    participant Hook as MessagingClientProvider
     participant Factory as createMySoMessagingStackClient
-    participant MYSO as MySoClient
+    participant RPC as MySoJsonRpcClient
 
-    User->>DK: Connect Wallet
-    DK-->>Hook: account.address + signPersonalMessage
-    Hook->>MYSO: new MySoClient({ url: testnetRpc })
-    Hook->>Factory: createMySoMessagingStackClient(mysoClient, config)
-    Note over Factory: config = {<br/>  mydata: { serverConfigs },<br/>  encryption: {<br/>    sessionKey: {<br/>      address,<br/>      onSign: signPersonalMessage<br/>    }<br/>  },<br/>  relayer: { relayerUrl, signer },<br/>  attachments: {<br/>    storageAdapter: FileStorageHttpStorageAdapter<br/>  }<br/>}
+    User->>MA: Sign in popup
+    MA-->>Hook: Session (JWT / refresh + user.address + sub)
+    Hook->>MA: getAccessTokenForApi()
+    Hook->>SALT: POST /salt (Bearer)
+    SALT-->>Hook: salt
+    Note over Hook: SHA256(sub + '_' + salt) → seed → Ed25519Keypair
+    Hook->>RPC: new MySoJsonRpcClient({ url, network })
+    Hook->>Factory: createMySoMessagingStackClient(client, {<br/>  encryption: { sessionKey: { signer: keypair } }, … })
     Factory->>Factory: baseClient.$extend(mysoGroups, mydata)
     Factory->>Factory: result.$extend(mysoMessagingStack)
-    Factory-->>Hook: Extended client (with .groups, .mydata, .messaging)
-    Note over Hook: Client ready. First operation<br/>triggers SessionKey.create()<br/>via Tier 2 callback flow
+    Factory-->>Hook: Extended client (.groups .mydata .messaging)
+    Note over Hook: SessionKey Tier 1: certificate via keypair signer
 ```
 
 **Extension composition detail:**
@@ -542,27 +546,25 @@ graph TB
         direction TB
         P0["StrictMode (React)"]
         P1["QueryClientProvider (TanStack Query)<br/>Server state caching"]
-        P1B["MySoClientProvider (dapp-kit)<br/>Network config: testnet"]
-        P2["WalletProvider (dapp-kit)<br/>Wallet connection state + autoConnect"]
-        P3["MessagingClientProvider (custom)<br/>Extended SDK client + GraphQL client"]
+        PMS["MySocialAuthProvider<br/>mysocial-auth + key derivation"]
+        P3["MessagingClientProvider (custom)<br/>JSON-RPC client + messaging extensions"]
         P4["ErrorBoundary<br/>Global error catch"]
     end
 
     P0 --> P1
-    P1 --> P1B
-    P1B --> P2
-    P2 --> P3
+    P1 --> PMS
+    PMS --> P3
     P3 --> P4
 
     subgraph Hooks["Available Hooks"]
-        H1["useCurrentAccount()<br/>Wallet address + publicKey"]
-        H2["useSignAndExecuteTransaction()<br/>On-chain TX execution"]
-        H3["useMessagingClient()<br/>client.messaging, client.groups, client.mydata"]
-        H4["useGraphQLClient()<br/>MySoGraphQLClient for event queries"]
+        H1["useMySocialAuth()<br/>session, login, logout, keypair"]
+        H2["signAndExecuteTransactionAndWait()<br/>lib helper for PTBs"]
+        H3["useMessagingClient() / useRequiredMessagingClient()"]
+        H4["useGraphQLClient()<br/>MySoGraphQLClient for events"]
     end
 
-    P2 -.-> H1
-    P2 -.-> H2
+    PMS -.-> H1
+    P3 -.-> H2
     P3 -.-> H3
     P3 -.-> H4
 ```
@@ -581,7 +583,7 @@ Permissions are stored on-chain in the `PermissionedGroup<Messaging>` object's p
 | `MessagingDeleter` | Can Delete Messages | Show delete button on own messages | `deleteMessage()` | `@socialproof/myso-messaging-stack` |
 | `EncryptionKeyRotator` | Can Rotate Keys | Show rotate key button | `rotateEncryptionKey()` | `@socialproof/myso-messaging-stack` |
 | `MetadataAdmin` | Can Edit Metadata | Show rename/metadata controls | `setGroupName()`, `insertGroupData()`, `removeGroupData()` | `@socialproof/myso-messaging-stack` |
-| `MySoNsAdmin` | Can Manage MySoNS | (Not exposed in demo UI) | `setMySonsReverseLookup()`, `unsetMySonsReverseLookup()` | `@socialproof/myso-messaging-stack` |
+| `GroupHandleAdmin` | Can Manage Group Handle | (Not exposed in demo UI) | `setGroupHandle()`, `clearGroupHandle()` | `@socialproof/myso-messaging-stack` |
 | `PermissionsAdmin` | Can Manage Permissions | Show admin panel, add/remove members | `grantPermission()`, `removeMember()`, `addMembers()` | `@socialproof/myso-groups` |
 | `ExtensionPermissionsAdmin` | Can Manage Extension Perms | (Implicit, not shown separately) | `objectGrantPermission()`, `objectRevokePermission()` | `@socialproof/myso-groups` |
 | `ObjectAdmin` | Can Manage Group Lifecycle | Show archive button | `archiveGroup()` | `@socialproof/myso-groups` |
@@ -745,9 +747,9 @@ type MessagingGroupsPackageConfig = {
 
 ```typescript
 type SessionKeyConfig =
-  // Tier 1: Signer-based (dapp-kit-next, Keypair, Enoki) -- fully automatic
+  // Tier 1: Signer-based (Keypair, etc.) — fully automatic
   | { signer: Signer; ttlMin?: number; refreshBufferMs?: number }
-  // Tier 2: Callback-based (current dapp-kit) -- SDK creates, consumer signs
+  // Tier 2: Callback-based — SDK creates, consumer signs via onSign callback
   | { address: string; onSign: (message: Uint8Array) => Promise<string>;
       ttlMin?: number; refreshBufferMs?: number }
   // Tier 3: Full manual control -- consumer manages entire lifecycle
@@ -764,24 +766,17 @@ type SessionKeyConfig =
 - **Decision**: Use `MySoGraphQLClient` to query `MemberAdded` and `MemberRemoved` events filtered by the messaging package's event type. Extract `member` and `group_id` fields from each event, filter client-side for the connected address, and compute net membership (added minus removed). Cache results in localStorage for instant sidebar rendering on subsequent loads. Supplement with immediate cache updates on group creation and join-link flows.
 - **Consequences**: Group discovery works across devices (any client can query the indexer). Client-side filtering is required since `EventFilter` doesn't support payload field filtering — acceptable at testnet scale. localStorage serves as a performance cache, not the source of truth. Background refresh keeps the list current when external admins add the user to new groups.
 
-### ADR-2: Tier 2 session keys (callback-based)
+### ADR-2: Tier 1 session keys with MySocial OAuth + derived keypair
 
-- **Context**: Current `@socialproof/dapp-kit` provides `account.address` and `signPersonalMessage()` but does not expose a full `Signer` object. The Tier 1 (signer-based) path requires a `Signer`.
-- **Decision**: Use the SDK's Tier 2 session key config:
-  ```typescript
-  {
-    address: account.address,
-    onSign: (msg) => signPersonalMessage({ message: msg })
-  }
-  ```
-  The SDK calls `SessionKey.create()`, obtains the personal message via `getPersonalMessage()`, invokes the callback, and completes the ceremony via `setPersonalMessageSignature()`.
-- **Consequences**: Wallet popup appears on the first encrypt/decrypt operation (session key signing). The default TTL of 10 minutes (configurable via `ttlMin`) and refresh buffer of 60 seconds means the popup reappears infrequently during active use.
+- **Context**: The messaging SDK supports Tier 1 session keys (`{ signer }`) where a `Signer` (here, `Ed25519Keypair`) drives `SessionKey.create()` and certificate signing automatically. `@socialproof/mysocial-auth` authenticates users to MySocial and exposes `session.sub` plus `session.user.address`; the platform uses the salt service with Bearer auth to derive the same Ed25519 key that backs that address (`SHA256(sub + '_' + salt)` seed).
+- **Decision**: Configure `encryption.sessionKey: { signer: keypair }`. Build PTBs with the SDK factories and execute them with `keypair.signAndExecuteTransaction()` + `client.core.waitForTransaction()` (`signAndExecuteTransactionAndWait` helper in `chat-app`).
+- **Consequences**: No browser wallet extension. Wallet-only MySocial sessions (no API token / salt access) cannot derive a keypair; the UI explains that OAuth login is required. The derived private key remains in-memory for the SPA session lifetime (lost on full tab discard when using `storage: 'session'` for auth tokens depends on reload behavior documented by mysocial-auth).
 
 ### ADR-3: Atomic PTB for admin actions
 
 - **Context**: Removing a member without rotating the key leaves them able to decrypt future messages if they have cached the DEK. These two operations must be atomic.
 - **Decision**: Use the SDK `call` layer to compose `groups.call.removeMember` and `messaging.call.rotateEncryptionKey` as thunks added to a single `Transaction`. Execute with one `signAndExecuteTransaction` call.
-- **Consequences**: Single wallet popup, single gas fee, atomic execution. If either operation fails on-chain, both are rolled back. The `rotateEncryptionKey` thunk is async (it fetches the current key version and generates a new DEK) but resolves at `transaction.build()` time.
+- **Consequences**: Single signature prompt from the derived keypair, single gas fee, atomic execution. If either operation fails on-chain, both are rolled back. The `rotateEncryptionKey` thunk is async (it fetches the current key version and generates a new DEK) but resolves at `transaction.build()` time.
 
 ### ADR-4: HTTP polling for real-time delivery
 
@@ -809,8 +804,16 @@ All configuration is provided via Vite environment variables (prefixed with `VIT
 
 ```
 # MySo Network
+VITE_MYSO_NETWORK=testnet
 VITE_MYSO_RPC_URL=https://fullnode.testnet.mysocial.network:9000
 VITE_MYSO_GRAPHQL_URL=https://graphql.testnet.mysocial.network/graphql
+
+# MySocial Login (register redirect URI allowlist per client ID)
+VITE_MYSOCIAL_AUTH_API_BASE_URL=https://api.mysocial.network
+VITE_MYSOCIAL_AUTH_ORIGIN=https://auth.mysocial.network
+VITE_MYSOCIAL_AUTH_CLIENT_ID=your-client-id
+VITE_MYSOCIAL_AUTH_REDIRECT_URI=http://localhost:5173/auth/callback
+VITE_MYSOCIAL_SALT_URL=https://salt.testnet.mysocial.network/salt
 
 # Package IDs (only needed for localnet/devnet — testnet/mainnet auto-detected)
 VITE_MESSAGING_ORIGINAL_PACKAGE_ID=0x...
@@ -835,7 +838,11 @@ VITE_MYDATA_KEY_SERVER_OBJECT_IDS=0x...,0x...,0x...
 ```mermaid
 graph LR
     ENV[".env.local<br/>VITE_* variables"] -->|"Vite build"| META["import.meta.env"]
-    META --> HOOK["useMessagingClient hook"]
+    META --> AUTH["MySocialAuthProvider<br/>createMySocialAuth config"]
+    META --> HOOK["MessagingClientProvider"]
+
+    AUTH --> SALT["Salt URL + Bearer token<br/>→ Ed25519Keypair"]
+    SALT --> HOOK
 
     HOOK --> SC_CFG["MyDataClient config<br/>serverConfigs from<br/>MYDATA_KEY_SERVER_OBJECT_IDS"]
     HOOK --> REL_CFG["RelayerConfig<br/>relayerUrl from<br/>RELAYER_URL"]

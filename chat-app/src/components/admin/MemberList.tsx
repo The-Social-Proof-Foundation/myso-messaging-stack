@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useCurrentAccount } from '@socialproof/dapp-kit';
+import { useAuthenticatedAddress } from '../../contexts/MySocialAuthContext';
 import { MemberItem } from './MemberItem';
 
 interface MemberWithPermissions {
@@ -37,7 +37,7 @@ export function MemberList({
   onRemoveAndRotate,
   onTogglePermission,
 }: Readonly<MemberListProps>) {
-  const account = useCurrentAccount();
+  const accountAddress = useAuthenticatedAddress();
   const [expandedMember, setExpandedMember] = useState<string | null>(null);
 
   return (
@@ -60,7 +60,7 @@ export function MemberList({
       {!loading && members.length > 0 && (
         <ul className="space-y-2">
           {members.map((m) => {
-            const isSelf = m.address === account?.address;
+            const isSelf = m.address === accountAddress;
             return (
               <MemberItem
                 key={m.address}

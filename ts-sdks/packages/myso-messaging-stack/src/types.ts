@@ -9,7 +9,6 @@ import type { ClientWithCoreApi } from '@socialproof/myso/client';
 import type { TransactionArgument } from '@socialproof/myso/transactions';
 
 import type { AttachmentsConfig } from './attachments/types.js';
-import type { MySonsConfig } from './constants.js';
 import type { CryptoPrimitives } from './encryption/crypto-primitives.js';
 import type { MyDataPolicy } from './encryption/mydata-policy.js';
 import type { RelayerConfig } from './relayer/types.js';
@@ -126,8 +125,6 @@ export interface MySoMessagingStackClientOptions<
 	 * When not provided, the config is auto-detected from the client's network.
 	 */
 	packageConfig?: MySoMessagingStackPackageConfig;
-	/** MySoNS config for reverse lookup operations (auto-detected for testnet/mainnet). */
-	mysonsConfig?: MySonsConfig;
 	/** Encryption configuration (required — session key config must be set at creation). */
 	encryption: MySoMessagingStackEncryptionOptions<TApproveContext>;
 	/** Relayer transport configuration. */
@@ -178,7 +175,18 @@ export interface ShareGroupCallOptions {
 	group: TransactionArgument;
 	/** The EncryptionHistory result from `createGroup` */
 	encryptionHistory: TransactionArgument;
+	/** The shared `MessageLog` object (paid `MYSO` escrow holder). */
+	messageLog: TransactionArgument;
 }
+
+/**
+ * On-chain message log calls need the shared `MessageLog` id.
+ * When the ref uses `uuid`, the log id can be derived automatically.
+ * When using explicit `groupId` / `encryptionHistoryId`, pass {@link messageLogId} explicitly.
+ */
+export type GroupAndMessageLogRef = GroupRef & {
+	messageLogId?: string;
+};
 
 /** Options for leaving a messaging group. */
 export interface LeaveCallOptions {
@@ -289,32 +297,38 @@ export type GroupRef =
 	| { groupId: string; encryptionHistoryId: string; uuid?: never }
 	| { uuid: string; groupId?: never; encryptionHistoryId?: never };
 
-// === MySoNS Reverse Lookup Options ===
+// === Group handle registry (separate from profile usernames) ===
 
-/** Options for setting a MySoNS reverse lookup on a group (call-level, no signer). */
-export interface SetMySonsReverseLookupCallOptions {
-	/** Object ID of the PermissionedGroup<Messaging> */
+/** Register or replace this group's canonical handle (call-level). */
+export interface SetGroupHandleCallOptions {
 	groupId: string;
-	/** The MySoNS domain name to set as the reverse lookup */
-	domainName: string;
+	/** ASCII handle; canonicalized on-chain (lowercase `[a-z0-9_]`, length 2–50). */
+	handle: string;
 }
 
-/** Options for unsetting a MySoNS reverse lookup on a group (call-level, no signer). */
-export interface UnsetMySonsReverseLookupCallOptions {
-	/** Object ID of the PermissionedGroup<Messaging> */
+/** Clear this group's handle (call-level). */
+export interface ClearGroupHandleCallOptions {
 	groupId: string;
 }
 
-/** Options for setting a MySoNS reverse lookup (imperative, with signer). */
-export interface SetMySonsReverseLookupOptions extends SetMySonsReverseLookupCallOptions {
-	/** Signer to execute the transaction */
+export interface SetGroupHandleOptions extends SetGroupHandleCallOptions {
 	signer: Signer;
 }
 
-/** Options for unsetting a MySoNS reverse lookup (imperative, with signer). */
-export interface UnsetMySonsReverseLookupOptions extends UnsetMySonsReverseLookupCallOptions {
-	/** Signer to execute the transaction */
+export interface ClearGroupHandleOptions extends ClearGroupHandleCallOptions {
 	signer: Signer;
+}
+
+/** Options for {@link MySoMessagingStackView.lookupGroupByHandle}. */
+export interface LookupGroupByHandleViewOptions {
+	/** Candidate handle (canonicalization matches Move). */
+	handle: string;
+	/**
+	 * `GroupHandleRegistry` shared object ID.
+	 * When omitted, derived from `MessagingNamespace` via `derive.groupHandleRegistryId()`.
+	 */
+	groupHandleRegistryId?: string;
+	signal?: AbortSignal;
 }
 
 // === View Options ===

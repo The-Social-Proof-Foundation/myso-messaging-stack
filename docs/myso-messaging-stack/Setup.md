@@ -214,10 +214,6 @@ packageConfig: {
 }
 ```
 
-### `mysonsConfig` (optional)
-
-Auto-detected for testnet and mainnet. Only needed for MySoNS reverse lookup operations (`setMySonsReverseLookup`, `unsetMySonsReverseLookup`).
-
 ### `mydata` (factory only)
 
 When using `createMessagingGroupsClient`, pass either a pre-built `MyDataClient` or MyData config options:

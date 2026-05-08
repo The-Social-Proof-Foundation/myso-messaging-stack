@@ -24,7 +24,7 @@
 ///
 /// ```move
 /// // 1. Admin creates the group
-/// let (mut group, encryption_history) = messaging::messaging::create_group(...);
+/// let (mut group, encryption_history, message_log) = messaging::create_group(...);
 ///
 /// // 2. Admin creates the paid join rule (generic over token type)
 /// let rule = paid_join_rule::new<MYSO>(group_id, 1_000_000_000, ctx); // 1 MYSO fee
@@ -49,9 +49,9 @@
 module example_app::paid_join_rule;
 
 use myso_groups::permissioned_group::{PermissionedGroup, ExtensionPermissionsAdmin};
-use myso_messaging_stack::messaging::{Self, Messaging, MessagingReader, MessagingNamespace};
-use myso_messaging_stack::group_manager::GroupManager;
-use myso_messaging_stack::version::Version;
+use myso_messaging::messaging::{Self, Messaging, MessagingReader, MessagingNamespace};
+use myso_messaging::group_manager::GroupManager;
+use myso_messaging::version::Version;
 use myso::balance::{Self, Balance};
 use myso::coin::{Self, Coin};
 use myso::vec_set;
@@ -141,7 +141,7 @@ entry fun new_and_share<Token: drop>(
 /// 2. Creates a `PaidJoinRule<Token>` actor with the specified fee
 /// 3. Grants `ExtensionPermissionsAdmin` to the rule (so it can add members)
 /// 4. Grants `FundsManager` to the caller (so they can withdraw fees)
-/// 5. Shares the group, encryption history, and the rule
+/// 5. Shares the group, encryption history, message log, and the rule
 ///
 /// # Type Parameters
 /// - `Token`: The coin type accepted for payment (e.g., `MYSO`)
@@ -166,7 +166,7 @@ entry fun create_token_gated_group<Token: drop>(
     fee: u64,
     ctx: &mut TxContext,
 ) {
-    let (mut group, encryption_history) = messaging::create_group(
+    let (mut group, encryption_history, msg_log) = messaging::create_group(
         version,
         namespace,
         group_manager,
@@ -189,6 +189,7 @@ entry fun create_token_gated_group<Token: drop>(
 
     transfer::public_share_object(group);
     transfer::public_share_object(encryption_history);
+    transfer::public_share_object(msg_log);
     share(rule);
 }
 

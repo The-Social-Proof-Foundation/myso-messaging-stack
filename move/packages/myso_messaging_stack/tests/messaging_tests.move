@@ -1,10 +1,10 @@
 #[test_only]
-module myso_messaging_stack::messaging_tests;
+module myso_messaging::messaging_tests;
 
-use myso_messaging_stack::encryption_history::{Self, EncryptionHistory, EncryptionKeyRotator};
-use myso_messaging_stack::group_leaver::GroupLeaver;
-use myso_messaging_stack::group_manager::{Self, GroupManager};
-use myso_messaging_stack::messaging::{
+use myso_messaging::encryption_history::{Self, EncryptionHistory, EncryptionKeyRotator};
+use myso_messaging::group_leaver::GroupLeaver;
+use myso_messaging::group_manager::{Self, GroupManager};
+use myso_messaging::messaging::{
     Self,
     Messaging,
     MessagingNamespace,
@@ -12,10 +12,11 @@ use myso_messaging_stack::messaging::{
     MessagingReader,
     MessagingEditor,
     MessagingDeleter,
-    MySoNsAdmin,
+    GroupHandleAdmin,
     MetadataAdmin
 };
-use myso_messaging_stack::version::{Self, Version};
+use myso_messaging::message_log;
+use myso_messaging::version::{Self, Version};
 use myso_groups::permissioned_group::{
     Self as pg,
     PermissionedGroup,
@@ -80,7 +81,7 @@ fun uuid_getter_returns_correct_value() {
     let version = ts.take_shared<Version>();
     let mut namespace = ts.take_shared<MessagingNamespace>();
     let group_manager = ts.take_shared<GroupManager>();
-    let (_group, encryption_history) = messaging::create_group(
+    let (_group, encryption_history, _msg_log) = messaging::create_group(
         &version,
         &mut namespace,
         &group_manager,
@@ -98,6 +99,7 @@ fun uuid_getter_returns_correct_value() {
     ts::return_shared(group_manager);
     destroy(_group);
     destroy(encryption_history);
+    destroy(_msg_log);
     ts.end();
 }
 
@@ -117,7 +119,7 @@ fun create_group_creates_group_and_encryption_history() {
     let version = ts.take_shared<Version>();
     let mut namespace = ts.take_shared<MessagingNamespace>();
     let group_manager = ts.take_shared<GroupManager>();
-    let (group, encryption_history) = messaging::create_group(
+    let (group, encryption_history, msg_log) = messaging::create_group(
         &version,
         &mut namespace,
         &group_manager,
@@ -141,7 +143,7 @@ fun create_group_creates_group_and_encryption_history() {
     assert!(group.has_permission<Messaging, MessagingEditor>(ALICE));
     assert!(group.has_permission<Messaging, MessagingDeleter>(ALICE));
     assert!(group.has_permission<Messaging, EncryptionKeyRotator>(ALICE));
-    assert!(group.has_permission<Messaging, MySoNsAdmin>(ALICE));
+    assert!(group.has_permission<Messaging, GroupHandleAdmin>(ALICE));
     assert!(group.has_permission<Messaging, MetadataAdmin>(ALICE));
 
     // Verify creator has core permissions
@@ -153,11 +155,15 @@ fun create_group_creates_group_and_encryption_history() {
     assert_eq!(encryption_history.current_key_version(), 0);
     assert_eq!(*encryption_history.current_encrypted_key(), TEST_ENCRYPTED_DEK);
 
+    assert_eq!(message_log::group_id(&msg_log), object::id(&group));
+    assert_eq!(message_log::uuid(&msg_log), string::utf8(TEST_UUID));
+
     ts::return_shared(version);
     ts::return_shared(namespace);
     ts::return_shared(group_manager);
     destroy(group);
     destroy(encryption_history);
+    destroy(msg_log);
     ts.end();
 }
 
@@ -174,7 +180,7 @@ fun create_group_with_different_uuids() {
     let mut namespace = ts.take_shared<MessagingNamespace>();
     let group_manager = ts.take_shared<GroupManager>();
 
-    let (group1, eh1) = messaging::create_group(
+    let (group1, eh1, msg_log1) = messaging::create_group(
         &version,
         &mut namespace,
         &group_manager,
@@ -185,7 +191,7 @@ fun create_group_with_different_uuids() {
         ts.ctx(),
     );
 
-    let (group2, eh2) = messaging::create_group(
+    let (group2, eh2, msg_log2) = messaging::create_group(
         &version,
         &mut namespace,
         &group_manager,
@@ -204,8 +210,10 @@ fun create_group_with_different_uuids() {
     ts::return_shared(group_manager);
     destroy(group1);
     destroy(eh1);
+    destroy(msg_log1);
     destroy(group2);
     destroy(eh2);
+    destroy(msg_log2);
     ts.end();
 }
 
@@ -225,7 +233,7 @@ fun create_group_with_initial_members() {
     let group_manager = ts.take_shared<GroupManager>();
     let mut initial_members = vec_set::empty();
     initial_members.insert(BOB);
-    let (group, encryption_history) = messaging::create_group(
+    let (group, encryption_history, msg_log) = messaging::create_group(
         &version,
         &mut namespace,
         &group_manager,
@@ -253,6 +261,7 @@ fun create_group_with_initial_members() {
     ts::return_shared(group_manager);
     destroy(group);
     destroy(encryption_history);
+    destroy(msg_log);
     ts.end();
 }
 
@@ -273,7 +282,7 @@ fun create_group_with_initial_members_including_creator() {
     let mut initial_members = vec_set::empty();
     initial_members.insert(ALICE); // Creator included
     initial_members.insert(BOB);
-    let (group, encryption_history) = messaging::create_group(
+    let (group, encryption_history, msg_log) = messaging::create_group(
         &version,
         &mut namespace,
         &group_manager,
@@ -296,6 +305,7 @@ fun create_group_with_initial_members_including_creator() {
     ts::return_shared(group_manager);
     destroy(group);
     destroy(encryption_history);
+    destroy(msg_log);
     ts.end();
 }
 
@@ -313,7 +323,7 @@ fun create_group_attaches_metadata() {
     let version = ts.take_shared<Version>();
     let mut namespace = ts.take_shared<MessagingNamespace>();
     let group_manager = ts.take_shared<GroupManager>();
-    let (group, encryption_history) = messaging::create_group(
+    let (group, encryption_history, msg_log) = messaging::create_group(
         &version,
         &mut namespace,
         &group_manager,
@@ -335,6 +345,7 @@ fun create_group_attaches_metadata() {
     ts::return_shared(group_manager);
     destroy(group);
     destroy(encryption_history);
+    destroy(msg_log);
     ts.end();
 }
 
@@ -370,12 +381,15 @@ fun create_and_share_group_creates_shared_objects() {
     ts.next_tx(ALICE);
     let group = ts.take_shared<PermissionedGroup<Messaging>>();
     let encryption_history = ts.take_shared<EncryptionHistory>();
+    let msg_log = ts.take_shared<message_log::MessageLog>();
 
     assert!(group.creator<Messaging>() == ALICE);
     assert_eq!(encryption_history.group_id(), object::id(&group));
+    assert_eq!(message_log::group_id(&msg_log), object::id(&group));
 
     ts::return_shared(group);
     ts::return_shared(encryption_history);
+    ts::return_shared(msg_log);
     ts.end();
 }
 
@@ -393,7 +407,7 @@ fun rotate_encryption_key_with_permission() {
     let version = ts.take_shared<Version>();
     let mut namespace = ts.take_shared<MessagingNamespace>();
     let group_manager = ts.take_shared<GroupManager>();
-    let (group, encryption_history) = messaging::create_group(
+    let (group, encryption_history, msg_log) = messaging::create_group(
         &version,
         &mut namespace,
         &group_manager,
@@ -405,6 +419,7 @@ fun rotate_encryption_key_with_permission() {
     );
     transfer::public_share_object(group);
     transfer::public_share_object(encryption_history);
+    transfer::public_share_object(msg_log);
     ts::return_shared(version);
     ts::return_shared(namespace);
     ts::return_shared(group_manager);
@@ -436,7 +451,7 @@ fun rotate_encryption_key_with_permission() {
     ts.end();
 }
 
-#[test, expected_failure(abort_code = myso_messaging_stack::messaging::ENotPermitted)]
+#[test, expected_failure(abort_code = myso_messaging::messaging::ENotPermitted)]
 fun rotate_encryption_key_without_permission_fails() {
     let mut ts = ts::begin(ALICE);
 
@@ -448,7 +463,7 @@ fun rotate_encryption_key_without_permission_fails() {
     let version = ts.take_shared<Version>();
     let mut namespace = ts.take_shared<MessagingNamespace>();
     let group_manager = ts.take_shared<GroupManager>();
-    let (mut group, encryption_history) = messaging::create_group(
+    let (mut group, encryption_history, msg_log) = messaging::create_group(
         &version,
         &mut namespace,
         &group_manager,
@@ -462,6 +477,7 @@ fun rotate_encryption_key_without_permission_fails() {
     group.grant_permission<Messaging, MessagingReader>(BOB, ts.ctx());
     transfer::public_share_object(group);
     transfer::public_share_object(encryption_history);
+    transfer::public_share_object(msg_log);
     ts::return_shared(version);
     ts::return_shared(namespace);
     ts::return_shared(group_manager);
@@ -483,7 +499,7 @@ fun rotate_encryption_key_without_permission_fails() {
     abort
 }
 
-#[test, expected_failure(abort_code = myso_messaging_stack::messaging::EEncryptionHistoryMismatch)]
+#[test, expected_failure(abort_code = myso_messaging::messaging::EEncryptionHistoryMismatch)]
 fun rotate_encryption_key_with_mismatched_encryption_history_fails() {
     let mut ts = ts::begin(ALICE);
 
@@ -497,7 +513,7 @@ fun rotate_encryption_key_with_mismatched_encryption_history_fails() {
     let mut namespace = ts.take_shared<MessagingNamespace>();
     let group_manager = ts.take_shared<GroupManager>();
 
-    let (group1, encryption_history1) = messaging::create_group(
+    let (group1, encryption_history1, msg_log1) = messaging::create_group(
         &version,
         &mut namespace,
         &group_manager,
@@ -510,8 +526,9 @@ fun rotate_encryption_key_with_mismatched_encryption_history_fails() {
     let group1_id = object::id(&group1);
     transfer::public_share_object(group1);
     transfer::public_share_object(encryption_history1);
+    destroy(msg_log1);
 
-    let (_group2, encryption_history2) = messaging::create_group(
+    let (_group2, encryption_history2, _msg_log2) = messaging::create_group(
         &version,
         &mut namespace,
         &group_manager,
@@ -524,6 +541,7 @@ fun rotate_encryption_key_with_mismatched_encryption_history_fails() {
     let eh2_id = object::id(&encryption_history2);
     transfer::public_share_object(_group2);
     transfer::public_share_object(encryption_history2);
+    destroy(_msg_log2);
 
     ts::return_shared(version);
     ts::return_shared(namespace);
@@ -560,7 +578,7 @@ fun encryption_history_encrypted_key_returns_correct_version() {
     let version = ts.take_shared<Version>();
     let mut namespace = ts.take_shared<MessagingNamespace>();
     let group_manager = ts.take_shared<GroupManager>();
-    let (group, encryption_history) = messaging::create_group(
+    let (group, encryption_history, msg_log) = messaging::create_group(
         &version,
         &mut namespace,
         &group_manager,
@@ -572,6 +590,7 @@ fun encryption_history_encrypted_key_returns_correct_version() {
     );
     transfer::public_share_object(group);
     transfer::public_share_object(encryption_history);
+    transfer::public_share_object(msg_log);
     ts::return_shared(version);
     ts::return_shared(namespace);
     ts::return_shared(group_manager);
@@ -621,7 +640,7 @@ fun encryption_history_encrypted_key_invalid_version_fails() {
     let version = ts.take_shared<Version>();
     let mut namespace = ts.take_shared<MessagingNamespace>();
     let group_manager = ts.take_shared<GroupManager>();
-    let (_group, encryption_history) = messaging::create_group(
+    let (_group, encryption_history, _msg_log) = messaging::create_group(
         &version,
         &mut namespace,
         &group_manager,
@@ -659,7 +678,7 @@ fun create_group_with_oversized_dek_fails() {
     let group_manager = ts.take_shared<GroupManager>();
 
     // Try to create group with oversized DEK
-    let (_group, _encryption_history) = messaging::create_group(
+    let (_group, _encryption_history, _msg_log) = messaging::create_group(
         &version,
         &mut namespace,
         &group_manager,
@@ -685,7 +704,7 @@ fun rotate_encryption_key_with_oversized_dek_fails() {
     let version = ts.take_shared<Version>();
     let mut namespace = ts.take_shared<MessagingNamespace>();
     let group_manager = ts.take_shared<GroupManager>();
-    let (group, encryption_history) = messaging::create_group(
+    let (group, encryption_history, msg_log) = messaging::create_group(
         &version,
         &mut namespace,
         &group_manager,
@@ -697,6 +716,7 @@ fun rotate_encryption_key_with_oversized_dek_fails() {
     );
     transfer::public_share_object(group);
     transfer::public_share_object(encryption_history);
+    transfer::public_share_object(msg_log);
     ts::return_shared(version);
     ts::return_shared(namespace);
     ts::return_shared(group_manager);
@@ -732,7 +752,7 @@ fun leave_removes_member() {
     let version = ts.take_shared<Version>();
     let mut namespace = ts.take_shared<MessagingNamespace>();
     let group_manager = ts.take_shared<GroupManager>();
-    let (mut group, encryption_history) = messaging::create_group(
+    let (mut group, encryption_history, msg_log) = messaging::create_group(
         &version,
         &mut namespace,
         &group_manager,
@@ -746,6 +766,7 @@ fun leave_removes_member() {
     group.grant_permission<Messaging, MessagingReader>(BOB, ts.ctx());
     transfer::public_share_object(group);
     transfer::public_share_object(encryption_history);
+    transfer::public_share_object(msg_log);
     ts::return_shared(version);
     ts::return_shared(namespace);
     ts::return_shared(group_manager);
@@ -776,7 +797,7 @@ fun leave_permissions_admin_fails() {
     let version = ts.take_shared<Version>();
     let mut namespace = ts.take_shared<MessagingNamespace>();
     let group_manager = ts.take_shared<GroupManager>();
-    let (group, encryption_history) = messaging::create_group(
+    let (group, encryption_history, msg_log) = messaging::create_group(
         &version,
         &mut namespace,
         &group_manager,
@@ -788,6 +809,7 @@ fun leave_permissions_admin_fails() {
     );
     transfer::public_share_object(group);
     transfer::public_share_object(encryption_history);
+    transfer::public_share_object(msg_log);
     ts::return_shared(version);
     ts::return_shared(namespace);
     ts::return_shared(group_manager);
@@ -811,7 +833,7 @@ fun leave_non_member_fails() {
     let version = ts.take_shared<Version>();
     let mut namespace = ts.take_shared<MessagingNamespace>();
     let group_manager = ts.take_shared<GroupManager>();
-    let (group, encryption_history) = messaging::create_group(
+    let (group, encryption_history, msg_log) = messaging::create_group(
         &version,
         &mut namespace,
         &group_manager,
@@ -823,6 +845,7 @@ fun leave_non_member_fails() {
     );
     transfer::public_share_object(group);
     transfer::public_share_object(encryption_history);
+    transfer::public_share_object(msg_log);
     ts::return_shared(version);
     ts::return_shared(namespace);
     ts::return_shared(group_manager);
@@ -850,7 +873,7 @@ fun set_group_name_succeeds_with_metadata_admin() {
     let version = ts.take_shared<Version>();
     let mut namespace = ts.take_shared<MessagingNamespace>();
     let group_manager = ts.take_shared<GroupManager>();
-    let (group, encryption_history) = messaging::create_group(
+    let (group, encryption_history, msg_log) = messaging::create_group(
         &version,
         &mut namespace,
         &group_manager,
@@ -862,6 +885,7 @@ fun set_group_name_succeeds_with_metadata_admin() {
     );
     transfer::public_share_object(group);
     transfer::public_share_object(encryption_history);
+    transfer::public_share_object(msg_log);
     ts::return_shared(version);
     ts::return_shared(namespace);
     ts::return_shared(group_manager);
@@ -882,7 +906,7 @@ fun set_group_name_succeeds_with_metadata_admin() {
     ts.end();
 }
 
-#[test, expected_failure(abort_code = myso_messaging_stack::messaging::ENotPermitted)]
+#[test, expected_failure(abort_code = myso_messaging::messaging::ENotPermitted)]
 fun set_group_name_fails_without_permission() {
     let mut ts = ts::begin(ALICE);
 
@@ -894,7 +918,7 @@ fun set_group_name_fails_without_permission() {
     let version = ts.take_shared<Version>();
     let mut namespace = ts.take_shared<MessagingNamespace>();
     let group_manager = ts.take_shared<GroupManager>();
-    let (mut group, encryption_history) = messaging::create_group(
+    let (mut group, encryption_history, msg_log) = messaging::create_group(
         &version,
         &mut namespace,
         &group_manager,
@@ -908,6 +932,7 @@ fun set_group_name_fails_without_permission() {
     group.grant_permission<Messaging, MessagingReader>(BOB, ts.ctx());
     transfer::public_share_object(group);
     transfer::public_share_object(encryption_history);
+    transfer::public_share_object(msg_log);
     ts::return_shared(version);
     ts::return_shared(namespace);
     ts::return_shared(group_manager);
@@ -938,7 +963,7 @@ fun insert_and_remove_group_data() {
     let version = ts.take_shared<Version>();
     let mut namespace = ts.take_shared<MessagingNamespace>();
     let group_manager = ts.take_shared<GroupManager>();
-    let (group, encryption_history) = messaging::create_group(
+    let (group, encryption_history, msg_log) = messaging::create_group(
         &version,
         &mut namespace,
         &group_manager,
@@ -950,6 +975,7 @@ fun insert_and_remove_group_data() {
     );
     transfer::public_share_object(group);
     transfer::public_share_object(encryption_history);
+    transfer::public_share_object(msg_log);
     ts::return_shared(version);
     ts::return_shared(namespace);
     ts::return_shared(group_manager);
@@ -997,7 +1023,7 @@ fun setup_shared_group(ts: &mut ts::Scenario): ID {
     let version = ts.take_shared<Version>();
     let mut namespace = ts.take_shared<MessagingNamespace>();
     let group_manager = ts.take_shared<GroupManager>();
-    let (group, encryption_history) = messaging::create_group(
+    let (group, encryption_history, msg_log) = messaging::create_group(
         &version,
         &mut namespace,
         &group_manager,
@@ -1010,6 +1036,7 @@ fun setup_shared_group(ts: &mut ts::Scenario): ID {
     let group_id = object::id(&group);
     transfer::public_share_object(group);
     transfer::public_share_object(encryption_history);
+    transfer::public_share_object(msg_log);
     ts::return_shared(version);
     ts::return_shared(namespace);
     ts::return_shared(group_manager);
@@ -1026,7 +1053,7 @@ fun archive_group(ts: &mut ts::Scenario) {
     ts::return_shared(version);
 }
 
-#[test, expected_failure(abort_code = myso_messaging_stack::messaging::EGroupArchived)]
+#[test, expected_failure(abort_code = myso_messaging::messaging::EGroupArchived)]
 fun rotate_encryption_key_on_archived_group_fails() {
     let mut ts = ts::begin(ALICE);
     setup_shared_group(&mut ts);

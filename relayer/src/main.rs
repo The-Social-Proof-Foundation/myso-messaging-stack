@@ -5,7 +5,7 @@ mod models;
 mod services;
 mod state;
 mod storage;
-mod file-storage;
+mod file_storage;
 
 use std::sync::Arc;
 
@@ -15,6 +15,7 @@ use axum::{
     Router,
 };
 use config::Config;
+use handlers::group_features;
 use handlers::health::health_check;
 use handlers::messages::{create_message, delete_message, get_messages, update_message};
 use state::AppState;
@@ -76,12 +77,30 @@ async fn main() {
     };
 
     // Routes that require authentication (GET, POST, PUT, DELETE)
-    let authenticated_routes = Router::new()
+    let message_routes = Router::new()
         .route(
             "/messages",
             get(get_messages).post(create_message).put(update_message),
         )
-        .route("/messages/:message_id", delete(delete_message))
+        .route("/messages/:message_id", delete(delete_message));
+
+    let v1_group_routes = Router::new()
+        .route(
+            "/groups/:group_id/reactions",
+            get(group_features::list_reactions).post(group_features::post_reaction),
+        )
+        .route(
+            "/groups/:group_id/pins",
+            get(group_features::list_pins).post(group_features::set_pin),
+        )
+        .route(
+            "/groups/:group_id/receipts",
+            get(group_features::get_receipts).post(group_features::post_receipts),
+        );
+
+    let authenticated_routes = Router::new()
+        .merge(message_routes.clone())
+        .nest("/v1", message_routes.clone().merge(v1_group_routes))
         .layer(middleware::from_fn_with_state(auth_state, auth_middleware))
         .with_state(app_state.clone());
 

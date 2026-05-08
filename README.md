@@ -50,7 +50,7 @@ Messaging tooling for Web3 applications, built on [MySocial](https://mysocial.ne
    │   │   └─────────────────────────────────────┘
    │   │          R/W       │
    │  ┌▼─────────┐    ┌─────▼──────┐
-   │  │   MyData   │    │   File Storage   │
+   │  │   MyData   │  │File Storage│
    │  │ Key Mgmt │    │  Archival  │
    │  └──────────┘    └────────────┘
    │                        ▲
@@ -63,7 +63,7 @@ Messages are encrypted client-side using AES-256-GCM with MyData-managed keys, s
 
 The MySocial Messaging Stack tooling is infrastructure for building encrypted, programmable messaging directly into applications, rather than a standalone messaging service.
 
-The alpha version stored messages on-chain as MySo objects, providing on-chain verifiability for ordering and availability. The current architecture moves delivery logistics off-chain to a relayer, highly optimizing the total cost while preserving E2E encryption and sender verification. The relayer acts as a delivery operator for message routing and ordering; for applications that require verifiable delivery, you can adapt the available relayer template to run inside [Nautilus](https://docs.mysocial.network/guides/developer/cryptography/nautilus). See [Security](./Security.md) for the full trust model.
+The messaging architecture moves delivery logistics off-chain to a relayer, highly optimizing the total cost while preserving E2E encryption and sender verification. The relayer acts as a delivery operator for message routing and ordering; for applications that require verifiable delivery, you can adapt the available relayer template to run inside an [Enclave](https://docs.mysocial.network/guides/developer/cryptography/nautilus). See [Security](./Security.md) for the full trust model.
 
 ## Dependencies
 
@@ -85,7 +85,7 @@ The alpha version stored messages on-chain as MySo objects, providing on-chain v
 - **Cross-device recovery**: encrypted message history restorable from File Storage without requiring centralized backups
 - **Custom MyData policies**: override default access control with application-specific logic (token-gated, subscription-based)
 - **UUID-based addressing**: deterministic on-chain object IDs from client-provided UUIDs, enabling single-transaction group creation
-- **MySoNS integration**: reverse lookup support for human-readable group names
+- **Group handles**: on-chain `GroupHandleRegistry` (separate from profile usernames) for canonical handle → group id
 - **Group metadata**: on-chain key-value store for application-specific group data
 
 ## Use Cases

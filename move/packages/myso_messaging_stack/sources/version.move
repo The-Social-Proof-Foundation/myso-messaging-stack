@@ -1,4 +1,4 @@
-module myso_messaging_stack::version;
+module myso_messaging::version;
 
 use myso::package;
 

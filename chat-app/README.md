@@ -18,10 +18,10 @@ A fully functional chat application built on the MySo Groups SDK ecosystem, show
 - **On-chain permission management** — Group membership and fine-grained permissions (send, read, edit, delete, admin) are enforced on-chain via `@socialproof/myso-groups`, with the relayer and MyData key servers independently verifying permissions.
 - **Atomic multi-step transactions** — The SDK's `call` layer composes multiple on-chain operations (e.g., remove member + rotate encryption key) into a single Programmable Transaction Block (PTB), guaranteeing atomicity.
 - **Encrypted file attachments via File Storage** — Files are encrypted with the group's DEK and stored on [File Storage](https://docs.mysocial.network/mysocial/file-storage/overview) decentralized storage. Metadata (filename, MIME type, size) is encrypted separately.
-- **Wallet-based authentication** — No usernames or passwords. Users authenticate with their MySo wallet via `@socialproof/dapp-kit`.
+- **MySocial Login** — Users authenticate with [`@socialproof/mysocial-auth`](https://www.npmjs.com/package/@socialproof/mysocial-auth) (popup). The app derives an in-memory Ed25519 keypair via the MySocial salt service (SHA256(sub + '_' + salt), first 32 bytes) so the messaging SDK can use Tier 1 session keys and sign PTBs without a browser wallet extension.
 - **Real-time message delivery** — New messages appear automatically via HTTP polling with the SDK's `subscribe()` API.
 
-**Tech stack:** React 19 · Vite · Tailwind CSS · @socialproof/dapp-kit
+**Tech stack:** React 19 · Vite · Tailwind CSS · @socialproof/mysocial-auth · @socialproof/myso
 
 ---
 
@@ -35,18 +35,19 @@ This application serves as the canonical reference implementation for integratin
 | `@socialproof/myso-messaging-stack`    | End-to-end encrypted group messaging                         |
 | `messaging-sdk-relayer`       | Off-chain message storage and real-time delivery (Rust/Axum) |
 
-The app provides working code for common integration patterns: wallet setup, session key management, PTB composition, group discovery via GraphQL events, and File Storage file handling — making it easy for developers to understand how these components work together.
+The app provides working code for common integration patterns: **MySocial OAuth login**, salt-based key derivation, session key management, PTB composition, group discovery via GraphQL events, and File Storage file handling — making it easy for developers to understand how these components work together.
 
 ---
 
 ## 4. Features
 
-### Wallet & Authentication
+### Sign-in & Authentication
 
-| Feature                   | Description                                           | SDK Method                      |
-|---------------------------|-------------------------------------------------------|---------------------------------|
-| Wallet connection         | Connect/disconnect via @socialproof/dapp-kit ConnectButton | `useCurrentAccount()`           |
-| SDK client initialization | Create MySoMessagingStackClient from wallet signer       | `createMySoMessagingStackClient()` |
+| Feature                   | Description                                                                 | APIs / helpers                                      |
+|---------------------------|-----------------------------------------------------------------------------|-----------------------------------------------------|
+| MySocial Login            | Popup sign-in (`createMySocialAuth`, `signIn`); Sign out clears session       | `@socialproof/mysocial-auth`                         |
+| Signing key derivation    | Bearer token → `POST` salt URL → `Ed25519Keypair.fromSecretKey(seed)`       | `deriveKeypairFromSaltService()` in `chat-app`       |
+| SDK client initialization | `createMySoMessagingStackClient(MySoJsonRpcClient, …)` Tier 1 `sessionKey`   | `createMySoMessagingStackClient()`                   |
 
 ### Group Management
 
@@ -106,7 +107,7 @@ This application is a focused reference implementation. It prioritizes demonstra
 
 - **User profiles / display names** — Truncated MySo addresses are used for identity
 - **Custom MyData policies** — The app uses the SDK's default MyData configuration
-- **MySoNS integration** — Supported by the SDK but omitted for simplicity
+- **Group handle registration** — `setGroupHandle` / `clearGroupHandle` exist in the SDK but are omitted in this demo UI
 
 ---
 
@@ -117,8 +118,8 @@ The app follows a 3-layer architecture:
 ### Layer 1 — Browser (React SPA)
 
 - React 19 UI with Tailwind CSS styling
-- @socialproof/dapp-kit for MySo wallet integration (ConnectButton, useCurrentAccount, useSignPersonalMessage)
-- Custom `MessagingClientProvider` context that creates and memoizes the SDK client
+- `@socialproof/mysocial-auth` for Login with MySocial (popup session + salt-backed key derivation)
+- Custom `MessagingClientProvider` that builds `MySoJsonRpcClient` + messaging stack extensions when the derived keypair is ready
 
 ### Layer 2 — SDK (in-browser, client-side)
 
@@ -139,7 +140,7 @@ The app follows a 3-layer architecture:
 ### Key Architectural Decisions
 
 - **Group discovery via MySo GraphQL** — query `MemberAdded`/`MemberRemoved` events from the indexer, cached in localStorage for instant sidebar rendering
-- **Tier 2 session keys** — dapp-kit's `signPersonalMessage` feeds the SDK callback config
+- **Tier 1 session keys** — `encryption.sessionKey: { signer }` passes the derived `Ed25519Keypair` to the SDK (`SessionKey` + certificate flow is fully signer-driven)
 - **Atomic PTBs via SDK `call` layer** — composed admin operations in single transactions
 - **Distributed state** — React component state + localStorage caching (no centralized store needed)
 
@@ -153,9 +154,9 @@ The app follows a 3-layer architecture:
 |-------------------------------|-----------|-------------------------|
 | `@socialproof/myso-messaging-stack`    | workspace | E2E encrypted messaging |
 | `@socialproof/myso-groups` | workspace | Permission management   |
-| `@socialproof/dapp-kit`            | ^0.x      | Wallet adapter          |
-| `@socialproof/myso`                 | ^2.6      | MySo RPC client          |
-| `@socialproof/mydata`                | ^1.1      | Threshold encryption    |
+| `@socialproof/mysocial-auth`         | npm       | MySocial OAuth + session APIs    |
+| `@socialproof/myso`                 | ^0.x      | MySo RPC (`MySoJsonRpcClient`) |
+| `@socialproof/mydata`               | ^0.x      | Threshold encryption           |
 
 ### Application Dependencies
 
@@ -177,13 +178,24 @@ The app follows a 3-layer architecture:
 
 ---
 
-## 8. References
+## 8. Troubleshooting
+
+### "Missing MySocial auth env" but `.env` looks correct
+
+- **`pnpm dev`**: Restart the dev server after editing `.env` (Vite reads env when the server starts).
+- **`pnpm preview`**: The preview server only serves **`dist/`** from your last **`pnpm build`**. Env vars are inlined when that bundle was built — **not** from `.env` at preview runtime. Edit `.env`, then run **`pnpm build`** again, then `pnpm preview`.
+
+`VITE_MYSOCIAL_AUTH_API_BASE_URL` must be the **MySocial API** host (see [@socialproof/mysocial-auth](https://www.npmjs.com/package/@socialproof/mysocial-auth)), **not** the salt URL (`VITE_MYSOCIAL_SALT_URL` is separate).
+
+---
+
+## 9. References
 
 | Resource             | Link                                                                                                                      |
 |----------------------|---------------------------------------------------------------------------------------------------------------------------|
 | Groups SDK source    | [permissioned-groups](../ts-sdks/packages/permissioned-groups), [messaging-groups](../ts-sdks/packages/messaging-groups/) |
 | System Design doc    | [SYSTEM_DESIGN.md](./docs/SYSTEM_DESIGN.md)                                                                               |
-| @socialproof/dapp-kit     | https://docs.mysocial.network.mysocialdapp-kit                                                                                       |
+| @socialproof/mysocial-auth | https://www.npmjs.com/package/@socialproof/mysocial-auth |
 | MySo TypeScript SDK   | https://docs.mysocial.network.mysocialtypescript                                                                                     |
 | File Storage Documentation | https://docs.mysocial.network/mysocial/file-storage.overviewapp                                                                                                  |
 | MyData Documentation   | https://docs.mysocial.network/mysocial/mydata/overview.com                                                                                          |

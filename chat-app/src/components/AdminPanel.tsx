@@ -2,8 +2,8 @@
  * Slide-out admin panel for group management.
  */
 import { useState, useEffect, useCallback } from 'react';
-import { useSignAndExecuteTransaction } from '@socialproof/dapp-kit';
 import { useRequiredMessagingClient } from '../contexts/MessagingClientContext';
+import { signAndExecuteTransactionAndWait } from '../lib/sign-and-wait';
 import { updateStoredGroupName } from '../lib/group-store';
 import type { Permissions } from '../hooks/usePermissions';
 import { GroupNameSection } from './admin/GroupNameSection';
@@ -39,8 +39,7 @@ export function AdminPanel({
   onGroupRenamed,
   onGroupArchived,
 }: Readonly<AdminPanelProps>) {
-  const { client } = useRequiredMessagingClient();
-  const { mutateAsync: signAndExecute } = useSignAndExecuteTransaction();
+  const { client, signer } = useRequiredMessagingClient();
 
   const [members, setMembers] = useState<MemberWithPermissions[]>([]);
   const [loadingMembers, setLoadingMembers] = useState(false);
@@ -74,7 +73,7 @@ export function AdminPanel({
     { key: 'Delete', value: client.messaging.bcs.MessagingDeleter.name },
     { key: 'Rotate Key', value: client.messaging.bcs.EncryptionKeyRotator.name },
     { key: 'Metadata', value: client.messaging.bcs.MetadataAdmin.name },
-    { key: 'MySoNS', value: client.messaging.bcs.MySoNsAdmin.name },
+    { key: 'Group handle', value: client.messaging.bcs.GroupHandleAdmin.name },
   ];
 
   // System object addresses (GroupLeaver, GroupManager) — not human members
@@ -126,7 +125,7 @@ export function AdminPanel({
         member: address,
         permissionTypes: selectedPerms,
       });
-      await signAndExecute({ transaction: tx });
+      await signAndExecuteTransactionAndWait(client, signer, tx);
       setNewAddress('');
       setSelectedPerms([]);
       await fetchMembers();
@@ -147,7 +146,7 @@ export function AdminPanel({
     setRemoveError(null);
     try {
       const tx = client.groups.tx.removeMember({ groupId, member });
-      await signAndExecute({ transaction: tx });
+      await signAndExecuteTransactionAndWait(client, signer, tx);
       await fetchMembers();
       onPermissionsChanged?.();
     } catch (err) {
@@ -175,14 +174,14 @@ export function AdminPanel({
           member,
           permissionType: permType,
         });
-        await signAndExecute({ transaction: tx });
+        await signAndExecuteTransactionAndWait(client, signer, tx);
       } else {
         const tx = client.groups.tx.grantPermission({
           groupId,
           member,
           permissionType: permType,
         });
-        await signAndExecute({ transaction: tx });
+        await signAndExecuteTransactionAndWait(client, signer, tx);
       }
       await fetchMembers();
       onPermissionsChanged?.();
@@ -205,7 +204,7 @@ export function AdminPanel({
         uuid: groupUuid,
         members: [member],
       });
-      await signAndExecute({ transaction: tx });
+      await signAndExecuteTransactionAndWait(client, signer, tx);
       await fetchMembers();
       onPermissionsChanged?.();
     } catch (err) {
@@ -233,7 +232,7 @@ export function AdminPanel({
         groupId,
         name: trimmed,
       });
-      await signAndExecute({ transaction: tx });
+      await signAndExecuteTransactionAndWait(client, signer, tx);
       updateStoredGroupName(groupUuid, trimmed);
       setEditingName(false);
       onGroupRenamed?.(trimmed);
@@ -254,7 +253,7 @@ export function AdminPanel({
       const tx = client.messaging.tx.rotateEncryptionKey({
         uuid: groupUuid,
       });
-      await signAndExecute({ transaction: tx });
+      await signAndExecuteTransactionAndWait(client, signer, tx);
     } catch (err) {
       console.error('Failed to rotate key:', err);
       setActionError(err instanceof Error ? err.message : 'Failed to rotate key.');
@@ -267,7 +266,7 @@ export function AdminPanel({
   async function handleArchive() {
     try {
       const tx = client.messaging.tx.archiveGroup({ groupId });
-      await signAndExecute({ transaction: tx });
+      await signAndExecuteTransactionAndWait(client, signer, tx);
       onGroupArchived?.();
     } catch (err) {
       console.error('Failed to archive group:', err);

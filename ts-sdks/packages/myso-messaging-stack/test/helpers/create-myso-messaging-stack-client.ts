@@ -36,6 +36,24 @@ const noopTransport: RelayerTransport = {
 	subscribe: () => {
 		throw new Error('noopTransport: subscribe not implemented');
 	},
+	listGroupReactions: () => {
+		throw new Error('noopTransport: listGroupReactions not implemented');
+	},
+	postGroupReaction: () => {
+		throw new Error('noopTransport: postGroupReaction not implemented');
+	},
+	listGroupPins: () => {
+		throw new Error('noopTransport: listGroupPins not implemented');
+	},
+	setGroupPin: () => {
+		throw new Error('noopTransport: setGroupPin not implemented');
+	},
+	getGroupReceipts: () => {
+		throw new Error('noopTransport: getGroupReceipts not implemented');
+	},
+	postGroupReceipts: () => {
+		throw new Error('noopTransport: postGroupReceipts not implemented');
+	},
 	disconnect: () => {},
 };
 

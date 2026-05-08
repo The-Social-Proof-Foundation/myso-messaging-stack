@@ -3,17 +3,19 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { bcs } from '@socialproof/myso/bcs';
-import { deriveDynamicFieldID } from '@socialproof/myso/utils';
-
-import type { MySoMessagingStackBCS } from './bcs.js';
-import type { MySoMessagingStackDerive } from './derive.js';
 import type { ClientWithCoreApi } from '@socialproof/myso/client';
-import { METADATA_SCHEMA_VERSION, metadataKeyType } from './constants.js';
+import type { DevInspectResults, DevInspectTransactionBlockParams } from '@socialproof/myso/jsonRpc';
+import { Transaction } from '@socialproof/myso/transactions';
+import { deriveDynamicFieldID, normalizeMySoAddress, toHex } from '@socialproof/myso/utils';
 
-import type { ParsedMetadata } from './bcs.js';
+import type { MySoMessagingStackBCS, ParsedMetadata } from './bcs.js';
+import { METADATA_SCHEMA_VERSION, metadataKeyType } from './constants.js';
+import type { MySoMessagingStackDerive } from './derive.js';
+import { MySoMessagingStackClientError } from './error.js';
 import type {
 	EncryptedKeyViewOptions,
 	EncryptionHistoryRef,
+	LookupGroupByHandleViewOptions,
 	MySoMessagingStackPackageConfig,
 } from './types.js';
 
@@ -37,8 +39,8 @@ const TableVecEntryField = bcs.struct('Field', {
 /**
  * View methods for querying messaging group state.
  *
- * These methods fetch on-chain state via RPC (`getObject` + dynamic field derivation),
- * without requiring a signature or spending gas.
+ * These methods fetch on-chain state via RPC without spending gas (`getObject`, dynamic fields,
+ * or `devInspectTransactionBlock` for read-only Move calls).
  *
  * For permission queries (hasPermission, isMember), use the
  * underlying permissioned-groups client: `client.groups.view.*`
@@ -55,10 +57,7 @@ const TableVecEntryField = bcs.struct('Field', {
  * });
  * ```
  */
-/**
- * Cached immutable fields from an EncryptionHistory object.
- * All fields are set at creation time and never change.
- */
+/** Cached immutable fields from an EncryptionHistory object (immutable once created). */
 interface EncryptionHistoryCache {
 	tableId: string;
 	groupId: string;
@@ -189,6 +188,45 @@ export class MySoMessagingStackView {
 		return result;
 	}
 
+	/**
+	 * Resolves a registered group handle to the `PermissionedGroup<Messaging>` object ID.
+	 * Uses dev-inspect (`myso_devInspectTransactionBlock`); no gas, no signature. Requires a JSON-RPC MySo client.
+	 *
+	 * Unregistered or invalid handles (per Move validation) return `null`.
+	 */
+	async lookupGroupByHandle(options: LookupGroupByHandleViewOptions): Promise<string | null> {
+		const registryId = options.groupHandleRegistryId ?? this.#derive.groupHandleRegistryId();
+		const root = this.#client as ClientWithCoreApi & {
+			devInspectTransactionBlock?: (input: DevInspectTransactionBlockParams) => Promise<DevInspectResults>;
+		};
+		if (typeof root.devInspectTransactionBlock !== 'function') {
+			throw new MySoMessagingStackClientError(
+				'lookupGroupByHandle requires a JSON-RPC client with devInspectTransactionBlock (e.g. MySoJsonRpcClient).',
+			);
+		}
+		const tx = new Transaction();
+		tx.moveCall({
+			package: this.#packageConfig.latestPackageId,
+			module: 'messaging',
+			function: 'lookup_group_by_handle',
+			arguments: [tx.object(registryId), tx.pure.string(options.handle)],
+		});
+		const inspected = await root.devInspectTransactionBlock({
+			sender: normalizeMySoAddress('0x0'),
+			transactionBlock: tx,
+			signal: options.signal,
+		});
+		if (inspected.error) {
+			throw new MySoMessagingStackClientError(`lookupGroupByHandle failed: ${inspected.error}`);
+		}
+		const ret = inspected.results?.[0]?.returnValues?.[0];
+		if (!ret) {
+			throw new MySoMessagingStackClientError('lookupGroupByHandle: no return value from dev-inspect');
+		}
+		const [byteList] = ret;
+		return parseOptionObjectIdBcs(new Uint8Array(byteList));
+	}
+
 	// === Private Helpers ===
 
 	/**
@@ -255,4 +293,23 @@ export class MySoMessagingStackView {
 
 		return new Uint8Array(parsed.value);
 	}
+}
+
+/** BCS for Move `std::option::Option<object::ID>`: `0` (none) or `1` + 32-byte id. */
+function parseOptionObjectIdBcs(bytes: Uint8Array): string | null {
+	if (bytes.length < 1) {
+		throw new MySoMessagingStackClientError('lookupGroupByHandle: empty return bytes');
+	}
+	const tag = bytes[0];
+	if (tag === 0) return null;
+	if (tag !== 1) {
+		throw new MySoMessagingStackClientError(`lookupGroupByHandle: unexpected Option tag ${tag}`);
+	}
+	const idBytes = bytes.subarray(1);
+	if (idBytes.length !== 32) {
+		throw new MySoMessagingStackClientError(
+			`lookupGroupByHandle: expected 32-byte object ID payload, got ${idBytes.length} bytes`,
+		);
+	}
+	return normalizeMySoAddress(toHex(idBytes));
 }

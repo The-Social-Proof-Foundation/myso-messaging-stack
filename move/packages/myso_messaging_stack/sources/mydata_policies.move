@@ -17,12 +17,12 @@
 /// - Subscription-based, time-limited, NFT-gated access, etc.
 /// - Must be in the same package used during `mydata.encrypt`.
 ///
-module myso_messaging_stack::mydata_policies;
+module myso_messaging::mydata_policies;
 
 use myso_groups::permissioned_group::PermissionedGroup;
-use myso_messaging_stack::messaging::{MessagingReader, Messaging};
-use myso_messaging_stack::encryption_history::EncryptionHistory;
-use myso_messaging_stack::version::Version;
+use myso_messaging::messaging::{MessagingReader, Messaging};
+use myso_messaging::encryption_history::EncryptionHistory;
+use myso_messaging::version::Version;
 use myso::bcs;
 
 // === Error Codes ===

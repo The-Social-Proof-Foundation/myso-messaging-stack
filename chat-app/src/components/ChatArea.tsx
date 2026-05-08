@@ -1,11 +1,9 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import {
-  useCurrentAccount,
-  useSignAndExecuteTransaction,
-} from '@socialproof/dapp-kit';
 import type { StoredGroup } from '../lib/group-store';
 import { removeStoredGroup } from '../lib/group-store';
 import { useRequiredMessagingClient } from '../contexts/MessagingClientContext';
+import { useAuthenticatedAddress } from '../contexts/MySocialAuthContext';
+import { signAndExecuteTransactionAndWait } from '../lib/sign-and-wait';
 import { useMessages } from '../hooks/useMessages';
 import { usePermissions } from '../hooks/usePermissions';
 import { MessageBubble } from './MessageBubble';
@@ -101,10 +99,10 @@ function ChatView({
   group: StoredGroup;
   onLeaveGroup?: () => void;
 }>) {
-  const account = useCurrentAccount();
-  const { client } = useRequiredMessagingClient();
-  const { mutateAsync: signAndExecute } = useSignAndExecuteTransaction();
-  const { permissions, refresh: refreshPermissions } = usePermissions(group.groupId);
+  const myAddress = useAuthenticatedAddress();
+  const { client, signer } = useRequiredMessagingClient();
+  const { permissions, loading: permissionsLoading, refresh: refreshPermissions } =
+    usePermissions(group.groupId);
   const [adminPanelOpen, setAdminPanelOpen] = useState(false);
   const {
     messages,
@@ -132,7 +130,7 @@ function ChatView({
         groupId: group.groupId,
       });
 
-      await signAndExecute({ transaction: tx });
+      await signAndExecuteTransactionAndWait(client, signer, tx);
 
       // Remove from localStorage and deselect
       removeStoredGroup(group.uuid);
@@ -146,7 +144,7 @@ function ChatView({
     } finally {
       setLeaving(false);
     }
-  }, [client, group, signAndExecute, onLeaveGroup]);
+  }, [client, group, signer, onLeaveGroup]);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -252,7 +250,7 @@ function ChatView({
         {!loading && messages.length > 0 && (
           <div className="flex flex-col gap-0.5 py-4">
             {messages.map((msg) => {
-              const isOwn = msg.senderAddress === account?.address;
+              const isOwn = msg.senderAddress === myAddress;
               return (
                 <MessageBubble
                   key={msg.messageId}
@@ -289,8 +287,19 @@ function ChatView({
         </div>
       )}
 
-      {/* Message input (hidden if user lacks send permission) */}
-      {permissions.canSend ? (
+      {/* Message input: while permissions load, show disabled composer (avoid false "no permission"). */}
+      {permissionsLoading ? (
+        <div className="border-t border-secondary-200 px-4 py-3 dark:border-secondary-700">
+          <p className="mb-2 text-center text-xs text-secondary-400 dark:text-secondary-500">
+            Checking permissions…
+          </p>
+          <MessageInput
+            onSend={async () => {}}
+            disabled
+            sending={false}
+          />
+        </div>
+      ) : permissions.canSend ? (
         <MessageInput
           onSend={(text, files) => sendMessage(text, files)}
           sending={sending}

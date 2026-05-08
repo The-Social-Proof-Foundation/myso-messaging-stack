@@ -102,6 +102,59 @@ export interface FetchMessagesResult {
 	hasNext: boolean;
 }
 
+/** One row from `GET /v1/groups/:group_id/reactions`. */
+export interface RelayerReactionEntry {
+	chainSeq: number;
+	emojiCode: number;
+	count: number;
+}
+
+export interface ListGroupReactionsParams {
+	signer: Signer;
+	groupId: string;
+	/** When set, only reactions for this `chain_seq` index. */
+	chainSeq?: number;
+}
+
+export interface PostGroupReactionParams {
+	signer: Signer;
+	groupId: string;
+	chainSeq: number;
+	emojiCode: number;
+	/** When false, decrements tally (never below zero on server). */
+	add?: boolean;
+}
+
+export interface ListGroupPinsParams {
+	signer: Signer;
+	groupId: string;
+}
+
+export interface SetGroupPinParams {
+	signer: Signer;
+	groupId: string;
+	chainSeq: number;
+	pin?: boolean;
+}
+
+/** `GET /v1/groups/:group_id/receipts` for the authenticated member. */
+export interface GroupReceiptState {
+	deliveredUpto?: number;
+	readUpto?: number;
+}
+
+export interface GetGroupReceiptsParams {
+	signer: Signer;
+	groupId: string;
+}
+
+export interface PostGroupReceiptsParams {
+	signer: Signer;
+	groupId: string;
+	deliveredUpto?: number;
+	readUpto?: number;
+}
+
 /**
  * Structured error from a transport implementation.
  * Uses HTTP-style status codes for error discrimination (e.g. 401, 404, 405).
@@ -127,6 +180,11 @@ export type RelayerConfig = RelayerHTTPConfig | RelayerCustomTransportConfig;
 export interface RelayerHTTPConfig extends HttpClientConfig {
 	relayerUrl: string;
 	pollingIntervalMs?: number;
+	/**
+	 * Prefix for REST paths, e.g. `/v1` so message CRUD uses `/v1/messages`.
+	 * Default `''` uses legacy `/messages`.
+	 */
+	apiPrefix?: string;
 	transport?: never;
 }
 

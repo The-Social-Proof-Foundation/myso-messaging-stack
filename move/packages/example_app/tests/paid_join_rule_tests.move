@@ -2,9 +2,9 @@
 module example_app::paid_join_rule_tests;
 
 use myso_groups::permissioned_group::{PermissionedGroup, ExtensionPermissionsAdmin};
-use myso_messaging_stack::messaging::{Self, Messaging, MessagingNamespace, MessagingReader};
-use myso_messaging_stack::group_manager::GroupManager;
-use myso_messaging_stack::version::{Self, Version};
+use myso_messaging::messaging::{Self, Messaging, MessagingNamespace, MessagingReader};
+use myso_messaging::group_manager::GroupManager;
+use myso_messaging::version::{Self, Version};
 use myso::vec_set;
 use example_app::paid_join_rule::{Self, PaidJoinRule};
 use std::string;
@@ -136,7 +136,7 @@ fun join_rule_not_member() {
     let mut namespace = ts.take_shared<MessagingNamespace>();
     let version = ts.take_shared<Version>();
     let group_manager = ts.take_shared<GroupManager>();
-    let (group, encryption_history) = messaging::create_group(
+    let (group, encryption_history, msg_log) = messaging::create_group(
         &version,
         &mut namespace,
         &group_manager,
@@ -149,6 +149,7 @@ fun join_rule_not_member() {
     let group_id = object::id(&group);
     transfer::public_share_object(group);
     transfer::public_share_object(encryption_history);
+    destroy(msg_log);
     ts::return_shared(version);
     ts::return_shared(group_manager);
     ts::return_shared(namespace);
@@ -184,7 +185,7 @@ fun join_rule_without_manager_permission() {
     let mut namespace = ts.take_shared<MessagingNamespace>();
     let version = ts.take_shared<Version>();
     let group_manager = ts.take_shared<GroupManager>();
-    let (group, encryption_history) = messaging::create_group(
+    let (group, encryption_history, msg_log) = messaging::create_group(
         &version,
         &mut namespace,
         &group_manager,
@@ -197,6 +198,7 @@ fun join_rule_without_manager_permission() {
     let group_id = object::id(&group);
     transfer::public_share_object(group);
     transfer::public_share_object(encryption_history);
+    destroy(msg_log);
     ts::return_shared(version);
     ts::return_shared(group_manager);
     ts::return_shared(namespace);
@@ -389,7 +391,7 @@ fun join_wrong_group() {
     let mut namespace = ts.take_shared<MessagingNamespace>();
     let version = ts.take_shared<Version>();
     let group_manager = ts.take_shared<GroupManager>();
-    let (group1, encryption_history1) = messaging::create_group(
+    let (group1, encryption_history1, msg_log1) = messaging::create_group(
         &version,
         &mut namespace,
         &group_manager,
@@ -402,8 +404,9 @@ fun join_wrong_group() {
     let group1_id = object::id(&group1);
     transfer::public_share_object(group1);
     transfer::public_share_object(encryption_history1);
+    destroy(msg_log1);
 
-    let (group2, encryption_history2) = messaging::create_group(
+    let (group2, encryption_history2, msg_log2) = messaging::create_group(
         &version,
         &mut namespace,
         &group_manager,
@@ -416,6 +419,7 @@ fun join_wrong_group() {
     let group2_id = object::id(&group2);
     transfer::public_share_object(group2);
     transfer::public_share_object(encryption_history2);
+    destroy(msg_log2);
     ts::return_shared(version);
     ts::return_shared(group_manager);
     ts::return_shared(namespace);

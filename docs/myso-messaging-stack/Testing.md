@@ -51,7 +51,7 @@ On-chain tests against a local MySo node. No relayer required. Uses testcontaine
 pnpm test:integration
 ```
 
-Requires Docker. The setup bootstraps a local MySo node, funds an admin account, and publishes both `myso_groups` and `myso_messaging_stack` packages.
+Requires Docker. The setup bootstraps a local MySo node, funds an admin account, and publishes both `myso_groups` and `myso_messaging` packages.
 
 Coverage includes:
 - Group creation, sharing, and configuration
@@ -128,8 +128,11 @@ See the [relayer README](../../relayer/README.md) for detailed test descriptions
 
 ## Move Contract Tests
 
+Use the **MySo CLI** for this repo (`myso move build`, `myso move test`), not `sui move`.
+
 Run from `move/packages/myso_messaging_stack/`:
 
 ```bash
+myso move build
 myso move test
 ```

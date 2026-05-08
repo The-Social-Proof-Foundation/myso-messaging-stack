@@ -2,11 +2,11 @@
 
 use async_trait::async_trait;
 use chrono::Utc;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::RwLock;
 use uuid::Uuid;
 
-use crate::models::{Attachment, Message, SyncStatus};
+use crate::models::{Attachment, Message, ReactionEntry, ReceiptStateResponse, SyncStatus};
 
 use super::adapter::{StorageAdapter, StorageError, StorageResult};
 
@@ -22,6 +22,13 @@ pub struct InMemoryStorage {
     group_orders: RwLock<HashMap<String, i64>>,
     /// All message nonces for O(1) duplicate detection
     nonces: RwLock<HashSet<Vec<u8>>>,
+    /// Reaction tallies keyed by `(group_id, chain_seq, emoji_code)` — client-chosen numeric thread index for off-chain features.
+    reaction_tallies: RwLock<HashMap<(String, i64, u32), i32>>,
+    /// Pinned on-chain sequence numbers per group.
+    pins_by_group: RwLock<HashMap<String, BTreeSet<i64>>>,
+    /// Delivery watermark per `(group_id, member_address) )`.
+    delivered_watermarks: RwLock<HashMap<(String, String), u64>>,
+    read_watermarks: RwLock<HashMap<(String, String), u64>>,
 }
 
 impl InMemoryStorage {
@@ -30,6 +37,10 @@ impl InMemoryStorage {
             messages: RwLock::new(HashMap::new()),
             group_orders: RwLock::new(HashMap::new()),
             nonces: RwLock::new(HashSet::new()),
+            reaction_tallies: RwLock::new(HashMap::new()),
+            pins_by_group: RwLock::new(HashMap::new()),
+            delivered_watermarks: RwLock::new(HashMap::new()),
+            read_watermarks: RwLock::new(HashMap::new()),
         }
     }
 
@@ -227,6 +238,139 @@ impl StorageAdapter for InMemoryStorage {
             .collect();
 
         Ok(filtered)
+    }
+
+    async fn replace_reaction_tally(
+        &self,
+        group_id: &str,
+        chain_seq: i64,
+        emoji_code: u32,
+        add: bool,
+    ) -> StorageResult<()> {
+        let mut tallies = self
+            .reaction_tallies
+            .write()
+            .map_err(|e| StorageError::OperationFailed(format!("Lock poisoned: {}", e)))?;
+        let key = (group_id.to_string(), chain_seq, emoji_code);
+        if add {
+            *tallies.entry(key).or_insert(0) += 1;
+        } else if let Some(v) = tallies.get_mut(&key) {
+            *v = (*v - 1).max(0);
+            if *v == 0 {
+                tallies.remove(&key);
+            }
+        }
+        Ok(())
+    }
+
+    async fn list_reactions(
+        &self,
+        group_id: &str,
+        chain_seq: Option<i64>,
+    ) -> StorageResult<Vec<ReactionEntry>> {
+        let tallies = self
+            .reaction_tallies
+            .read()
+            .map_err(|e| StorageError::OperationFailed(format!("Lock poisoned: {}", e)))?;
+        let mut out: Vec<ReactionEntry> = tallies
+            .iter()
+            .filter(|(k, c)| k.0 == group_id && **c > 0)
+            .filter(|(k, _)| chain_seq.map(|s| s == k.1).unwrap_or(true))
+            .map(|(k, c)| ReactionEntry {
+                chain_seq: k.1,
+                emoji_code: k.2,
+                count: *c,
+            })
+            .collect();
+        out.sort_by(|a, b| {
+            a.chain_seq
+                .cmp(&b.chain_seq)
+                .then(a.emoji_code.cmp(&b.emoji_code))
+        });
+        Ok(out)
+    }
+
+    async fn set_pin_for_seq(&self, group_id: &str, chain_seq: i64, on: bool) -> StorageResult<()> {
+        let mut pins = self
+            .pins_by_group
+            .write()
+            .map_err(|e| StorageError::OperationFailed(format!("Lock poisoned: {}", e)))?;
+        let set = pins.entry(group_id.to_string()).or_default();
+        if on {
+            set.insert(chain_seq);
+        } else {
+            set.remove(&chain_seq);
+        }
+        Ok(())
+    }
+
+    async fn list_pins(&self, group_id: &str) -> StorageResult<Vec<i64>> {
+        let pins = self
+            .pins_by_group
+            .read()
+            .map_err(|e| StorageError::OperationFailed(format!("Lock poisoned: {}", e)))?;
+        let mut v: Vec<i64> = pins
+            .get(group_id)
+            .map(|s| s.iter().copied().collect())
+            .unwrap_or_default();
+        v.sort_unstable();
+        Ok(v)
+    }
+
+    async fn update_receipt_delivered(
+        &self,
+        group_id: &str,
+        member: &str,
+        upto: u64,
+    ) -> StorageResult<()> {
+        let mut m = self
+            .delivered_watermarks
+            .write()
+            .map_err(|e| StorageError::OperationFailed(format!("Lock poisoned: {}", e)))?;
+        let key = (group_id.to_string(), member.to_string());
+        let cur = m.get(&key).copied().unwrap_or(0);
+        if upto > cur {
+            m.insert(key, upto);
+        }
+        Ok(())
+    }
+
+    async fn update_receipt_read(
+        &self,
+        group_id: &str,
+        member: &str,
+        upto: u64,
+    ) -> StorageResult<()> {
+        let mut m = self
+            .read_watermarks
+            .write()
+            .map_err(|e| StorageError::OperationFailed(format!("Lock poisoned: {}", e)))?;
+        let key = (group_id.to_string(), member.to_string());
+        let cur = m.get(&key).copied().unwrap_or(0);
+        if upto > cur {
+            m.insert(key, upto);
+        }
+        Ok(())
+    }
+
+    async fn get_receipt_state(
+        &self,
+        group_id: &str,
+        member: &str,
+    ) -> StorageResult<ReceiptStateResponse> {
+        let d = self
+            .delivered_watermarks
+            .read()
+            .map_err(|e| StorageError::OperationFailed(format!("Lock poisoned: {}", e)))?;
+        let r = self
+            .read_watermarks
+            .read()
+            .map_err(|e| StorageError::OperationFailed(format!("Lock poisoned: {}", e)))?;
+        let key = (group_id.to_string(), member.to_string());
+        Ok(ReceiptStateResponse {
+            delivered_upto: d.get(&key).copied(),
+            read_upto: r.get(&key).copied(),
+        })
     }
 }
 

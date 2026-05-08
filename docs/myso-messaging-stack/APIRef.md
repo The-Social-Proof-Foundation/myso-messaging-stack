@@ -6,7 +6,7 @@
 - [Messaging Methods](#messaging-methods)
 - [Group Management Methods](#group-management-methods)
 - [Metadata Methods](#metadata-methods)
-- [MySoNS Methods](#mysons-methods)
+- [Group handle registry](#group-handle-registry)
 - [Verification](#verification)
 - [View Methods](#view-methods-clientmessagingview)
 - [Derive Methods](#derive-methods-clientmessagingderive)
@@ -392,28 +392,30 @@ Remove a key-value pair from the group's metadata map.
 
 ---
 
-## MySoNS Methods
+## Group handle registry
 
-Manage MySoNS reverse lookup for human-readable group names. Require `MySoNsAdmin` permission.
+Register a canonical **group handle** in the on-chain `GroupHandleRegistry` (separate from profile usernames). Requires `GroupHandleAdmin` permission.
 
-### `setMySonsReverseLookup(options)`
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `signer` | `Signer` | Yes | Must have `MySoNsAdmin` permission |
-| `groupId` | `string` | Yes | PermissionedGroup object ID |
-| `domainName` | `string` | Yes | MySoNS domain name |
-
-**Returns:** `{ digest: string; effects: TransactionEffects }`
-
-### `unsetMySonsReverseLookup(options)`
+### `setGroupHandle(options)`
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `signer` | `Signer` | Yes | Must have `MySoNsAdmin` permission |
+| `signer` | `Signer` | Yes | Must have `GroupHandleAdmin` permission |
+| `groupId` | `string` | Yes | PermissionedGroup object ID |
+| `handle` | `string` | Yes | Canonical handle (lowercase ASCII `a-z`, `0-9`, `_`; rules match Move) |
+
+**Returns:** `{ digest: string; effects: TransactionEffects }`
+
+### `clearGroupHandle(options)`
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `signer` | `Signer` | Yes | Must have `GroupHandleAdmin` permission |
 | `groupId` | `string` | Yes | PermissionedGroup object ID |
 
 **Returns:** `{ digest: string; effects: TransactionEffects }`
+
+Read-only resolution: see **View Methods** → `lookupGroupByHandle` below.
 
 ---
 
@@ -485,6 +487,18 @@ Return multiple groups' on-chain metadata (name, uuid, creator, data map). Resul
 
 **Returns:** `Record<string, ParsedMetadata>` where each key is a group ID and value is `{ name: string; uuid: string; creator: string; data: Map<string, string> }`
 
+### `lookupGroupByHandle(options)`
+
+Resolve a registered handle to the `PermissionedGroup<Messaging>` object ID via dev-inspect (`myso_devInspectTransactionBlock`). No gas; requires a JSON-RPC MySo client (not GraphQL-only).
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `handle` | `string` | Candidate handle |
+| `groupHandleRegistryId` | `string` | Optional; defaults to `derive.groupHandleRegistryId()` |
+| `signal` | `AbortSignal` | Optional |
+
+**Returns:** `string | null` — group object ID, or `null` if unregistered / invalid per Move rules.
+
 ---
 
 ## Derive Methods (`client.messaging.derive`)
@@ -517,7 +531,13 @@ Derive the `GroupLeaver` singleton object ID. Used internally by `leave()`.
 
 ### `groupManagerId()`
 
-Derive the `GroupManager` singleton object ID. Used internally by metadata and MySoNS methods.
+Derive the `GroupManager` singleton object ID. Used internally by metadata methods.
+
+**Returns:** `string`
+
+### `groupHandleRegistryId()`
+
+Derive the `GroupHandleRegistry` singleton object ID from `MessagingNamespace`. Used internally by `setGroupHandle` / `clearGroupHandle`.
 
 **Returns:** `string`
 
@@ -547,7 +567,7 @@ const tx = client.messaging.tx.createAndShareGroup({
 const result = await keypair.signAndExecuteTransaction({ transaction: tx, client });
 ```
 
-Available: `createAndShareGroup`, `rotateEncryptionKey`, `removeMembersAndRotateKey`, `archiveGroup`, `leave`, `setGroupName`, `insertGroupData`, `removeGroupData`, `setMySonsReverseLookup`, `unsetMySonsReverseLookup`.
+Available: `createAndShareGroup`, `rotateEncryptionKey`, `removeMembersAndRotateKey`, `archiveGroup`, `leave`, `setGroupName`, `insertGroupData`, `removeGroupData`, `setGroupHandle`, `clearGroupHandle`.
 
 ---
 
@@ -583,7 +603,7 @@ BCS type definitions for parsing on-chain data and constructing event type strin
 
 **Permission types:**
 - `bcs.MessagingSender`, `bcs.MessagingReader`, `bcs.MessagingEditor`, `bcs.MessagingDeleter`
-- `bcs.EncryptionKeyRotator`, `bcs.MySoNsAdmin`, `bcs.MetadataAdmin`
+- `bcs.EncryptionKeyRotator`, `bcs.GroupHandleAdmin`, `bcs.MetadataAdmin`
 
 Each BCS type exposes a `.name` property with the fully-qualified Move type name, useful for GraphQL event queries and permission checks.
 
@@ -625,7 +645,7 @@ The messaging package defines these permission types, accessible via `messagingP
 | `MessagingEditor` | Edit own messages |
 | `MessagingDeleter` | Delete own messages |
 | `EncryptionKeyRotator` | Rotate the group's DEK |
-| `MySoNsAdmin` | Manage MySoNS reverse lookup |
+| `GroupHandleAdmin` | Register or clear the group handle in `GroupHandleRegistry` |
 | `MetadataAdmin` | Manage group metadata |
 
 Use `defaultMemberPermissionTypes(packageId)` for the four core messaging permissions (Sender, Reader, Editor, Deleter), the baseline for regular group members.

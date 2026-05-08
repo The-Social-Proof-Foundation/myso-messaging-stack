@@ -78,7 +78,7 @@ The alpha version stored messages on-chain as MySo objects, providing on-chain v
 - **Cross-device recovery**: encrypted message history restorable from File Storage without requiring centralized backups
 - **Custom MyData policies**: override default access control with application-specific logic (token-gated, subscription-based)
 - **UUID-based addressing**: deterministic on-chain object IDs from client-provided UUIDs, enabling single-transaction group creation
-- **MySoNS integration**: reverse lookup support for human-readable group names
+- **Group handles**: on-chain `GroupHandleRegistry` (separate from profile usernames) for canonical handle → group id
 - **Group metadata**: on-chain key-value store for application-specific group data
 
 ## Use Cases

@@ -119,4 +119,39 @@ describe('MySoMessagingStackView', () => {
 			expect(parsed.version).toBe(0);
 		});
 	});
+
+	describe('lookupGroupByHandle', () => {
+		it('returns null for unknown handle', async () => {
+			const random = `zzz_${crypto.randomUUID().replace(/-/g, '').slice(0, 16)}`;
+			const groupId = await client.messaging.view.lookupGroupByHandle({ handle: random });
+			expect(groupId).toBeNull();
+		});
+
+		it('returns group id after setGroupHandle', async () => {
+			const uuid = crypto.randomUUID();
+			await client.messaging.createAndShareGroup({
+				signer: adminKeypair,
+				uuid,
+				name: 'Handle lookup test',
+			});
+			const groupId = client.messaging.derive.groupId({ uuid });
+			const handle = `hl_${crypto.randomUUID().replace(/-/g, '').slice(0, 12)}`;
+
+			await client.messaging.setGroupHandle({
+				signer: adminKeypair,
+				groupId,
+				handle,
+			});
+
+			const resolved = await client.messaging.view.lookupGroupByHandle({ handle });
+			expect(resolved).toBe(groupId);
+
+			await client.messaging.clearGroupHandle({
+				signer: adminKeypair,
+				groupId,
+			});
+			const afterClear = await client.messaging.view.lookupGroupByHandle({ handle });
+			expect(afterClear).toBeNull();
+		});
+	});
 });

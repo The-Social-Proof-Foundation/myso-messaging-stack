@@ -9,8 +9,8 @@ importers:
   .:
     dependencies:
       '@socialproof/myso':
-        specifier: ^2.13.2
-        version: 2.13.2(typescript@5.9.3)
+        specifier: ^0.0.4
+        version: 0.0.4(typescript@5.9.3)
       zod:
         specifier: ^4.2.1
         version: 4.3.5
@@ -230,16 +230,6 @@ packages:
     peerDependencies:
       graphql: ^0.8.0 || ^0.9.0 || ^0.10.0 || ^0.11.0 || ^0.12.0 || ^0.13.0 || ^14.0.0 || ^15.0.0 || ^16.0.0 || ^17.0.0
 
-  '@socialproof/bcs@2.0.3':
-    resolution: {integrity: sha512-dwcaL4HNAsEGpU3hKUAsXgCZp9l6++e2A3THpzoYZ8e7bsy4XH1V0dXD5dIzgNcVZiZfb6ZnDMG+gdF6+1WOQA==}
-
-  '@socialproof/myso@2.13.2':
-    resolution: {integrity: sha512-M/H2CZJQyLyi0vvCJZ6rRzItJCsnh66v1OTI2VoBad2lau/BTuUKOEPjRpfU4YlVJcGR4h+RLCjDXV4ACuRKSA==}
-    engines: {node: '>=22'}
-
-  '@socialproof/utils@0.3.1':
-    resolution: {integrity: sha512-36KhxG284uhDdSnlkyNaS6fzKTX9FpP2WQWOwUKIRsqQFFIm2ooCf2TP1IuqrtMpkairwpiWkAS0eg7cpemVzg==}
-
   '@noble/curves@2.0.1':
     resolution: {integrity: sha512-vs1Az2OOTBiP4q0pwjW5aF0xp9n4MxVrmkFBxc6EKZc6ddYx5gaZiAsZoq0uRRXWbi3AT/sBqn05eRPtn1JCPw==}
     engines: {node: '>= 20.19.0'}
@@ -265,6 +255,16 @@ packages:
 
   '@scure/bip39@2.0.1':
     resolution: {integrity: sha512-PsxdFj/d2AcJcZDX1FXN3dDgitDDTmwf78rKZq1a6c1P1Nan1X/Sxc7667zU3U+AN60g7SxxP0YCVw2H/hBycg==}
+
+  '@socialproof/bcs@0.0.2':
+    resolution: {integrity: sha512-ahrcri+bKrOivsn6U1v5QT/3iEqi6Il0w9bQvgGJuo0eemBq/zRXXL7iOZBGwT+81bQhxwKKCORptZOxlh1oOA==}
+
+  '@socialproof/myso@0.0.4':
+    resolution: {integrity: sha512-3SbHrYfv9JdoFQuKAcdWXPUc7viVeMtkmm2/fnQiK7lvg0kmFKt00JEt1apDlG1T0ltPv/uMYUv3hL+cerRDyQ==}
+    engines: {node: '>=22'}
+
+  '@socialproof/utils@0.0.2':
+    resolution: {integrity: sha512-J4mDPEQxUIbzNu9WDvLW21VRlh9F7W5GQtbjA+rit2+fdm+r5TszJ4DmvjkjfRBfFWyAl3nIaVzQGcasRIjOiw==}
 
   '@types/node@25.0.9':
     resolution: {integrity: sha512-/rpCXHlCWeqClNBwUhDcusJxXYDjZTyE8v5oTO7WbL8eij2nKhUeU89/6xgjU7N4/Vh3He0BtyhJdQbDyhiXAw==}
@@ -466,37 +466,6 @@ snapshots:
     dependencies:
       graphql: 16.12.0
 
-  '@socialproof/bcs@2.0.3':
-    dependencies:
-      '@socialproof/utils': 0.3.1
-      '@scure/base': 2.0.0
-
-  '@socialproof/myso@2.13.2(typescript@5.9.3)':
-    dependencies:
-      '@graphql-typed-document-node/core': 3.2.0(graphql@16.12.0)
-      '@socialproof/bcs': 2.0.3
-      '@socialproof/utils': 0.3.1
-      '@noble/curves': 2.0.1
-      '@noble/hashes': 2.0.1
-      '@protobuf-ts/grpcweb-transport': 2.11.1
-      '@protobuf-ts/runtime': 2.11.1
-      '@protobuf-ts/runtime-rpc': 2.11.1
-      '@scure/base': 2.0.0
-      '@scure/bip32': 2.0.1
-      '@scure/bip39': 2.0.1
-      gql.tada: 1.9.0(graphql@16.12.0)(typescript@5.9.3)
-      graphql: 16.12.0
-      poseidon-lite: 0.2.1
-      valibot: 1.2.0(typescript@5.9.3)
-    transitivePeerDependencies:
-      - '@gql.tada/svelte-support'
-      - '@gql.tada/vue-support'
-      - typescript
-
-  '@socialproof/utils@0.3.1':
-    dependencies:
-      '@scure/base': 2.0.0
-
   '@noble/curves@2.0.1':
     dependencies:
       '@noble/hashes': 2.0.1
@@ -525,6 +494,37 @@ snapshots:
   '@scure/bip39@2.0.1':
     dependencies:
       '@noble/hashes': 2.0.1
+      '@scure/base': 2.0.0
+
+  '@socialproof/bcs@0.0.2':
+    dependencies:
+      '@scure/base': 2.0.0
+      '@socialproof/utils': 0.0.2
+
+  '@socialproof/myso@0.0.4(typescript@5.9.3)':
+    dependencies:
+      '@graphql-typed-document-node/core': 3.2.0(graphql@16.12.0)
+      '@noble/curves': 2.0.1
+      '@noble/hashes': 2.0.1
+      '@protobuf-ts/grpcweb-transport': 2.11.1
+      '@protobuf-ts/runtime': 2.11.1
+      '@protobuf-ts/runtime-rpc': 2.11.1
+      '@scure/base': 2.0.0
+      '@scure/bip32': 2.0.1
+      '@scure/bip39': 2.0.1
+      '@socialproof/bcs': 0.0.2
+      '@socialproof/utils': 0.0.2
+      gql.tada: 1.9.0(graphql@16.12.0)(typescript@5.9.3)
+      graphql: 16.12.0
+      poseidon-lite: 0.2.1
+      valibot: 1.2.0(typescript@5.9.3)
+    transitivePeerDependencies:
+      - '@gql.tada/svelte-support'
+      - '@gql.tada/vue-support'
+      - typescript
+
+  '@socialproof/utils@0.0.2':
+    dependencies:
       '@scure/base': 2.0.0
 
   '@types/node@25.0.9':

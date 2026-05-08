@@ -18,11 +18,11 @@ export {
 	defaultMemberPermissionTypes,
 	metadataKeyType,
 	METADATA_SCHEMA_VERSION,
+	GROUP_HANDLE_REGISTRY_DERIVATION_KEY,
+	GROUP_LEAVER_DERIVATION_KEY,
+	GROUP_MANAGER_DERIVATION_KEY,
 	TESTNET_MYSO_MESSAGING_STACK_PACKAGE_CONFIG,
 	MAINNET_MYSO_MESSAGING_STACK_PACKAGE_CONFIG,
-	TESTNET_MYSONS_CONFIG,
-	MAINNET_MYSONS_CONFIG,
-	type MySonsConfig,
 } from './constants.js';
 export * from './types.js';
 export * from './encryption/index.js';
@@ -50,7 +50,7 @@ export type {
 	ParsedEncryptionKeyRotator,
 	ParsedEncryptionHistoryTag,
 	ParsedPermissionedGroupTag,
-	ParsedMySoNsAdmin,
+	ParsedGroupHandleAdmin,
 	ParsedMetadataAdmin,
 	ParsedMetadata,
 	ParsedMetadataKey,

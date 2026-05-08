@@ -19,7 +19,7 @@
     "typescript": "^5.9.3"
   },
   "dependencies": {
-    "@socialproof/myso": "^2.13.2",
+    "@socialproof/myso": "^0.0.4",
     "zod": "^4.2.1"
   }
 }

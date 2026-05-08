@@ -7,13 +7,15 @@ import type { Transaction } from '@socialproof/myso/transactions';
 import type { MySoGroupsCall } from '@socialproof/myso-groups';
 
 import type { EnvelopeEncryption } from './encryption/envelope-encryption.js';
-import * as messaging from './contracts/myso_messaging_stack/messaging.js';
+import * as messaging from './contracts/myso_messaging/messaging.js';
+import * as messagingLog from './contracts/myso_messaging/messaging_message_log.js';
 import type { MySoMessagingStackDerive } from './derive.js';
 import { MySoMessagingStackClientError } from './error.js';
-import type { MySonsConfig } from './constants.js';
 import type {
 	ArchiveGroupCallOptions,
+	ClearGroupHandleCallOptions,
 	CreateGroupCallOptions,
+	GroupAndMessageLogRef,
 	InsertGroupDataCallOptions,
 	LeaveCallOptions,
 	MySoMessagingStackPackageConfig,
@@ -21,9 +23,8 @@ import type {
 	RemoveMembersAndRotateKeyCallOptions,
 	RotateEncryptionKeyCallOptions,
 	SetGroupNameCallOptions,
-	SetMySonsReverseLookupCallOptions,
+	SetGroupHandleCallOptions,
 	ShareGroupCallOptions,
-	UnsetMySonsReverseLookupCallOptions,
 } from './types.js';
 
 export interface MySoMessagingStackCallOptions {
@@ -35,8 +36,8 @@ export interface MySoMessagingStackCallOptions {
 	permissionedGroupTypeName: string;
 	/** Full Move type name for EncryptionHistory (resolved from messaging BCS). */
 	encryptionHistoryTypeName: string;
-	/** MySoNS config (optional — only needed for reverse lookup operations). */
-	mysonsConfig?: MySonsConfig;
+	/** Full Move type name for the shared `MessageLog` object (`...::message_log::MessageLog`). */
+	messageLogTypeName: string;
 	/** PermissionedGroups call layer (needed for removeMembersAndRotateKey). */
 	groupsCall: MySoGroupsCall;
 }
@@ -63,7 +64,7 @@ export class MySoMessagingStackCall {
 	#derive: MySoMessagingStackDerive;
 	#permissionedGroupTypeName: string;
 	#encryptionHistoryTypeName: string;
-	#mysonsConfig?: MySonsConfig;
+	#messageLogTypeName: string;
 	#groupsCall: MySoGroupsCall;
 
 	constructor(options: MySoMessagingStackCallOptions) {
@@ -72,7 +73,7 @@ export class MySoMessagingStackCall {
 		this.#derive = options.derive;
 		this.#permissionedGroupTypeName = options.permissionedGroupTypeName;
 		this.#encryptionHistoryTypeName = options.encryptionHistoryTypeName;
-		this.#mysonsConfig = options.mysonsConfig;
+		this.#messageLogTypeName = options.messageLogTypeName;
 		this.#groupsCall = options.groupsCall;
 	}
 
@@ -85,7 +86,7 @@ export class MySoMessagingStackCall {
 	 * Internally generates a UUID (if not provided), derives the group ID,
 	 * and generates a MyData-encrypted DEK for the group's initial encryption key.
 	 *
-	 * Returns a tuple of `(PermissionedGroup<Messaging>, EncryptionHistory)`.
+	 * Returns a tuple of `(PermissionedGroup<Messaging>, EncryptionHistory, MessageLog)`.
 	 */
 	createGroup(options: CreateGroupCallOptions) {
 		return async (tx: Transaction) => {
@@ -140,14 +141,14 @@ export class MySoMessagingStackCall {
 	}
 
 	/**
-	 * Shares a PermissionedGroup<Messaging> and its EncryptionHistory.
+	 * Shares a PermissionedGroup<Messaging>, its EncryptionHistory, and the group's MessageLog.
 	 * Meant to be composed with `createGroup` in the same transaction.
 	 *
 	 * @example
 	 * ```ts
 	 * const tx = new Transaction();
-	 * const [group, encryptionHistory] = tx.add(client.messaging.call.createGroup({ name: 'My Group' }));
-	 * tx.add(client.messaging.call.shareGroup({ group, encryptionHistory }));
+	 * const [group, encryptionHistory, messageLog] = tx.add(client.messaging.call.createGroup({ name: 'My Group' }));
+	 * tx.add(client.messaging.call.shareGroup({ group, encryptionHistory, messageLog }));
 	 * ```
 	 */
 	shareGroup(options: ShareGroupCallOptions) {
@@ -165,6 +166,13 @@ export class MySoMessagingStackCall {
 				function: 'public_share_object',
 				typeArguments: [this.#encryptionHistoryTypeName],
 				arguments: [options.encryptionHistory],
+			});
+			tx.moveCall({
+				package: '0x2',
+				module: 'transfer',
+				function: 'public_share_object',
+				typeArguments: [this.#messageLogTypeName],
+				arguments: [options.messageLog],
 			});
 		};
 	}
@@ -345,52 +353,165 @@ export class MySoMessagingStackCall {
 		};
 	}
 
-	// === MySoNS Reverse Lookup Functions ===
+	// === On-chain paid MYSO escrow (MessageLog shared object) ===
 
-	/**
-	 * Sets a MySoNS reverse lookup on a messaging group.
-	 * Requires `MySoNsAdmin` permission on the group.
-	 *
-	 * Internally derives the `GroupManager` singleton ID and uses the
-	 * configured MySoNS shared object.
-	 *
-	 * @throws {MySoMessagingStackClientError} if MySoNS config was not provided
-	 */
-	setMySonsReverseLookup(options: SetMySonsReverseLookupCallOptions) {
-		const mysonsConfig = this.#requireMySonsConfig();
+	#resolveGroupAndLog(ref: GroupAndMessageLogRef): { groupId: string; messageLogId: string } {
+		const resolved = this.#derive.resolveGroupRef(ref);
+		const messageLogId = ref.messageLogId ?? resolved.messageLogId;
+		if (!messageLogId) {
+			throw new MySoMessagingStackClientError(
+				'messageLogId is required when using explicit groupId/encryptionHistoryId without uuid.',
+			);
+		}
+		return { groupId: resolved.groupId, messageLogId };
+	}
+
+	#byteVec(v: Uint8Array | number[]): number[] {
+		return Array.from(v instanceof Uint8Array ? v : v);
+	}
+
+	sendPaidMessageDigest(
+		options: GroupAndMessageLogRef & {
+			recipient: string;
+			payment: string;
+			escrowAmount: number | bigint;
+			dedupeKey: Uint8Array | number[];
+			nonce: number | bigint;
+		},
+	) {
 		return (tx: Transaction) => {
-			const groupManagerId = this.#derive.groupManagerId();
+			const { groupId, messageLogId } = this.#resolveGroupAndLog(options);
 			return tx.add(
-				messaging.setMySonsReverseLookup({
+				messagingLog.sendPaidMessageDigest({
 					package: this.#packageConfig.latestPackageId,
 					arguments: {
-						groupManager: groupManagerId,
-						group: options.groupId,
-						mysons: mysonsConfig.mysonsObjectId,
-						domainName: options.domainName,
+						version: this.#packageConfig.versionId,
+						group: groupId,
+						log: messageLogId,
+						recipient: options.recipient,
+						payment: options.payment,
+						escrowAmount: options.escrowAmount,
+						dedupeKey: this.#byteVec(options.dedupeKey),
+						nonce: options.nonce,
 					},
 				}),
 			);
 		};
 	}
 
-	/**
-	 * Unsets a MySoNS reverse lookup on a messaging group.
-	 * Requires `MySoNsAdmin` permission on the group.
-	 *
-	 * @throws {MySoMessagingStackClientError} if MySoNS config was not provided
-	 */
-	unsetMySonsReverseLookup(options: UnsetMySonsReverseLookupCallOptions) {
-		const mysonsConfig = this.#requireMySonsConfig();
+	replyToPaidMessageClaimCoin(
+		options: GroupAndMessageLogRef & {
+			paidMsgSeq: number | bigint;
+			charCount: number;
+			dedupeKey: Uint8Array | number[];
+			nonce: number | bigint;
+		},
+	) {
 		return (tx: Transaction) => {
-			const groupManagerId = this.#derive.groupManagerId();
+			const { groupId, messageLogId } = this.#resolveGroupAndLog(options);
 			return tx.add(
-				messaging.unsetMySonsReverseLookup({
+				messagingLog.replyToPaidMessageClaimCoin({
 					package: this.#packageConfig.latestPackageId,
 					arguments: {
-						groupManager: groupManagerId,
+						version: this.#packageConfig.versionId,
+						group: groupId,
+						log: messageLogId,
+						paidMsgSeq: options.paidMsgSeq,
+						charCount: options.charCount,
+						dedupeKey: this.#byteVec(options.dedupeKey),
+						nonce: options.nonce,
+					},
+				}),
+			);
+		};
+	}
+
+	replyToPaidMessageClaimSettled(
+		options: GroupAndMessageLogRef & {
+			paidMsgSeq: number | bigint;
+			charCount: number;
+			dedupeKey: Uint8Array | number[];
+			nonce: number | bigint;
+			platformFeeRecipient: string;
+			ecosystemFeeRecipient: string;
+		},
+	) {
+		return (tx: Transaction) => {
+			const { groupId, messageLogId } = this.#resolveGroupAndLog(options);
+			return tx.add(
+				messagingLog.replyToPaidMessageClaimSettled({
+					package: this.#packageConfig.latestPackageId,
+					arguments: {
+						version: this.#packageConfig.versionId,
+						group: groupId,
+						log: messageLogId,
+						paidMsgSeq: options.paidMsgSeq,
+						charCount: options.charCount,
+						dedupeKey: this.#byteVec(options.dedupeKey),
+						nonce: options.nonce,
+						platformFeeRecipient: options.platformFeeRecipient,
+						ecosystemFeeRecipient: options.ecosystemFeeRecipient,
+					},
+				}),
+			);
+		};
+	}
+
+	refundPaidEscrow(
+		options: GroupAndMessageLogRef & {
+			paidMsgSeq: number | bigint;
+		},
+	) {
+		return (tx: Transaction) => {
+			const { groupId, messageLogId } = this.#resolveGroupAndLog(options);
+			return tx.add(
+				messagingLog.refundPaidEscrow({
+					package: this.#packageConfig.latestPackageId,
+					arguments: {
+						version: this.#packageConfig.versionId,
+						group: groupId,
+						log: messageLogId,
+						paidMsgSeq: options.paidMsgSeq,
+					},
+				}),
+			);
+		};
+	}
+
+	// === Group handle registry (separate from profile usernames) ===
+
+	/**
+	 * Registers or replaces the canonical handle for this group in [`GroupHandleRegistry`].
+	 * Requires `GroupHandleAdmin`.
+	 */
+	setGroupHandle(options: SetGroupHandleCallOptions) {
+		return (tx: Transaction) => {
+			const registryId = this.#derive.groupHandleRegistryId();
+			return tx.add(
+				messaging.setGroupHandle({
+					package: this.#packageConfig.latestPackageId,
+					arguments: {
+						version: this.#packageConfig.versionId,
+						groupHandleRegistry: registryId,
 						group: options.groupId,
-						mysons: mysonsConfig.mysonsObjectId,
+						handle: options.handle,
+					},
+				}),
+			);
+		};
+	}
+
+	/** Clears this group's handle from the registry. Requires `GroupHandleAdmin`. */
+	clearGroupHandle(options: ClearGroupHandleCallOptions) {
+		return (tx: Transaction) => {
+			const registryId = this.#derive.groupHandleRegistryId();
+			return tx.add(
+				messaging.clearGroupHandle({
+					package: this.#packageConfig.latestPackageId,
+					arguments: {
+						version: this.#packageConfig.versionId,
+						groupHandleRegistry: registryId,
+						group: options.groupId,
 					},
 				}),
 			);
@@ -398,17 +519,6 @@ export class MySoMessagingStackCall {
 	}
 
 	// === Private Helpers ===
-
-	#requireMySonsConfig(): MySonsConfig {
-		if (!this.#mysonsConfig) {
-			throw new MySoMessagingStackClientError(
-				'MySoNS config is required for reverse lookup operations. ' +
-					'Provide mysonsConfig when creating the messaging groups client, ' +
-					'or use a network (testnet/mainnet) that has a default config.',
-			);
-		}
-		return this.#mysonsConfig;
-	}
 
 	/**
 	 * Build a VecSet<address> from an array of address strings.
