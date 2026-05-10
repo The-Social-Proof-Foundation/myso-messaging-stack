@@ -1,8 +1,8 @@
-FROM rust:1.88-bookworm AS builder
+FROM rust:1.90-bookworm AS builder
 
 WORKDIR /app
 
-COPY Cargo.toml ./
+COPY Cargo.toml Cargo.lock ./
 COPY src ./src
 
 RUN cargo build --release
@@ -20,7 +20,8 @@ COPY --from=builder /app/target/release/messaging-relayer ./messaging-relayer
 
 EXPOSE 3000
 
+# Match runtime PORT; $$ becomes $ in HEALTHCHECK CMD so sh expands PORT at probe time.
 HEALTHCHECK --interval=10s --timeout=5s --retries=3 --start-period=5s \
-    CMD curl -f http://localhost:3000/health_check || exit 1
+    CMD curl -sf "http://127.0.0.1:$${PORT:-3000}/health_check" >/dev/null || exit 1
 
 CMD ["./messaging-relayer"]

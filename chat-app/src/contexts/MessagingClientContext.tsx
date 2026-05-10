@@ -42,7 +42,7 @@ const KNOWN_RPC_NETWORK =
     : 'testnet';
 const NETWORK = NETWORK_RAW;
 const RELAYER_URL =
-  import.meta.env.VITE_RELAYER_URL || 'http://localhost:3000';
+  import.meta.env.VITE_RELAYER_URL || 'http://localhost:3003';
 const GRAPHQL_URL =
   import.meta.env.VITE_MYSO_GRAPHQL_URL || '/api/graphql';
 
