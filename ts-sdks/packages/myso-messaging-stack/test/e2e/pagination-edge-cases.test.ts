@@ -20,10 +20,8 @@ describe('Pagination Edge Cases', () => {
 	const network = inject('network');
 	const relayerUrl = inject('relayerUrl');
 	const mysoClientUrl = inject('mysoClientUrl');
-	const publishedPackages = inject('publishedPackages');
+	const genesisConfig = inject('genesisConfig');
 	const adminAccount = inject('adminAccount');
-	const messagingNamespaceId = inject('messagingNamespaceId');
-	const messagingVersionId = inject('messagingVersionId');
 	const mydataServerConfigs = inject('mydataServerConfigs');
 
 	let group: GroupSetupResult;
@@ -41,10 +39,7 @@ describe('Pagination Edge Cases', () => {
 		group = await setupTestGroup({
 			mysoClientUrl,
 			network,
-			permissionedGroupsPackageId: publishedPackages['permissioned-groups'].packageId,
-			messagingPackageId: publishedPackages['messaging'].packageId,
-			namespaceId: messagingNamespaceId,
-			versionId: messagingVersionId,
+			packageConfig: genesisConfig,
 			adminKeypair,
 			relayerUrl,
 			mydata: mydataConfig,

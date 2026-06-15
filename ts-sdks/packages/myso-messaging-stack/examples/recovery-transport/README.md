@@ -1,13 +1,13 @@
 # Recovery Transport — Reference Implementation
 
 This is a **reference implementation** of a read-only recovery transport that uses the
-[Discovery Indexer](../../../../file-storage-discovery-indexer/) and the File Storage aggregator to recover
-messages when the message backend is unavailable.
+[Discovery Indexer](../../../../file-storage-discovery-indexer/) and the File Storage aggregator to
+recover messages when the message backend is unavailable.
 
 ## How It Works
 
-The reference relayer persists every message to File Storage as quilt patches (batched blobs). When the
-backend is unavailable, this transport recovers messages by:
+The reference relayer persists every message to File Storage as quilt patches (batched blobs). When
+the backend is unavailable, this transport recovers messages by:
 
 1. **Querying the Discovery Indexer** for patch metadata (which blobs contain a group's messages)
 2. **Filtering out DELETED patches** (no need to download deleted content)
@@ -40,9 +40,9 @@ The SDK provides everything you need to build a custom recovery transport with y
 | Export                                                           | Purpose                                                               |
 | ---------------------------------------------------------------- | --------------------------------------------------------------------- |
 | `RecoveryTransport`                                              | Interface your transport must implement (1 method: `recoverMessages`) |
-| `fromFileStorageMessage()`                                            | Converts File Storage wire format → `RelayerMessage`                        |
-| `FileStorageMessageWire`                                              | Type for the raw File Storage JSON shape                                    |
-| `FileStorageAttachmentWire`                                           | Type for the raw File Storage attachment shape                              |
+| `fromFileStorageMessage()`                                       | Converts File Storage wire format → `RelayerMessage`                  |
+| `FileStorageMessageWire`                                         | Type for the raw File Storage JSON shape                              |
+| `FileStorageAttachmentWire`                                      | Type for the raw File Storage attachment shape                        |
 | `RecoverMessagesParams`, `FetchMessagesResult`, `RelayerMessage` | Shared param/result types                                             |
 | `HttpClientConfig`                                               | Base config type (timeout, fetch override, onError)                   |
 | `DEFAULT_HTTP_TIMEOUT`                                           | Standard timeout (30s)                                                |
@@ -71,8 +71,8 @@ class MyRecoveryTransport implements RecoveryTransport {
 
 ### 2. Use `fromFileStorageMessage()` to convert File Storage blobs
 
-The reference relayer stores messages on File Storage as raw JSON (via `serde_json::to_vec()`). The SDK
-exports a converter that handles the format differences:
+The reference relayer stores messages on File Storage as raw JSON (via `serde_json::to_vec()`). The
+SDK exports a converter that handles the format differences:
 
 ```ts
 import { fromFileStorageMessage } from '@socialproof/myso-messaging-stack';

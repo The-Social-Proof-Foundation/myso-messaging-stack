@@ -4,14 +4,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Patches address_mapping.json to use MVR names for dependencies.
- *
- * The `myso move summary` command assigns placeholder addresses to dependencies.
- * This script replaces those addresses with MVR names, allowing the codegen
- * to generate type signatures that can be resolved at runtime via MySoClient's
- * MVR override system.
- *
- * Run this after `myso move summary` and before `myso-ts-codegen generate`.
+ * Patches address_mapping.json to use MVR names for genesis framework dependencies.
  */
 
 import fs from 'node:fs';
@@ -20,14 +13,13 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-// Maps Move package names to their MVR names
 const DEPENDENCY_MVR_MAPPINGS = {
-	myso_groups: '@local-pkg/myso-groups',
+	MySo: '0x2',
+	MySocialContracts: '0x50c1',
 };
 
-// Package summaries to patch (relative to this script)
 const PACKAGE_SUMMARIES = [
-	path.join(__dirname, '../../../../move/packages/myso_messaging_stack/package_summaries'),
+	path.join(__dirname, '../../../../move/packages/messaging/package_summaries'),
 ];
 
 function patchAddressMapping(summaryDir) {
@@ -41,10 +33,10 @@ function patchAddressMapping(summaryDir) {
 	const mappings = JSON.parse(fs.readFileSync(mappingPath, 'utf-8'));
 	let modified = false;
 
-	for (const [pkgName, mvrName] of Object.entries(DEPENDENCY_MVR_MAPPINGS)) {
-		if (mappings[pkgName] && mappings[pkgName] !== mvrName) {
-			console.log(`  ${pkgName}: ${mappings[pkgName]} -> ${mvrName}`);
-			mappings[pkgName] = mvrName;
+	for (const [pkgName, address] of Object.entries(DEPENDENCY_MVR_MAPPINGS)) {
+		if (mappings[pkgName] && mappings[pkgName] !== address) {
+			console.log(`  ${pkgName}: ${mappings[pkgName]} -> ${address}`);
+			mappings[pkgName] = address;
 			modified = true;
 		}
 	}
@@ -58,7 +50,7 @@ function patchAddressMapping(summaryDir) {
 }
 
 function main() {
-	console.log('Patching address mappings for MVR names...\n');
+	console.log('Patching address mappings for genesis deps...\n');
 
 	let patched = 0;
 	for (const summaryDir of PACKAGE_SUMMARIES) {

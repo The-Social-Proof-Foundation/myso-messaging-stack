@@ -187,6 +187,69 @@ The app follows a 3-layer architecture:
 
 `VITE_MYSOCIAL_AUTH_API_BASE_URL` must be the **MySocial API** host (see [@socialproof/mysocial-auth](https://www.npmjs.com/package/@socialproof/mysocial-auth)), **not** the salt URL (`VITE_MYSOCIAL_SALT_URL` is separate).
 
+### Create group fails with `Failed to fetch` / `ERR_CONNECTION_REFUSED` on port 2024 (localnet)
+
+Group creation encrypts the group DEK via **MyData key servers**. On localnet, `myso start --with-mydata` registers a key server at `http://127.0.0.1:2024`.
+
+1. Start localnet with MyData enabled, for example:
+   `myso start --with-faucet --force-regenesis --with-mydata --with-graphql`
+2. Copy the **parent** `KEY_SERVER_OBJECT_ID` from the startup log into `VITE_MYDATA_KEY_SERVER_OBJECT_IDS`.
+   Verify with `myso client object <id>` — the type must be `key_server::KeyServer`, **not** `dynamic_field::Field<…KeyServerV1>`.
+3. Set `VITE_MYDATA_THRESHOLD=1` (localnet bootstraps a single key server; the SDK default is 2).
+4. Confirm the key server is listening:
+   `curl "http://127.0.0.1:2024/v1/service?service_id=<KEY_SERVER_OBJECT_ID>"`
+5. If startup logs show `Duplicate key server object ID`, rebuild/restart `myso` from a version that merges social + messaging into one key-server config entry.
+
+### Create group fails after `--force-regenesis` (stale env, SDK version, or ghost objects)
+
+After regenesis, genesis singleton IDs and the MyData key server object ID change. Update `chat-app/.env` from the latest `myso start` output, **restart `pnpm dev`**, and fund your dev signer again (`myso client faucet <address>`).
+
+- **Console diagnostics (dev):** Create Group logs `[chat-app] mydata key servers`, `[chat-app] signer gas`, and `[chat-app] create-group tx inputs` before signing.
+- **`DeprecatedSDKVersionError`:** Rebuild `myso` so generated `key-server-config.yaml` sets `ts_sdk_version_requirement: '>=0.0.4'` (matches `@socialproof/mydata` in this app). Regenesis and restart localnet.
+- **Object `does not exist` with a derived-looking ID:** You likely set `VITE_MYDATA_KEY_SERVER_OBJECT_IDS` to the Field child instead of the parent `KeyServer` object.
+- **Stale gas coin from `listCoins`:** The app resolves gas via RPC-verified coins before sign; compare `myso client gas` with `[chat-app] signer gas` in the console.
+- **`InvalidKeyServerError`:** On-chain registered public key did not match the running key-server HTTP key. Rebuild `myso` from myso-core (uses `gen-seed` + `derive-key --index 0`), regenesis, and verify `PUBLIC_KEY` in `myso start` output equals `Client "local_key_server" uses public key` in key-server logs.
+
+### Localnet replication checklist (after myso-core MyData fix)
+
+1. **Build myso-mydata binaries** (sibling repo):
+   ```bash
+   cd ../myso-mydata && cargo build -p key-server -p mydata-cli
+   ```
+2. **Build myso** from myso-core:
+   ```bash
+   cd ../myso-core && cargo build -p myso
+   ```
+3. **Reset main indexer DB** (after prior regenesis):
+   ```bash
+   cargo run --bin myso-indexer-alt -- reset-database \
+     --database-url postgresql://postgres@localhost:5432/sui_indexer
+   ```
+4. **Start localnet** (from myso-core):
+   ```bash
+   cargo run --bin myso -- start --with-faucet --force-regenesis \
+     --with-indexer=postgres://postgres@localhost:5432/sui_indexer \
+     --with-social-indexer --with-mydata --with-graphql
+   ```
+5. **Verify key alignment** in startup logs — these must match:
+   - `PUBLIC_KEY=0x…` from `MyData key server (local):`
+   - `Client "local_key_server" uses public key: "0x…"` from key-server
+6. **Update chat-app `.env`:**
+   - `VITE_MYDATA_KEY_SERVER_OBJECT_IDS=<KEY_SERVER_OBJECT_ID from step 4>`
+   - `VITE_MYDATA_THRESHOLD=1`
+7. **Restart chat-app:** `pnpm dev` (Vite reads `.env` at server start).
+8. **Fund dev signer** (address shown in `[chat-app] signer gas` or app banner):
+   ```bash
+   myso client faucet --address <your-signer-address>
+   ```
+9. **Create Group** — console should show `[mydata] rpc ok (parent KeyServer)` and no `InvalidKeyServerError`.
+
+Optional HTTP check:
+```bash
+curl -H "Client-Sdk-Version: 0.0.4" \
+  "http://127.0.0.1:2024/v1/service?service_id=<KEY_SERVER_OBJECT_ID>"
+```
+
 ---
 
 ## 9. References

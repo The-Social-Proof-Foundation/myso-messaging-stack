@@ -3,5 +3,5 @@ name = "example_app"
 edition = "2024"
 
 [dependencies]
-myso_messaging = { local = "../myso_messaging_stack" }
+messaging = { local = "../messaging" }
 myso_groups = { git = "https://github.com/the-social-proof-foundation/myso-groups.git", subdir = "move/packages/myso_groups", rev = "main" }

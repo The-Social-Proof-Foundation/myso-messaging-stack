@@ -5,7 +5,9 @@
 export { MySoMessagingStackClient, mysoMessagingStack } from './client.js';
 export {
 	createMySoMessagingStackClient,
+	createMySoMessagingStackClientAsync,
 	type CreateMySoMessagingStackClientOptions,
+	type CreateMySoMessagingStackClientAsyncOptions,
 } from './factory.js';
 export { MySoMessagingStackCall } from './call.js';
 export { MySoMessagingStackTransactions } from './transactions.js';
@@ -21,9 +23,24 @@ export {
 	GROUP_HANDLE_REGISTRY_DERIVATION_KEY,
 	GROUP_LEAVER_DERIVATION_KEY,
 	GROUP_MANAGER_DERIVATION_KEY,
-	TESTNET_MYSO_MESSAGING_STACK_PACKAGE_CONFIG,
-	MAINNET_MYSO_MESSAGING_STACK_PACKAGE_CONFIG,
+	PAID_MESSAGING_REGISTRY_DERIVATION_KEY,
 } from './constants.js';
+export {
+	GENESIS_PACKAGE_IDS,
+	GENESIS_MYSO_GROUPS_PACKAGE_CONFIG,
+	GENESIS_MYSO_MESSAGING_STACK_PACKAGE_CONFIG,
+	GENESIS_MESSAGING_WITNESS_TYPE,
+	resolveGenesisMessagingConfig,
+	clearGenesisMessagingConfigCache,
+	type ResolvedGenesisMessagingConfig,
+	type ResolveGenesisMessagingConfigOptions,
+} from './genesis.js';
+export {
+	MessagingGatingClient,
+	createMessagingGatingClient,
+	type WalletMessagingPolicy,
+	type MessagingGatingClientOptions,
+} from './gating.js';
 export * from './types.js';
 export * from './encryption/index.js';
 export * from './relayer/index.js';

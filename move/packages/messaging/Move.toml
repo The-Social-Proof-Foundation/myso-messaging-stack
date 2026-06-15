@@ -1,0 +1,17 @@
+[package]
+name = "messaging"
+published-at = "0xe110"
+edition = "2024"
+
+[dependencies]
+MoveStdlib = { local = "/Users/brandonshaw/Offline-Projects/ProjectYZ/myso-core/crates/myso-framework/packages/move-stdlib" }
+MySo = { local = "/Users/brandonshaw/Offline-Projects/ProjectYZ/myso-core/crates/myso-framework/packages/myso-framework/myso-framework" }
+MySocialContracts = { local = "/Users/brandonshaw/Offline-Projects/ProjectYZ/myso-core/crates/myso-framework/packages/myso-social" }
+
+[addresses]
+myso = "0x2"
+messaging = "0xe110"
+social_contracts = "0x50c1"
+
+[environments]
+localnet = "d570d894"

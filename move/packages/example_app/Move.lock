@@ -5,31 +5,61 @@
 version = 4
 
 [pinned.testnet.MoveStdlib]
-source = { git = "https://github.com/the-social-proof-foundation/myso-core.git", subdir = "crates/myso-framework/packages/move-stdlib", rev = "04a59df697bba4c56738aee0e49820896c695b16" }
+source = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/move-stdlib", rev = "c2428b3aaf9c24270b609001e56d96cb10c76d28" }
+use_environment = "testnet"
+manifest_digest = "C4FE4C91DE74CBF223B2E380AE40F592177D21870DC2D7EB6227D2D694E05363"
+deps = {}
+
+[pinned.testnet.MoveStdlib_1]
+source = { local = "/Users/brandonshaw/Offline-Projects/ProjectYZ/myso-core/crates/myso-framework/packages/move-stdlib" }
 use_environment = "testnet"
 manifest_digest = "C4FE4C91DE74CBF223B2E380AE40F592177D21870DC2D7EB6227D2D694E05363"
 deps = {}
 
 [pinned.testnet.MySo]
-source = { git = "https://github.com/the-social-proof-foundation/myso-core.git", subdir = "crates/myso-framework/packages/myso-framework/myso-framework", rev = "04a59df697bba4c56738aee0e49820896c695b16" }
+source = { local = "/Users/brandonshaw/Offline-Projects/ProjectYZ/myso-core/crates/myso-framework/packages/myso-framework/myso-framework" }
 use_environment = "testnet"
 manifest_digest = "CE921C83ACA3D431025766C0E02CEBE2835D7E24D5CB2141D0C75D406950319A"
+deps = { MoveStdlib = "MoveStdlib_1" }
+
+[pinned.testnet.MySocialContracts]
+source = { local = "/Users/brandonshaw/Offline-Projects/ProjectYZ/myso-core/crates/myso-framework/packages/myso-social" }
+use_environment = "testnet"
+manifest_digest = "15EC3F39AC63B3F67BCCEEF5F50E642D4DC10C0FDE2C43FF8A5E78513100929C"
+deps = { MoveStdlib = "MoveStdlib_1", Orderbook = "Orderbook", mydata = "mydata", myso = "MySo" }
+
+[pinned.testnet.Orderbook]
+source = { local = "/Users/brandonshaw/Offline-Projects/ProjectYZ/myso-core/crates/myso-framework/packages/orderbook" }
+use_environment = "testnet"
+manifest_digest = "27294171A1C9B06AF4B6F762478492545D889E321F0BE2D48F413DE0EC0F4A6F"
+deps = { MoveStdlib = "MoveStdlib_1", MySo = "MySo" }
+
+[pinned.testnet.Sui]
+source = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/sui-framework", rev = "c2428b3aaf9c24270b609001e56d96cb10c76d28" }
+use_environment = "testnet"
+manifest_digest = "7AFB66695545775FBFBB2D3078ADFD084244D5002392E837FDE21D9EA1C6D01C"
 deps = { MoveStdlib = "MoveStdlib" }
 
 [pinned.testnet.example_app]
 source = { root = true }
 use_environment = "testnet"
-manifest_digest = "9B90CCA829FC90D88A2729F14982CE51187747436B6A9BE888C231E14B94A6E2"
-deps = { myso = "MySo", myso_groups = "myso_groups", myso_messaging = "myso_messaging", std = "MoveStdlib" }
+manifest_digest = "F2CFD661BD77B2EB4E9B952EFC483FE798AE5988DAD2C8FA4744372587A47256"
+deps = { messaging = "messaging", myso_groups = "myso_groups", std = "MoveStdlib", sui = "Sui" }
+
+[pinned.testnet.messaging]
+source = { local = "../messaging" }
+use_environment = "testnet"
+manifest_digest = "5AECFD108D62D066EE4019E85C385BF6B5C48A164302EB2B9A86D2BFD681D704"
+deps = { MoveStdlib = "MoveStdlib_1", MySo = "MySo", MySocialContracts = "MySocialContracts" }
+
+[pinned.testnet.mydata]
+source = { local = "/Users/brandonshaw/Offline-Projects/ProjectYZ/myso-core/crates/myso-framework/packages/mydata" }
+use_environment = "testnet"
+manifest_digest = "27294171A1C9B06AF4B6F762478492545D889E321F0BE2D48F413DE0EC0F4A6F"
+deps = { MoveStdlib = "MoveStdlib_1", MySo = "MySo" }
 
 [pinned.testnet.myso_groups]
 source = { git = "https://github.com/the-social-proof-foundation/myso-groups.git", subdir = "move/packages/myso_groups", rev = "5f566f64bc759f07ff5989c134e25f6a2813d6e5" }
 use_environment = "testnet"
-manifest_digest = "6DB51DC3D3906BFBAE6FC853FEF2805DA3C84238C96F00973765DE18D185AD78"
-deps = { myso = "MySo", std = "MoveStdlib" }
-
-[pinned.testnet.myso_messaging]
-source = { local = "../myso_messaging_stack" }
-use_environment = "testnet"
-manifest_digest = "1826B7E2323EBB78C24EB132660FE8809CC2E2A2555B8633C140635BD2A6A9A3"
-deps = { myso = "MySo", myso_groups = "myso_groups", std = "MoveStdlib" }
+manifest_digest = "5745706258F61D6CE210904B3E6AE87A73CE9D31A6F93BE4718C442529332A87"
+deps = { std = "MoveStdlib", sui = "Sui" }

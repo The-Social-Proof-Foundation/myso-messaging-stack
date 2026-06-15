@@ -4,28 +4,29 @@
 
 import { describe, it, expect, inject } from 'vitest';
 import { Ed25519Keypair } from '@socialproof/myso/keypairs/ed25519';
+import { GENESIS_PACKAGE_IDS } from '../../../src/genesis.js';
 
 import { createMySoClient, createMySoMessagingStackClient } from '../../helpers/index.js';
 
 describe('messaging-groups: Setup & Configuration', () => {
-	it('should have published both packages', () => {
-		const publishedPackages = inject('publishedPackages');
-		expect(publishedPackages['permissioned-groups']).toBeDefined();
-		expect(publishedPackages['permissioned-groups'].packageId).toBeDefined();
-		expect(publishedPackages['messaging']).toBeDefined();
-		expect(publishedPackages['messaging'].packageId).toBeDefined();
-	});
-
-	it('should have found the MessagingNamespace', () => {
+	it('should resolve genesis messaging namespace', () => {
 		const namespaceId = inject('messagingNamespaceId');
 		expect(namespaceId).toBeDefined();
 		expect(namespaceId).toMatch(/^0x[a-f0-9]+$/);
 	});
 
-	it('should have found the Version shared object', () => {
+	it('should resolve genesis Version shared object', () => {
 		const versionId = inject('messagingVersionId');
 		expect(versionId).toBeDefined();
 		expect(versionId).toMatch(/^0x[a-f0-9]+$/);
+	});
+
+	it('should expose genesis package IDs in resolved config', () => {
+		const genesisConfig = inject('genesisConfig');
+		expect(genesisConfig.messaging.originalPackageId).toBe(GENESIS_PACKAGE_IDS.messaging);
+		expect(genesisConfig.permissionedGroups.originalPackageId).toBe(GENESIS_PACKAGE_IDS.framework);
+		expect(genesisConfig.messaging.blockListRegistryId).toMatch(/^0x[a-f0-9]+$/);
+		expect(genesisConfig.messaging.socialGraphId).toMatch(/^0x[a-f0-9]+$/);
 	});
 
 	it('should have a working myso client', async () => {
@@ -42,17 +43,12 @@ describe('messaging-groups: Setup & Configuration', () => {
 
 	it('should extend MySoClient with PermissionedGroups, MyData, and MessagingGroups', () => {
 		const mysoClientUrl = inject('mysoClientUrl');
-		const publishedPackages = inject('publishedPackages');
-		const namespaceId = inject('messagingNamespaceId');
-		const versionId = inject('messagingVersionId');
+		const genesisConfig = inject('genesisConfig');
 
 		const client = createMySoMessagingStackClient({
 			url: mysoClientUrl,
 			network: 'localnet',
-			permissionedGroupsPackageId: publishedPackages['permissioned-groups'].packageId,
-			messagingPackageId: publishedPackages['messaging'].packageId,
-			namespaceId: namespaceId!,
-			versionId: versionId!,
+			packageConfig: genesisConfig,
 			keypair: new Ed25519Keypair(),
 		});
 
@@ -72,18 +68,13 @@ describe('messaging-groups: Setup & Configuration', () => {
 
 	it('should have BCS types with correct package-scoped names', () => {
 		const mysoClientUrl = inject('mysoClientUrl');
-		const publishedPackages = inject('publishedPackages');
-		const namespaceId = inject('messagingNamespaceId');
-		const versionId = inject('messagingVersionId');
-		const messagingPackageId = publishedPackages['messaging'].packageId;
+		const genesisConfig = inject('genesisConfig');
+		const messagingPackageId = genesisConfig.messaging.originalPackageId;
 
 		const client = createMySoMessagingStackClient({
 			url: mysoClientUrl,
 			network: 'localnet',
-			permissionedGroupsPackageId: publishedPackages['permissioned-groups'].packageId,
-			messagingPackageId,
-			namespaceId: namespaceId!,
-			versionId: versionId!,
+			packageConfig: genesisConfig,
 			keypair: new Ed25519Keypair(),
 		});
 

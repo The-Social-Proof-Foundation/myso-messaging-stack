@@ -543,10 +543,7 @@ describe('HTTPRelayerTransport', () => {
 			const keypair = Ed25519Keypair.generate();
 			const groupId = '0x' + 'ab'.repeat(32);
 			mockFetch.mockResolvedValueOnce(
-				new Response(
-					JSON.stringify([{ chain_seq: 1, emoji_code: 42, count: 3 }]),
-					{ status: 200 },
-				),
+				new Response(JSON.stringify([{ chain_seq: 1, emoji_code: 42, count: 3 }]), { status: 200 }),
 			);
 
 			const rows = await transport.listGroupReactions({
@@ -557,9 +554,7 @@ describe('HTTPRelayerTransport', () => {
 
 			expect(rows).toEqual([{ chainSeq: 1, emojiCode: 42, count: 3 }]);
 			const url = mockFetch.mock.calls[0][0] as string;
-			expect(url).toBe(
-				`${MOCK_RELAYER_URL}/v1/groups/${groupId}/reactions?chain_seq=1`,
-			);
+			expect(url).toBe(`${MOCK_RELAYER_URL}/v1/groups/${groupId}/reactions?chain_seq=1`);
 		});
 
 		it('POST /v1/groups/:id/reactions with body auth', async () => {

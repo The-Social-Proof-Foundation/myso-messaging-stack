@@ -32,10 +32,8 @@ describe('Permission-Specific Operations', () => {
 	const network = inject('network');
 	const relayerUrl = inject('relayerUrl');
 	const mysoClientUrl = inject('mysoClientUrl');
-	const publishedPackages = inject('publishedPackages');
+	const genesisConfig = inject('genesisConfig');
 	const adminAccount = inject('adminAccount');
-	const messagingNamespaceId = inject('messagingNamespaceId');
-	const messagingVersionId = inject('messagingVersionId');
 	const mydataServerConfigs = inject('mydataServerConfigs');
 
 	const SYNC_WAIT_TIME = 15_000;
@@ -55,10 +53,7 @@ describe('Permission-Specific Operations', () => {
 		return createMySoMessagingStackClient({
 			url: mysoClientUrl,
 			network,
-			permissionedGroupsPackageId: publishedPackages['permissioned-groups'].packageId,
-			messagingPackageId: publishedPackages['messaging'].packageId,
-			namespaceId: messagingNamespaceId,
-			versionId: messagingVersionId,
+			packageConfig: genesisConfig,
 			keypair,
 			relayer: { relayerUrl },
 			mydata:
@@ -82,7 +77,7 @@ describe('Permission-Specific Operations', () => {
 		});
 		groupId = adminClient.messaging.derive.groupId({ uuid });
 
-		const messagingPerms = messagingPermissionTypes(publishedPackages['messaging'].packageId);
+		const messagingPerms = messagingPermissionTypes(genesisConfig.messaging.originalPackageId);
 
 		// SenderOnly
 		const senderAccount = await createFundedAccount(funding);
@@ -218,7 +213,7 @@ describe('Permission-Specific Operations', () => {
 		});
 
 		it('user can update their own message if they have MessagingEditor', async () => {
-			const messagingPerms = messagingPermissionTypes(publishedPackages['messaging'].packageId);
+			const messagingPerms = messagingPermissionTypes(genesisConfig.messaging.originalPackageId);
 
 			// Temporarily grant Sender to EditorOnly
 			await admin.client.groups.grantPermissions({
@@ -274,7 +269,7 @@ describe('Permission-Specific Operations', () => {
 		});
 
 		it('message owner with Deleter permission can delete their own message', async () => {
-			const messagingPerms = messagingPermissionTypes(publishedPackages['messaging'].packageId);
+			const messagingPerms = messagingPermissionTypes(genesisConfig.messaging.originalPackageId);
 
 			// Grant Deleter to senderOnly (already has Sender)
 			await admin.client.groups.grantPermissions({
@@ -345,7 +340,7 @@ describe('Permission-Specific Operations', () => {
 		let combinedUser: GroupUser;
 
 		beforeAll(async () => {
-			const messagingPerms = messagingPermissionTypes(publishedPackages['messaging'].packageId);
+			const messagingPerms = messagingPermissionTypes(genesisConfig.messaging.originalPackageId);
 
 			const account = await createFundedAccount(funding);
 			combinedUser = { keypair: account.keypair, client: buildClient(account.keypair) };

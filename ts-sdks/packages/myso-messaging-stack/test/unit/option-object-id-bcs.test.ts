@@ -41,6 +41,8 @@ describe('Option<object::ID> BCS (lookupGroupByHandle return)', () => {
 	});
 
 	it('rejects bad tag', () => {
-		expect(() => parseOptionObjectIdBcs(new Uint8Array([2, 0]))).toThrow(MySoMessagingStackClientError);
+		expect(() => parseOptionObjectIdBcs(new Uint8Array([2, 0]))).toThrow(
+			MySoMessagingStackClientError,
+		);
 	});
 });

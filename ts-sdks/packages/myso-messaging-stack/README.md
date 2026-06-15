@@ -1,11 +1,13 @@
 # @socialproof/myso-messaging-stack
 
-> [!NOTE]
-> The MySocial Messaging Stack tooling is currently in Beta and available on both Testnet and Mainnet.
+> [!NOTE] The MySocial Messaging Stack tooling is currently in Beta and available on both Testnet
+> and Mainnet.
 >
-> The tooling is production-capable for many use cases, but developers should evaluate their own security, reliability, and operational requirements before deploying to production.
+> The tooling is production-capable for many use cases, but developers should evaluate their own
+> security, reliability, and operational requirements before deploying to production.
 >
-> For questions, feedback, or production discussions, reach out to the team on [MySo Discord](https://discord.com/channels/916379725201563759/1417696942074630194).
+> For questions, feedback, or production discussions, reach out to the team on
+> [MySo Discord](https://discord.com/channels/916379725201563759/1417696942074630194).
 
 TypeScript SDK for encrypted group messaging on MySocial, powered by
 [MyData](https://github.com/the-social-proof-foundation/myso-mydata) for end-to-end encryption.
@@ -27,9 +29,9 @@ We provide two **reference implementations**:
 
 - **`HTTPRelayerTransport`** — Built-in transport that works with the
   [reference relayer](../../relayer/). Ships with the SDK.
-- **`FileStorageRecoveryTransport`** (example) — Read-only recovery adapter that fetches messages from
-  File Storage storage via the [Discovery Indexer](../../file-storage-discovery-indexer/). Implements
-  `RecoveryTransport`. Not part of the SDK — see
+- **`FileStorageRecoveryTransport`** (example) — Read-only recovery adapter that fetches messages
+  from File Storage storage via the [Discovery Indexer](../../file-storage-discovery-indexer/).
+  Implements `RecoveryTransport`. Not part of the SDK — see
   [`examples/recovery-transport/`](./examples/recovery-transport/) for a reference implementation.
 
 Neither is required — you can build your own transport from scratch.
@@ -94,14 +96,15 @@ const client = baseClient.$extend(
 
 ## Recovery from File Storage
 
-If your message backend persists messages to [File Storage](https://docs.mysocial.network/mysocial/file-storage/overview) (as the reference
+If your message backend persists messages to
+[File Storage](https://docs.mysocial.network/mysocial/file-storage/overview) (as the reference
 relayer does), the SDK provides utilities to read them back directly — useful when the backend is
 unavailable and you need to restore conversation history.
 
 ### SDK Utilities
 
-- **`fromFileStorageMessage(wire)`** — Converts a raw File Storage message (the `serde_json` wire format used
-  by the reference relayer) to the SDK's `RelayerMessage` format. Handles `number[]` to
+- **`fromFileStorageMessage(wire)`** — Converts a raw File Storage message (the `serde_json` wire
+  format used by the reference relayer) to the SDK's `RelayerMessage` format. Handles `number[]` to
   `Uint8Array`, ISO 8601 to unix timestamps, field name mapping, and deriving
   `isEdited`/`isDeleted`.
 
@@ -159,12 +162,12 @@ implementation using the [Discovery Indexer](../../file-storage-discovery-indexe
 
 ### Recovery Exports
 
-| Export                 | Description                                                             |
-| ---------------------- | ----------------------------------------------------------------------- |
-| `RecoveryTransport`    | Read-only interface for recovery adapters (1 method: `recoverMessages`) |
-| `fromFileStorageMessage()`  | Convert File Storage wire format to `RelayerMessage`                          |
-| `FileStorageMessageWire`    | Type for the raw File Storage JSON shape                                      |
-| `FileStorageAttachmentWire` | Type for the raw File Storage attachment shape                                |
+| Export                      | Description                                                             |
+| --------------------------- | ----------------------------------------------------------------------- |
+| `RecoveryTransport`         | Read-only interface for recovery adapters (1 method: `recoverMessages`) |
+| `fromFileStorageMessage()`  | Convert File Storage wire format to `RelayerMessage`                    |
+| `FileStorageMessageWire`    | Type for the raw File Storage JSON shape                                |
+| `FileStorageAttachmentWire` | Type for the raw File Storage attachment shape                          |
 
 ## License
 

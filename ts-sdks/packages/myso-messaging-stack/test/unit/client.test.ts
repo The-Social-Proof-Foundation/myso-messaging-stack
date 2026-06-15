@@ -18,11 +18,15 @@ import { createMockMyDataClient } from './helpers/mock-mydata-client.js';
 const MOCK_PACKAGE_ID = '0x' + 'ab'.repeat(32);
 const MOCK_NAMESPACE_ID = '0x' + '99'.repeat(32);
 const MOCK_VERSION_ID = '0x' + '11'.repeat(32);
+const MOCK_BLOCK_LIST_ID = '0x' + '22'.repeat(32);
+const MOCK_SOCIAL_GRAPH_ID = '0x' + '33'.repeat(32);
 const MOCK_PACKAGE_CONFIG = {
 	originalPackageId: MOCK_PACKAGE_ID,
 	latestPackageId: MOCK_PACKAGE_ID,
 	namespaceId: MOCK_NAMESPACE_ID,
 	versionId: MOCK_VERSION_ID,
+	blockListRegistryId: MOCK_BLOCK_LIST_ID,
+	socialGraphId: MOCK_SOCIAL_GRAPH_ID,
 };
 const MOCK_PERMISSIONED_GROUPS_PACKAGE_ID = '0x' + 'ff'.repeat(32);
 const MOCK_WITNESS_TYPE = `${MOCK_PERMISSIONED_GROUPS_PACKAGE_ID}::messaging::Messaging`;
@@ -121,7 +125,7 @@ describe('MySoMessagingStackClient', () => {
 						encryption: createMockEncryptionOptions(),
 						relayer: MOCK_RELAYER_CONFIG,
 					}),
-			).toThrow('Unsupported network');
+			).toThrow('packageConfig is required');
 		});
 
 		it('should accept custom packageConfig for localnet', () => {

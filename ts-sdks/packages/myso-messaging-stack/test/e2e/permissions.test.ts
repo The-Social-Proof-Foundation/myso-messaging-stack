@@ -29,10 +29,8 @@ describe('Permission Synchronization', () => {
 	const network = inject('network');
 	const relayerUrl = inject('relayerUrl');
 	const mysoClientUrl = inject('mysoClientUrl');
-	const publishedPackages = inject('publishedPackages');
+	const genesisConfig = inject('genesisConfig');
 	const adminAccount = inject('adminAccount');
-	const messagingNamespaceId = inject('messagingNamespaceId');
-	const messagingVersionId = inject('messagingVersionId');
 	const mydataServerConfigs = inject('mydataServerConfigs');
 
 	const SYNC_WAIT_TIME = 15_000;
@@ -48,10 +46,7 @@ describe('Permission Synchronization', () => {
 		return createMySoMessagingStackClient({
 			url: mysoClientUrl,
 			network,
-			permissionedGroupsPackageId: publishedPackages['permissioned-groups'].packageId,
-			messagingPackageId: publishedPackages['messaging'].packageId,
-			namespaceId: messagingNamespaceId,
-			versionId: messagingVersionId,
+			packageConfig: genesisConfig,
 			keypair,
 			relayer: { relayerUrl },
 			mydata:
@@ -99,7 +94,7 @@ describe('Permission Synchronization', () => {
 		}, 180_000);
 
 		it('should recognize permissions after on-chain grant', async () => {
-			const messagingPerms = messagingPermissionTypes(publishedPackages['messaging'].packageId);
+			const messagingPerms = messagingPermissionTypes(genesisConfig.messaging.originalPackageId);
 
 			// MessagingReader is required for DEK decryption (mydata_approve_reader)
 			await admin.client.groups.grantPermissions({
@@ -123,7 +118,7 @@ describe('Permission Synchronization', () => {
 		}, 60_000);
 
 		it('should grant multiple permissions at once', async () => {
-			const messagingPerms = messagingPermissionTypes(publishedPackages['messaging'].packageId);
+			const messagingPerms = messagingPermissionTypes(genesisConfig.messaging.originalPackageId);
 
 			await admin.client.groups.grantPermissions({
 				signer: admin.keypair,
@@ -157,7 +152,7 @@ describe('Permission Synchronization', () => {
 				text: 'Before revoke',
 			});
 
-			const messagingPerms = messagingPermissionTypes(publishedPackages['messaging'].packageId);
+			const messagingPerms = messagingPermissionTypes(genesisConfig.messaging.originalPackageId);
 
 			await admin.client.groups.revokePermissions({
 				signer: admin.keypair,

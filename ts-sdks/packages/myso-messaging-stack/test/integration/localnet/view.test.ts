@@ -20,9 +20,7 @@ describe('MySoMessagingStackView', () => {
 
 	beforeAll(() => {
 		const mysoClientUrl = inject('mysoClientUrl');
-		const publishedPackages = inject('publishedPackages');
-		const namespaceId = inject('messagingNamespaceId');
-		const versionId = inject('messagingVersionId');
+		const genesisConfig = inject('genesisConfig');
 		const adminAccount = inject('adminAccount');
 
 		adminKeypair = Ed25519Keypair.fromSecretKey(adminAccount.secretKey);
@@ -30,10 +28,7 @@ describe('MySoMessagingStackView', () => {
 		client = createMySoMessagingStackClient({
 			url: mysoClientUrl,
 			network: 'localnet',
-			permissionedGroupsPackageId: publishedPackages['permissioned-groups'].packageId,
-			messagingPackageId: publishedPackages['messaging'].packageId,
-			namespaceId: namespaceId!,
-			versionId: versionId!,
+			packageConfig: genesisConfig,
 			keypair: adminKeypair,
 		});
 	});

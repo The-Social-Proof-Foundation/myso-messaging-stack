@@ -9,7 +9,10 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import { inject } from 'vitest';
 import { Ed25519Keypair } from '@socialproof/myso/keypairs/ed25519';
-import { RelayerTransportError, EncryptionAccessDeniedError } from '@socialproof/myso-messaging-stack';
+import {
+	RelayerTransportError,
+	EncryptionAccessDeniedError,
+} from '@socialproof/myso-messaging-stack';
 
 import { setupTestGroup, type GroupSetupResult } from './helpers/setup-group.js';
 
@@ -20,10 +23,8 @@ describe('Message CRUD Operations', () => {
 	const network = inject('network');
 	const relayerUrl = inject('relayerUrl');
 	const mysoClientUrl = inject('mysoClientUrl');
-	const publishedPackages = inject('publishedPackages');
+	const genesisConfig = inject('genesisConfig');
 	const adminAccount = inject('adminAccount');
-	const messagingNamespaceId = inject('messagingNamespaceId');
-	const messagingVersionId = inject('messagingVersionId');
 	const mydataServerConfigs = inject('mydataServerConfigs');
 
 	beforeAll(async () => {
@@ -32,10 +33,7 @@ describe('Message CRUD Operations', () => {
 		group = await setupTestGroup({
 			mysoClientUrl,
 			network,
-			permissionedGroupsPackageId: publishedPackages['permissioned-groups'].packageId,
-			messagingPackageId: publishedPackages['messaging'].packageId,
-			namespaceId: messagingNamespaceId,
-			versionId: messagingVersionId,
+			packageConfig: genesisConfig,
 			adminKeypair,
 			relayerUrl,
 			mydata:

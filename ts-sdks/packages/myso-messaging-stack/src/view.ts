@@ -4,7 +4,10 @@
 
 import { bcs } from '@socialproof/myso/bcs';
 import type { ClientWithCoreApi } from '@socialproof/myso/client';
-import type { DevInspectResults, DevInspectTransactionBlockParams } from '@socialproof/myso/jsonRpc';
+import type {
+	DevInspectResults,
+	DevInspectTransactionBlockParams,
+} from '@socialproof/myso/jsonRpc';
 import { Transaction } from '@socialproof/myso/transactions';
 import { deriveDynamicFieldID, normalizeMySoAddress, toHex } from '@socialproof/myso/utils';
 
@@ -197,7 +200,9 @@ export class MySoMessagingStackView {
 	async lookupGroupByHandle(options: LookupGroupByHandleViewOptions): Promise<string | null> {
 		const registryId = options.groupHandleRegistryId ?? this.#derive.groupHandleRegistryId();
 		const root = this.#client as ClientWithCoreApi & {
-			devInspectTransactionBlock?: (input: DevInspectTransactionBlockParams) => Promise<DevInspectResults>;
+			devInspectTransactionBlock?: (
+				input: DevInspectTransactionBlockParams,
+			) => Promise<DevInspectResults>;
 		};
 		if (typeof root.devInspectTransactionBlock !== 'function') {
 			throw new MySoMessagingStackClientError(
@@ -221,7 +226,9 @@ export class MySoMessagingStackView {
 		}
 		const ret = inspected.results?.[0]?.returnValues?.[0];
 		if (!ret) {
-			throw new MySoMessagingStackClientError('lookupGroupByHandle: no return value from dev-inspect');
+			throw new MySoMessagingStackClientError(
+				'lookupGroupByHandle: no return value from dev-inspect',
+			);
 		}
 		const [byteList] = ret;
 		return parseOptionObjectIdBcs(new Uint8Array(byteList));

@@ -43,6 +43,8 @@ function createEnvelopeEncryption(currentKeyVersion = 0n) {
 			latestPackageId: MOCK_PACKAGE_ID,
 			namespaceId: MOCK_NAMESPACE_ID,
 			versionId: MOCK_VERSION_ID,
+			blockListRegistryId: '0x' + '22'.repeat(32),
+			socialGraphId: '0x' + '33'.repeat(32),
 		},
 	});
 	return new EnvelopeEncryption({

@@ -6,7 +6,7 @@ import { bcs } from '@socialproof/myso/bcs';
 import type { Transaction, TransactionResult } from '@socialproof/myso/transactions';
 import { isValidMySoAddress } from '@socialproof/myso/utils';
 
-import { mydataApproveReader } from '../contracts/myso_messaging/mydata_policies.js';
+import { mydataApproveReader } from '../contracts/messaging/mydata_policies.js';
 
 /**
  * Defines how MyData decryption access control works for a messaging group.

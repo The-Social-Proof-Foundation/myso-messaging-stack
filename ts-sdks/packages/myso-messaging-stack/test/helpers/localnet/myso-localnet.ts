@@ -73,9 +73,12 @@ export async function startMySoLocalnet(config: MySoLocalnetConfig): Promise<MyS
 				network.getName(),
 			)}:5432/myso_indexer_v2`,
 		])
-		.withCopyDirectoriesToContainer(copyDirectives)
 		.withNetwork(network)
 		.withExposedPorts(9000, 9123, 9124, 9125);
+
+	if (copyDirectives.length > 0) {
+		localnetBuilder.withCopyDirectoriesToContainer(copyDirectives);
+	}
 
 	if (config.verbose) {
 		localnetBuilder.withLogConsumer((stream) => {

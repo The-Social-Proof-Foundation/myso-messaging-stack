@@ -22,36 +22,25 @@ describe('metadata', () => {
 
 	let clientConfig: {
 		mysoClientUrl: string;
-		permissionedGroupsPackageId: string;
-		messagingPackageId: string;
-		namespaceId: string;
-		versionId: string;
+		packageConfig: ReturnType<typeof inject<'genesisConfig'>>;
 	};
 
 	beforeAll(() => {
 		const mysoClientUrl = inject('mysoClientUrl');
-		const publishedPackages = inject('publishedPackages');
-		const namespaceId = inject('messagingNamespaceId');
-		const versionId = inject('messagingVersionId');
+		const genesisConfig = inject('genesisConfig');
 		const adminAccount = inject('adminAccount');
 		const faucetPort = inject('faucetPort');
 
-		messagingPackageId = publishedPackages['messaging'].packageId;
+		messagingPackageId = genesisConfig.messaging.originalPackageId;
 		faucetUrl = `http://localhost:${faucetPort}`;
 		adminKeypair = Ed25519Keypair.fromSecretKey(adminAccount.secretKey);
 
-		clientConfig = {
-			mysoClientUrl,
-			permissionedGroupsPackageId: publishedPackages['permissioned-groups'].packageId,
-			messagingPackageId,
-			namespaceId: namespaceId!,
-			versionId: versionId!,
-		};
+		clientConfig = { mysoClientUrl, packageConfig: genesisConfig };
 
 		adminClient = createMySoMessagingStackClient({
-			url: mysoClientUrl,
+			url: clientConfig.mysoClientUrl,
 			network: 'localnet',
-			...clientConfig,
+			packageConfig: clientConfig.packageConfig,
 			keypair: adminKeypair,
 		});
 	});

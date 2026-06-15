@@ -1,9 +1,0 @@
-[package]
-name = "myso_messaging"
-edition = "2024"
-
-[dependencies]
-myso_groups = { git = "https://github.com/the-social-proof-foundation/myso-groups.git", subdir = "move/packages/myso_groups", rev = "main" }
-
-[environments]
-localnet = "c073e97c"

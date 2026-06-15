@@ -19,7 +19,7 @@
 /// 2. **Standard identity bytes**: Identity bytes are always the standard format
 ///    `[groupId (32 bytes)][keyVersion (8 bytes LE u64)]`, enforced by the SDK.
 ///    Custom `mydata_approve` validates these standard bytes via
-///    `myso_messaging::mydata_policies::validate_identity()`.
+///    `messaging::mydata_policies::validate_identity()`.
 ///
 /// 3. **TS-SDK integration**: The SDK only needs to know:
 ///    - This package ID (for mydata_approve calls)
@@ -27,7 +27,7 @@
 ///
 /// ## Usage Flow
 ///
-/// 1. Create MessagingGroup using `myso_messaging::messaging::create_group()`
+/// 1. Create MessagingGroup using `messaging::messaging::create_group()`
 /// 2. Create Service via `create_service(group_id, fee, ttl)`
 /// 3. Users subscribe via `subscribe(service, payment, clock)`
 /// 4. Encrypt content using this package's ID with standard identity bytes
@@ -36,8 +36,8 @@
 module example_app::custom_mydata_policy;
 
 use myso_groups::permissioned_group::PermissionedGroup;
-use myso_messaging::messaging::Messaging;
-use myso_messaging::encryption_history::EncryptionHistory;
+use messaging::messaging::Messaging;
+use messaging::encryption_history::EncryptionHistory;
 use myso::clock::Clock;
 use myso::coin::Coin;
 
@@ -249,7 +249,7 @@ fun check_policy<Token: drop>(
 /// Called by MyData key servers (via dry-run) to authorize decryption.
 ///
 /// Identity bytes use the standard format `[groupId (32)][keyVersion (8 LE u64)]`,
-/// validated by `myso_messaging::mydata_policies::validate_identity()`.
+/// validated by `messaging::mydata_policies::validate_identity()`.
 ///
 /// # Parameters
 /// - `id`: MyData identity bytes `[group_id (32 bytes)][key_version (8 bytes LE u64)]`
@@ -274,7 +274,7 @@ entry fun mydata_approve<Token: drop>(
     ctx: &TxContext,
 ) {
     // Reuse standard identity validation (groupId, keyVersion, encHistory match)
-    myso_messaging::mydata_policies::validate_identity(group, encryption_history, id);
+    messaging::mydata_policies::validate_identity(group, encryption_history, id);
 
     // Custom checks: subscription + service + membership
     assert!(check_policy(sub, service, group, clock, ctx), ENoAccess);

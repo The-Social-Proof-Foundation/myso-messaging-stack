@@ -7,6 +7,9 @@ export default defineConfig(({ mode }) => {
   return {
     plugins: [tailwindcss(), react()],
     server: {
+      fs: {
+        allow: ['..'],
+      },
       proxy: {
         '/api/relayer': {
           target: env.VITE_RELAYER_BACKEND_URL || 'http://localhost:3000',

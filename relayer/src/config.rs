@@ -8,6 +8,8 @@ use crate::storage::StorageType;
 
 const DEFAULT_FILE_STORAGE_PUBLISHER_URL: &str = "https://publisher.file-storage-testnet.mysocial.network";
 const DEFAULT_FILE_STORAGE_AGGREGATOR_URL: &str = "https://aggregator.file-storage-testnet.mysocial.network";
+const GENESIS_FRAMEWORK_PACKAGE_ID: &str =
+    "0x0000000000000000000000000000000000000000000000000000000000000002";
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -105,7 +107,7 @@ impl Config {
         let myso_rpc_url =
             env::var("MYSO_RPC_URL").expect("MYSO_RPC_URL environment variable is required");
         let groups_package_id = env::var("GROUPS_PACKAGE_ID")
-            .expect("GROUPS_PACKAGE_ID environment variable is required");
+            .unwrap_or_else(|_| GENESIS_FRAMEWORK_PACKAGE_ID.to_string());
 
         // Publisher URL: where we send PUT requests to store blobs
         let file_storage_publisher_url = env::var("FILE_STORAGE_PUBLISHER_URL")

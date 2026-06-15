@@ -467,7 +467,7 @@ All configuration is loaded from environment variables. The relayer also support
 | `STORAGE_TYPE` | `memory` | No | Storage backend — currently only `memory` is implemented |
 | `MEMBERSHIP_STORE_TYPE` | `memory` | No | Membership cache backend — currently only `memory` is implemented |
 | `MYSO_RPC_URL` | — | **Yes** | MySo fullnode gRPC URL for checkpoint subscription (e.g., `https://fullnode.testnet.mysocial.network:443`) |
-| `GROUPS_PACKAGE_ID` | — | **Yes** | Groups SDK package ID deployed on MySo (e.g., `0xabc123...`) |
+| `GROUPS_PACKAGE_ID` | Genesis `0x2` (framework `permissioned_group`) | No | Override only for non-genesis dev chains |
 | `FILE_STORAGE_PUBLISHER_URL` | `https://publisher.file-storage-testnet.mysocial.network` | No | File Storage publisher endpoint for storing blobs/quilts |
 | `FILE_STORAGE_AGGREGATOR_URL` | `https://aggregator.file-storage-testnet.mysocial.network` | No | File Storage aggregator endpoint for reading blobs |
 | `FILE_STORAGE_STORAGE_EPOCHS` | `5` | No | Number of File Storage epochs to persist stored data |

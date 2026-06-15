@@ -1,80 +1,46 @@
 import {
   createContext,
   useContext,
+  useEffect,
   useMemo,
+  useState,
   type ReactNode,
 } from 'react';
-import {
-  createMySoMessagingStackClient,
-  FileStorageHttpStorageAdapter,
-} from '@socialproof/myso-messaging-stack';
 import { MySoGraphQLClient } from '@socialproof/myso/graphql';
-import {
-  MySoJsonRpcClient,
-  getJsonRpcFullnodeUrl,
-} from '@socialproof/myso/jsonRpc';
 import type { Signer } from '@socialproof/myso/cryptography';
 
+import {
+  createFreshMessagingClient,
+  getGenesisGraphqlUrl,
+  getMessagingNetwork,
+  getMessagingRpcUrl,
+  type MessagingClient,
+} from '../lib/messaging-client-factory';
+import {
+  fetchAndLogGenesisConfig,
+  logClientDeriveIds,
+  logFullGenesisClientMismatch,
+} from '../lib/messaging-genesis-debug';
 import { useMySocialAuth } from './MySocialAuthContext';
-
-// Infer the client type from the factory return
-type MessagingClient = ReturnType<typeof createMySoMessagingStackClient>;
 
 interface MessagingClientContextValue {
   client: MessagingClient | null;
   signer: Signer | null;
-  /** Set when client construction threw (otherwise debugging is a white screen). */
   clientInitError: string | null;
+  clientLoading: boolean;
   graphqlClient: MySoGraphQLClient;
+  /** Rebuild messaging client with fresh genesis (e.g. before create-group). */
+  createFreshMessagingClient: (
+    options?: { bypassGenesisCache?: boolean },
+  ) => Promise<MessagingClient>;
 }
 
 const MessagingClientContext =
   createContext<MessagingClientContextValue | null>(null);
 
-// --- Environment config ---
-const NETWORK_RAW = import.meta.env.VITE_MYSO_NETWORK || 'testnet';
-const KNOWN_RPC_NETWORK =
-  NETWORK_RAW === 'mainnet' ||
-  NETWORK_RAW === 'testnet' ||
-  NETWORK_RAW === 'devnet' ||
-  NETWORK_RAW === 'localnet'
-    ? NETWORK_RAW
-    : 'testnet';
-const NETWORK = NETWORK_RAW;
-const RELAYER_URL =
-  import.meta.env.VITE_RELAYER_URL || 'http://localhost:3003';
+const NETWORK = getMessagingNetwork();
 const GRAPHQL_URL =
   import.meta.env.VITE_MYSO_GRAPHQL_URL || '/api/graphql';
-
-const FILE_STORAGE_PUBLISHER_URL =
-  import.meta.env.VITE_FILE_STORAGE_PUBLISHER_URL || '';
-const FILE_STORAGE_AGGREGATOR_URL =
-  import.meta.env.VITE_FILE_STORAGE_AGGREGATOR_URL || '';
-const FILE_STORAGE_EPOCHS = Number(import.meta.env.VITE_FILE_STORAGE_EPOCHS) || 1;
-
-function parsePackageConfig() {
-  const originalPackageId = import.meta.env.VITE_MESSAGING_ORIGINAL_PACKAGE_ID;
-  if (!originalPackageId) return undefined;
-  return {
-    messaging: {
-      originalPackageId,
-      latestPackageId:
-        import.meta.env.VITE_MESSAGING_LATEST_PACKAGE_ID ||
-        originalPackageId,
-      namespaceId: import.meta.env.VITE_MESSAGING_NAMESPACE_ID || '',
-      versionId: import.meta.env.VITE_MESSAGING_VERSION_ID || '',
-    },
-  };
-}
-
-function parseMyDataServerConfigs(): { objectId: string; weight: number }[] {
-  const ids = import.meta.env.VITE_MYDATA_KEY_SERVER_OBJECT_IDS;
-  if (!ids) return [];
-  return ids.split(',').map((id: string) => ({
-    objectId: id.trim(),
-    weight: 1,
-  }));
-}
 
 const graphqlClient = new MySoGraphQLClient({
   url: GRAPHQL_URL,
@@ -88,78 +54,78 @@ export function MessagingClientProvider({
 }>) {
   const { keypair } = useMySocialAuth();
 
-  const rpcUrl =
-    import.meta.env.VITE_MYSO_RPC_URL ||
-    getJsonRpcFullnodeUrl(KNOWN_RPC_NETWORK);
+  const [client, setClient] = useState<MessagingClient | null>(null);
+  const [clientInitError, setClientInitError] = useState<string | null>(null);
+  const [clientLoading, setClientLoading] = useState(false);
 
-  const { client, signer, clientInitError } = useMemo(() => {
-    const baseClient = new MySoJsonRpcClient({
-      url: rpcUrl,
-      network: NETWORK,
-    });
-
+  useEffect(() => {
     if (!keypair) {
-      return {
-        client: null,
-        signer: null,
-        clientInitError: null,
-      };
+      setClient(null);
+      setClientInitError(null);
+      setClientLoading(false);
+      return;
     }
 
-    const mydataServerConfigs = parseMyDataServerConfigs();
+    let cancelled = false;
+    setClientLoading(true);
+    setClientInitError(null);
 
-    const attachments =
-      FILE_STORAGE_PUBLISHER_URL && FILE_STORAGE_AGGREGATOR_URL
-        ? {
-            storageAdapter: new FileStorageHttpStorageAdapter({
-              publisherUrl: FILE_STORAGE_PUBLISHER_URL,
-              aggregatorUrl: FILE_STORAGE_AGGREGATOR_URL,
-              epochs: FILE_STORAGE_EPOCHS,
-              fetch: (...args: Parameters<typeof fetch>) => fetch(...args),
-            }),
-            maxFileSizeBytes: 5 * 1024 * 1024,
-            maxAttachments: 10,
-          }
-        : undefined;
+    void createFreshMessagingClient(keypair, { bypassGenesisCache: true })
+      .then(async (resolvedClient) => {
+        if (cancelled) return;
 
-    try {
-      const client = createMySoMessagingStackClient(baseClient, {
-        mydata: {
-          serverConfigs: mydataServerConfigs,
-        },
-        encryption: {
-          sessionKey: {
-            signer: keypair,
-          },
-        },
-        packageConfig: parsePackageConfig(),
-        relayer: {
-          relayerUrl: RELAYER_URL,
-          fetch: (...args: Parameters<typeof fetch>) => fetch(...args),
-        },
-        attachments,
+        try {
+          const freshGenesis = await fetchAndLogGenesisConfig(
+            resolvedClient,
+            'client-init (fresh graphql)',
+          );
+          logClientDeriveIds(
+            'client-init (client.messaging.derive)',
+            resolvedClient.messaging.derive,
+          );
+          logFullGenesisClientMismatch(
+            'client-init',
+            freshGenesis,
+            resolvedClient,
+          );
+        } catch (logError) {
+          console.warn('[chat-app] genesis debug logging failed:', logError);
+        }
+
+        setClient(resolvedClient);
+        setClientLoading(false);
+      })
+      .catch((e) => {
+        if (!cancelled) {
+          const message =
+            e instanceof Error ? e.message : 'Failed to create messaging client.';
+          console.error('createMySoMessagingStackClientAsync failed:', e);
+          setClient(null);
+          setClientInitError(message);
+          setClientLoading(false);
+        }
       });
 
-      return {
-        client,
-        signer: keypair,
-        clientInitError: null,
-      };
-    } catch (e) {
-      const message =
-        e instanceof Error ? e.message : 'Failed to create messaging client.';
-      console.error('createMySoMessagingStackClient failed:', e);
-      return {
-        client: null,
-        signer: keypair,
-        clientInitError: message,
-      };
-    }
-  }, [keypair, rpcUrl]);
+    return () => {
+      cancelled = true;
+    };
+  }, [keypair]);
 
   const value = useMemo(
-    () => ({ client, signer, clientInitError, graphqlClient }),
-    [client, signer, clientInitError],
+    () => ({
+      client,
+      signer: keypair,
+      clientInitError,
+      clientLoading,
+      graphqlClient,
+      createFreshMessagingClient: (options?: { bypassGenesisCache?: boolean }) => {
+        if (!keypair) {
+          throw new Error('Sign in before creating a messaging client.');
+        }
+        return createFreshMessagingClient(keypair, options);
+      },
+    }),
+    [client, keypair, clientInitError, clientLoading],
   );
 
   return (
@@ -182,6 +148,9 @@ export function useMessagingClient(): MessagingClient | null {
 export function useRequiredMessagingClient(): {
   client: MessagingClient;
   signer: Signer;
+  createFreshMessagingClient: (
+    options?: { bypassGenesisCache?: boolean },
+  ) => Promise<MessagingClient>;
 } {
   const ctx = useContext(MessagingClientContext);
   if (!ctx) {
@@ -193,11 +162,18 @@ export function useRequiredMessagingClient(): {
     if (ctx.clientInitError) {
       throw new Error(ctx.clientInitError);
     }
+    if (ctx.clientLoading) {
+      throw new Error('Messaging client is still initializing genesis config…');
+    }
     throw new Error(
       'Sign in with MySocial and wait for signing key derivation to use messaging.',
     );
   }
-  return { client: ctx.client, signer: ctx.signer };
+  return {
+    client: ctx.client,
+    signer: ctx.signer,
+    createFreshMessagingClient: ctx.createFreshMessagingClient,
+  };
 }
 
 export function useGraphQLClient(): MySoGraphQLClient {
@@ -210,7 +186,6 @@ export function useGraphQLClient(): MySoGraphQLClient {
   return ctx.graphqlClient;
 }
 
-/** Non-fatal client bootstrap failure (see try/catch around createMySoMessagingStackClient). */
 export function useMessagingClientInitError(): string | null {
   const ctx = useContext(MessagingClientContext);
   if (!ctx) {
@@ -220,3 +195,16 @@ export function useMessagingClientInitError(): string | null {
   }
   return ctx.clientInitError;
 }
+
+export function useMessagingClientLoading(): boolean {
+  const ctx = useContext(MessagingClientContext);
+  if (!ctx) {
+    throw new Error(
+      'useMessagingClientLoading must be used within <MessagingClientProvider>',
+    );
+  }
+  return ctx.clientLoading;
+}
+
+// Re-export for callers that need RPC URL in diagnostics.
+export { getMessagingRpcUrl, getGenesisGraphqlUrl };

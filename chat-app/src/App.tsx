@@ -3,7 +3,10 @@ import { Sidebar } from './components/Sidebar';
 import { ChatArea } from './components/ChatArea';
 import { CreateGroupModal } from './components/CreateGroupModal';
 import { useGroupDiscovery } from './hooks/useGroupDiscovery';
-import { useMessagingClientInitError } from './contexts/MessagingClientContext';
+import {
+  useMessagingClientInitError,
+  useMessagingClientLoading,
+} from './contexts/MessagingClientContext';
 import {
   useAuthenticatedAddress,
   useMySocialAuth,
@@ -26,6 +29,7 @@ function App() {
   } = useMySocialAuth();
 
   const messagingClientInitError = useMessagingClientInitError();
+  const messagingClientLoading = useMessagingClientLoading();
 
   const address = useAuthenticatedAddress();
 
@@ -153,6 +157,13 @@ function App() {
           </main>
         )}
 
+      {!configError && connected && messagingClientLoading && (
+        <main className="flex flex-1 flex-col items-center justify-center gap-2">
+          <span className="inline-block h-6 w-6 animate-spin rounded-full border-2 border-primary-500 border-t-transparent" />
+          <p className="text-sm text-secondary-500">Initializing messaging client…</p>
+        </main>
+      )}
+
       {!configError && connected && messagingClientInitError && (
         <main className="flex flex-1 flex-col items-center justify-center gap-3 overflow-auto px-8">
           <p className="text-center text-sm font-medium text-danger-600">
@@ -163,29 +174,24 @@ function App() {
             {messagingClientInitError}
           </pre>
           <p className="max-w-xl text-center text-xs text-secondary-600 dark:text-secondary-400">
-            For{' '}
+            Genesis package IDs (0x2 / 0xe110 / 0x50c1) are resolved automatically.
+            Check{' '}
             <code className="rounded bg-secondary-200 px-1 dark:bg-secondary-700">
-              localnet
-            </code>
-            , set{' '}
+              VITE_MYSO_RPC_URL
+            </code>{' '}
+            and{' '}
             <code className="rounded bg-secondary-200 px-1 dark:bg-secondary-700">
-              VITE_MESSAGING_ORIGINAL_PACKAGE_ID
-            </code>
-            ,{' '}
-            <code className="rounded bg-secondary-200 px-1 dark:bg-secondary-700">
-              VITE_MESSAGING_NAMESPACE_ID
-            </code>
-            , and{' '}
-            <code className="rounded bg-secondary-200 px-1 dark:bg-secondary-700">
-              VITE_MESSAGING_VERSION_ID
-            </code>
-            in <code className="rounded bg-secondary-200 px-1">.env</code>, then
-            restart <code className="rounded bg-secondary-200 px-1">pnpm dev</code>.
+              VITE_MYSO_GRAPHQL_URL
+            </code>{' '}
+            point at a v112 genesis network with social bootstrap completed.
           </p>
         </main>
       )}
 
-      {!configError && connected && !messagingClientInitError && (
+      {!configError &&
+        connected &&
+        !messagingClientLoading &&
+        !messagingClientInitError && (
         <>
           {isUsingDevMessengerSigner && (
             <div className="border-b border-amber-200 bg-amber-50 px-4 py-2 text-center text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-100">
@@ -204,11 +210,13 @@ function App() {
             />
             <ChatArea selectedGroup={selectedGroup} onLeaveGroup={handleLeaveGroup} />
           </div>
-          <CreateGroupModal
-            open={showCreateModal}
-            onClose={() => setShowCreateModal(false)}
-            onGroupCreated={handleGroupCreated}
-          />
+          {showCreateModal && (
+            <CreateGroupModal
+              open
+              onClose={() => setShowCreateModal(false)}
+              onGroupCreated={handleGroupCreated}
+            />
+          )}
         </>
       )}
     </div>

@@ -16,7 +16,7 @@ import {
 	MessagingDeleter,
 	GroupHandleAdmin,
 	MetadataAdmin,
-} from './contracts/myso_messaging/messaging.js';
+} from './contracts/messaging/messaging.js';
 
 // Encryption history module types
 import {
@@ -26,14 +26,14 @@ import {
 	EncryptionKeyRotator,
 	EncryptionHistoryTag,
 	PermissionedGroupTag,
-} from './contracts/myso_messaging/encryption_history.js';
+} from './contracts/messaging/encryption_history.js';
 
 // Metadata module types
-import { Metadata, MetadataKey } from './contracts/myso_messaging/metadata.js';
+import { Metadata, MetadataKey } from './contracts/messaging/metadata.js';
 
 // Actor object types
-import { GroupManager } from './contracts/myso_messaging/group_manager.js';
-import { GroupLeaver } from './contracts/myso_messaging/group_leaver.js';
+import { GroupManager } from './contracts/messaging/group_manager.js';
+import { GroupLeaver } from './contracts/messaging/group_leaver.js';
 
 // Parsed type exports
 export type ParsedMessagingNamespace = (typeof MessagingNamespace)['$inferType'];

@@ -13,7 +13,7 @@ jobs:
     strategy:
       matrix:
         package:
-          - myso_messaging_stack
+          - messaging
           - example_app
     steps:
       - uses: actions/checkout@v4

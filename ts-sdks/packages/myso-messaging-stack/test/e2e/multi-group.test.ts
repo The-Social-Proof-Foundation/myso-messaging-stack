@@ -30,10 +30,8 @@ describe('Multi-Group Scenarios', () => {
 	const network = inject('network');
 	const relayerUrl = inject('relayerUrl');
 	const mysoClientUrl = inject('mysoClientUrl');
-	const publishedPackages = inject('publishedPackages');
+	const genesisConfig = inject('genesisConfig');
 	const adminAccount = inject('adminAccount');
-	const messagingNamespaceId = inject('messagingNamespaceId');
-	const messagingVersionId = inject('messagingVersionId');
 	const mydataServerConfigs = inject('mydataServerConfigs');
 
 	const SYNC_WAIT_TIME = 15_000;
@@ -52,10 +50,7 @@ describe('Multi-Group Scenarios', () => {
 		return createMySoMessagingStackClient({
 			url: mysoClientUrl,
 			network,
-			permissionedGroupsPackageId: publishedPackages['permissioned-groups'].packageId,
-			messagingPackageId: publishedPackages['messaging'].packageId,
-			namespaceId: messagingNamespaceId,
-			versionId: messagingVersionId,
+			packageConfig: genesisConfig,
 			keypair,
 			relayer: { relayerUrl },
 			mydata:
@@ -69,7 +64,7 @@ describe('Multi-Group Scenarios', () => {
 		const adminKeypair = Ed25519Keypair.fromSecretKey(adminAccount.secretKey);
 		const adminClient = buildClient(adminKeypair);
 		const funding: AccountFunding = { client: adminClient, signer: adminKeypair };
-		const messagingPerms = messagingPermissionTypes(publishedPackages['messaging'].packageId);
+		const messagingPerms = messagingPermissionTypes(genesisConfig.messaging.originalPackageId);
 		const senderReader = [messagingPerms.MessagingSender, messagingPerms.MessagingReader];
 
 		// Create Group A

@@ -116,7 +116,9 @@ export class FileStorageRecoveryTransport implements RecoveryTransport {
 					}
 				}
 			} catch (err) {
-				this.#onError?.(new Error(`Failed to read blob ${blobId} from FileStorage`, { cause: err }));
+				this.#onError?.(
+					new Error(`Failed to read blob ${blobId} from FileStorage`, { cause: err }),
+				);
 			}
 		}
 

@@ -2,6 +2,18 @@ import { type SyntheticEvent, useState } from 'react';
 import { useRequiredMessagingClient } from '../contexts/MessagingClientContext';
 import { signAndExecuteTransactionAndWait } from '../lib/sign-and-wait';
 import { addStoredGroup } from '../lib/group-store';
+import { formatCreateGroupError } from '../lib/format-create-group-error';
+import {
+  expectedCreateGroupObjectIds,
+  fetchAndLogGenesisConfig,
+  logClientDeriveIds,
+  logCreateGroupTxInputs,
+  logFullGenesisClientMismatch,
+  logMyDataKeyServers,
+  logSignerGasCoins,
+  STALE_GHOST_OBJECT_ID,
+  verifyCreateGroupObjectsOnRpc,
+} from '../lib/messaging-genesis-debug';
 
 interface CreateGroupModalProps {
   open: boolean;
@@ -14,7 +26,7 @@ export function CreateGroupModal({
   onClose,
   onGroupCreated,
 }: Readonly<CreateGroupModalProps>) {
-  const { client, signer } = useRequiredMessagingClient();
+  const { signer, createFreshMessagingClient } = useRequiredMessagingClient();
 
   const [name, setName] = useState('');
   const [members, setMembers] = useState('');
@@ -38,25 +50,46 @@ export function CreateGroupModal({
     try {
       const uuid = crypto.randomUUID();
 
-      // Parse optional initial member addresses
+      // Fresh client so packageConfig matches live genesis (not a stale init snapshot).
+      const client = await createFreshMessagingClient({
+        bypassGenesisCache: true,
+      });
+
+      const freshGenesis = await fetchAndLogGenesisConfig(
+        client,
+        'create-group (fresh client + graphql)',
+        { bypassCache: true },
+      );
+      const expectedObjects = expectedCreateGroupObjectIds(freshGenesis);
+
+      logClientDeriveIds('create-group (fresh client)', client.messaging.derive, uuid);
+      logFullGenesisClientMismatch('create-group', freshGenesis, client);
+      await verifyCreateGroupObjectsOnRpc('create-group', expectedObjects, client);
+      await logMyDataKeyServers('create-group', client);
+      await logSignerGasCoins('create-group', client, signer);
+
       const initialMembers = members
         .split(',')
         .map((s) => s.trim())
         .filter(Boolean);
 
-      // Build the transaction via the SDK's tx layer
       const tx = client.messaging.tx.createAndShareGroup({
         uuid,
         name: trimmedName,
         ...(initialMembers.length > 0 && { initialMembers }),
       });
 
+      await logCreateGroupTxInputs(
+        'create-group (pre-sign)',
+        tx,
+        client,
+        expectedObjects,
+      );
+
       await signAndExecuteTransactionAndWait(client, signer, tx);
 
-      // Derive the on-chain groupId from the UUID
       const groupId = client.messaging.derive.groupId({ uuid });
 
-      // Persist to localStorage
       addStoredGroup({
         uuid,
         name: trimmedName,
@@ -64,14 +97,22 @@ export function CreateGroupModal({
         createdAt: Date.now(),
       });
 
-      // Reset form
       setName('');
       setMembers('');
       onGroupCreated(uuid);
       onClose();
     } catch (err) {
       console.error('Failed to create group:', err);
-      setError(err instanceof Error ? err.message : 'Failed to create group.');
+      if (
+        err instanceof Error &&
+        err.message.includes(STALE_GHOST_OBJECT_ID)
+      ) {
+        console.error(
+          `[chat-app] create-group failed on stale object ${STALE_GHOST_OBJECT_ID}. ` +
+            'Check "[chat-app] create-group tx inputs" and "[chat-app] messaging genesis" above.',
+        );
+      }
+      setError(formatCreateGroupError(err));
     } finally {
       setLoading(false);
     }
@@ -85,7 +126,6 @@ export function CreateGroupModal({
         </h2>
 
         <form onSubmit={handleSubmit} className="space-y-4">
-          {/* Group name */}
           <div>
             <label
               htmlFor="group-name"
@@ -104,7 +144,6 @@ export function CreateGroupModal({
             />
           </div>
 
-          {/* Initial members */}
           <div>
             <label
               htmlFor="initial-members"
@@ -126,12 +165,10 @@ export function CreateGroupModal({
             />
           </div>
 
-          {/* Error */}
           {error && (
             <p className="text-sm text-danger-500">{error}</p>
           )}
 
-          {/* Buttons */}
           <div className="flex justify-end gap-3 pt-2">
             <button
               type="button"

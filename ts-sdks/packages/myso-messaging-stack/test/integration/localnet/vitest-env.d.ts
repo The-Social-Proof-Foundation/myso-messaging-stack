@@ -2,7 +2,8 @@
 // Copyright (c) The Social Proof Foundation, LLC.
 // SPDX-License-Identifier: Apache-2.0
 
-import type { PublishedPackage, SerializableAccount } from '../../helpers/types.js';
+import type { ResolvedGenesisMessagingConfig } from '../../../src/genesis.js';
+import type { SerializableAccount } from '../../helpers/types.js';
 
 declare module 'vitest' {
 	export interface ProvidedContext {
@@ -12,7 +13,7 @@ declare module 'vitest' {
 		mysoToolsContainerId: string;
 		mysoClientUrl: string;
 		adminAccount: SerializableAccount;
-		publishedPackages: Record<string, PublishedPackage>;
+		genesisConfig: ResolvedGenesisMessagingConfig;
 		messagingNamespaceId: string;
 		messagingVersionId: string;
 	}

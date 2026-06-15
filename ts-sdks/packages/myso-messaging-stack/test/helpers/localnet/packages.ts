@@ -18,8 +18,8 @@ export const MESSAGING_PACKAGES: MovePackageConfig[] = [
 	{
 		name: 'messaging',
 		moduleName: 'messaging',
-		localPath: 'move/packages/myso_messaging_stack',
-		containerPath: '/test-data/myso_messaging_stack',
+		localPath: 'move/packages/messaging',
+		containerPath: '/test-data/messaging',
 	},
 	{
 		name: 'example-app',

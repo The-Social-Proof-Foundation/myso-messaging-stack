@@ -32,6 +32,10 @@ export type MySoMessagingStackPackageConfig = {
 	namespaceId: string;
 	/** The Version shared object ID (used for contract upgrade version gating) */
 	versionId: string;
+	/** Social BlockListRegistry shared object ID (`0x50c1::block_list::BlockListRegistry`) */
+	blockListRegistryId: string;
+	/** Social SocialGraph shared object ID (`0x50c1::social_graph::SocialGraph`) */
+	socialGraphId: string;
 };
 
 /**

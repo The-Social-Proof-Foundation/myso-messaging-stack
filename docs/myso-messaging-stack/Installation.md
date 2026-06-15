@@ -50,7 +50,7 @@ pnpm build
 
 The messaging Move package is pre-deployed on **testnet and on mainnet**. The SDK auto-detects the correct package IDs based on the client's network.
 
-For localnet or custom deployments, you must deploy both the `myso_groups` and `myso_messaging` packages (`myso_messaging` depends on `myso_groups`). Refer to the [MySo Groups Installation guide](https://github.com/the-social-proof-foundation/myso-groups) for deploying the base package first, then deploy the messaging package on top.
+For localnet or custom deployments, you must deploy both the `myso_groups` and `messaging` packages (`messaging` depends on `myso_groups`). Refer to the [MySo Groups Installation guide](https://github.com/the-social-proof-foundation/myso-groups) for deploying the base package first, then deploy the messaging package on top.
 
 Provide a `packageConfig` when instantiating the client to point at your custom deployment. See [Setup](./Setup.md) for details.
 

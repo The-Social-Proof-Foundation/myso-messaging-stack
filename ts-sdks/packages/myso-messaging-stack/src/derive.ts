@@ -5,7 +5,12 @@
 import { bcs } from '@socialproof/myso/bcs';
 import { deriveObjectID } from '@socialproof/myso/utils';
 
-import { GROUP_HANDLE_REGISTRY_DERIVATION_KEY, GROUP_LEAVER_DERIVATION_KEY, GROUP_MANAGER_DERIVATION_KEY } from './constants.js';
+import {
+	GROUP_HANDLE_REGISTRY_DERIVATION_KEY,
+	GROUP_LEAVER_DERIVATION_KEY,
+	GROUP_MANAGER_DERIVATION_KEY,
+	PAID_MESSAGING_REGISTRY_DERIVATION_KEY,
+} from './constants.js';
 import type { GroupRef, MySoMessagingStackPackageConfig } from './types.js';
 
 export interface MySoMessagingStackDeriveOptions {
@@ -128,6 +133,16 @@ export class MySoMessagingStackDerive {
 	 */
 	groupHandleRegistryId(): string {
 		const key = bcs.string().serialize(GROUP_HANDLE_REGISTRY_DERIVATION_KEY).toBytes();
+		return deriveObjectID(this.#packageConfig.namespaceId, '0x1::string::String', key);
+	}
+
+	/**
+	 * Derive the `PaidMessagingRegistry` singleton object ID.
+	 *
+	 * Matches `paid_messaging_policy::new` derivation from `MessagingNamespace`.
+	 */
+	paidMessagingRegistryId(): string {
+		const key = bcs.string().serialize(PAID_MESSAGING_REGISTRY_DERIVATION_KEY).toBytes();
 		return deriveObjectID(this.#packageConfig.namespaceId, '0x1::string::String', key);
 	}
 

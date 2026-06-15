@@ -324,11 +324,14 @@ export class HTTPRelayerTransport implements RelayerTransport {
 		}
 
 		const { body, headers } = await createBodyAuth(params.signer, wirePayload);
-		const response = await this.#request<WireCreateMessageResponse>(this.#relayerPath('/messages'), {
-			method: 'POST',
-			headers: { ...headers, 'Content-Type': 'application/json' },
-			body: JSON.stringify(body),
-		});
+		const response = await this.#request<WireCreateMessageResponse>(
+			this.#relayerPath('/messages'),
+			{
+				method: 'POST',
+				headers: { ...headers, 'Content-Type': 'application/json' },
+				body: JSON.stringify(body),
+			},
+		);
 
 		return { messageId: response.message_id };
 	}
@@ -408,7 +411,9 @@ export class HTTPRelayerTransport implements RelayerTransport {
 	async listGroupReactions(params: ListGroupReactionsParams): Promise<RelayerReactionEntry[]> {
 		const headers = await this.#cachedHeaderAuth(params.signer, params.groupId);
 		const q =
-			params.chainSeq !== undefined ? `?chain_seq=${encodeURIComponent(String(params.chainSeq))}` : '';
+			params.chainSeq !== undefined
+				? `?chain_seq=${encodeURIComponent(String(params.chainSeq))}`
+				: '';
 		const rows = await this.#request<WireReactionEntry[]>(
 			`${this.#relayerPath(`/groups/${params.groupId}/reactions`)}${q}`,
 			{ method: 'GET', headers },
@@ -437,10 +442,10 @@ export class HTTPRelayerTransport implements RelayerTransport {
 
 	async listGroupPins(params: ListGroupPinsParams): Promise<number[]> {
 		const headers = await this.#cachedHeaderAuth(params.signer, params.groupId);
-		return this.#request<number[]>(
-			this.#relayerPath(`/groups/${params.groupId}/pins`),
-			{ method: 'GET', headers },
-		);
+		return this.#request<number[]>(this.#relayerPath(`/groups/${params.groupId}/pins`), {
+			method: 'GET',
+			headers,
+		});
 	}
 
 	async setGroupPin(params: SetGroupPinParams): Promise<void> {

@@ -2,10 +2,10 @@
 module example_app::custom_mydata_policy_tests;
 
 use myso_groups::permissioned_group::PermissionedGroup;
-use myso_messaging::messaging::{Self, Messaging, MessagingNamespace};
-use myso_messaging::encryption_history::EncryptionHistory;
-use myso_messaging::group_manager::GroupManager;
-use myso_messaging::version::{Self, Version};
+use messaging::messaging::{Self, Messaging, MessagingNamespace};
+use messaging::encryption_history::EncryptionHistory;
+use messaging::group_manager::GroupManager;
+use messaging::version::{Self, Version};
 use myso::vec_set;
 use example_app::custom_mydata_policy;
 use myso::clock;

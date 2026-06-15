@@ -3,9 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { requestMySoFromFaucetV2 } from '@socialproof/myso/faucet';
-import type { MovePackageConfig, PublishedPackages } from '../types.js';
+import {
+	resolveGenesisMessagingConfig,
+	clearGenesisMessagingConfigCache,
+} from '../../../src/genesis.js';
+import type { ResolvedGenesisMessagingConfig } from '../../../src/genesis.js';
 import { startMySoLocalnet } from './myso-localnet.js';
-import { publishPackages } from './publisher.js';
 import { execCommand } from './exec-command.js';
 import { getNewAccount } from '../get-new-account.js';
 import { createMySoClient } from '../create-myso-client.js';
@@ -19,22 +22,20 @@ export interface LocalnetSetupResult {
 		address: string;
 		keypair: ReturnType<typeof getNewAccount>['keypair'];
 	};
-	publishedPackages: PublishedPackages;
+	genesisConfig: ResolvedGenesisMessagingConfig;
 	messagingNamespaceId: string;
 	messagingVersionId: string;
 }
 
 /**
- * Boots a MySo localnet container, publishes Move packages, and extracts
- * shared singleton object IDs.
- *
- * Reusable across integration and e2e globalSetup functions.
+ * Boots a MySo localnet with force-regenesis genesis packages and resolves
+ * messaging/social shared singleton IDs via GraphQL.
  */
-export async function bootstrapLocalnet(
-	packages: MovePackageConfig[],
-): Promise<LocalnetSetupResult> {
+export async function bootstrapLocalnet(): Promise<LocalnetSetupResult> {
+	clearGenesisMessagingConfigCache();
+
 	const fixture = await startMySoLocalnet({
-		packages,
+		packages: [],
 		verbose: true,
 	});
 
@@ -42,8 +43,8 @@ export async function bootstrapLocalnet(
 	const FAUCET_PORT = fixture.ports.faucet;
 	const MYSO_TOOLS_CONTAINER_ID = fixture.containerId;
 	const MYSO_CLIENT_URL = `http://localhost:${LOCALNET_PORT}`;
+	const GRAPHQL_URL = `http://localhost:${fixture.ports.graphql}/graphql`;
 
-	// Initialize myso client in container and configure localnet environment
 	await execCommand(['myso', 'client', '--yes'], MYSO_TOOLS_CONTAINER_ID);
 	await execCommand(
 		['myso', 'client', 'new-env', '--alias', 'localnet', '--rpc', 'http://127.0.0.1:9000'],
@@ -60,33 +61,13 @@ export async function bootstrapLocalnet(
 		recipient: admin.address,
 	});
 
-	// `myso_messaging` no longer depends on mysons; publish uses Move.toml as copied into the container.
-
-	console.log('Publishing Move packages...');
-	const published = await publishPackages({
-		packages,
-		mysoClient,
-		mysoToolsContainerId: MYSO_TOOLS_CONTAINER_ID,
+	console.log('Resolving genesis messaging shared objects...');
+	const genesisConfig = await resolveGenesisMessagingConfig(mysoClient, {
+		graphqlUrl: GRAPHQL_URL,
 	});
 
-	// Find MessagingNamespace and Version shared objects from the messaging package's publish tx
-	const messagingCreated = published['messaging'].createdObjects;
-
-	const namespaceObj = messagingCreated.find((obj) =>
-		obj.objectType.includes('MessagingNamespace'),
-	);
-	if (!namespaceObj) {
-		throw new Error('MessagingNamespace not found in messaging publish transaction');
-	}
-	const messagingNamespaceId = namespaceObj.objectId;
-	console.log(`Found MessagingNamespace at ${messagingNamespaceId}`);
-
-	const versionObj = messagingCreated.find((obj) => obj.objectType.includes('::version::Version'));
-	if (!versionObj) {
-		throw new Error('Version shared object not found in messaging publish transaction');
-	}
-	const messagingVersionId = versionObj.objectId;
-	console.log(`Found Version at ${messagingVersionId}`);
+	console.log(`Found MessagingNamespace at ${genesisConfig.messaging.namespaceId}`);
+	console.log(`Found Version at ${genesisConfig.messaging.versionId}`);
 
 	return {
 		ports: {
@@ -102,8 +83,8 @@ export async function bootstrapLocalnet(
 			address: admin.address,
 			keypair: admin.keypair,
 		},
-		publishedPackages: published,
-		messagingNamespaceId,
-		messagingVersionId,
+		genesisConfig,
+		messagingNamespaceId: genesisConfig.messaging.namespaceId,
+		messagingVersionId: genesisConfig.messaging.versionId,
 	};
 }

@@ -3,12 +3,20 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import type { StorageAdapter, StorageEntry, StorageUploadResult } from './storage-adapter.js';
-import type { FileStorageBlob, FileStorageQuiltStoreResult, FileStorageStoredQuiltPatch } from './file-storage-types.js';
+import type {
+	FileStorageBlob,
+	FileStorageQuiltStoreResult,
+	FileStorageStoredQuiltPatch,
+} from './file-storage-types.js';
 import type { HttpClientConfig } from '../http/types.js';
 
 import { DEFAULT_HTTP_TIMEOUT } from '../http/types.js';
 import { HttpTimeoutError } from '../http/errors.js';
-import { FileStorageUploadError, FileStorageDownloadError, FileStorageResponseError } from './file-storage-errors.js';
+import {
+	FileStorageUploadError,
+	FileStorageDownloadError,
+	FileStorageResponseError,
+} from './file-storage-errors.js';
 
 // ── Public config / metadata types ──────────────────────────────────
 

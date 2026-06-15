@@ -3,13 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import type { TestProject } from 'vitest/node';
-import { MESSAGING_PACKAGES } from '../../helpers/localnet/packages.js';
 import { bootstrapLocalnet } from '../../helpers/localnet/localnet-setup.js';
 
 export default async function setup(project: TestProject) {
 	console.log('Setting up messaging-groups localnet test environment...');
 
-	const env = await bootstrapLocalnet(MESSAGING_PACKAGES);
+	const env = await bootstrapLocalnet();
 
 	project.provide('localnetPort', env.ports.localnet);
 	project.provide('graphqlPort', env.ports.graphql);
@@ -20,7 +19,7 @@ export default async function setup(project: TestProject) {
 		secretKey: env.adminAccount.secretKey,
 		address: env.adminAccount.address,
 	});
-	project.provide('publishedPackages', env.publishedPackages);
+	project.provide('genesisConfig', env.genesisConfig);
 	project.provide('messagingNamespaceId', env.messagingNamespaceId);
 	project.provide('messagingVersionId', env.messagingVersionId);
 

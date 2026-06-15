@@ -7,8 +7,8 @@ import type { Transaction } from '@socialproof/myso/transactions';
 import type { MySoGroupsCall } from '@socialproof/myso-groups';
 
 import type { EnvelopeEncryption } from './encryption/envelope-encryption.js';
-import * as messaging from './contracts/myso_messaging/messaging.js';
-import * as messagingLog from './contracts/myso_messaging/messaging_message_log.js';
+import * as messaging from './contracts/messaging/messaging.js';
+import * as paidMessagingPolicy from './contracts/messaging/paid_messaging_policy.js';
 import type { MySoMessagingStackDerive } from './derive.js';
 import { MySoMessagingStackClientError } from './error.js';
 import type {
@@ -101,6 +101,7 @@ export class MySoMessagingStackCall {
 						version: this.#packageConfig.versionId,
 						namespace: this.#packageConfig.namespaceId,
 						groupManager: groupManagerId,
+						blockList: this.#packageConfig.blockListRegistryId,
 						name: options.name,
 						uuid,
 						initialEncryptedDek: Array.from(encryptedDek),
@@ -130,6 +131,7 @@ export class MySoMessagingStackCall {
 						version: this.#packageConfig.versionId,
 						namespace: this.#packageConfig.namespaceId,
 						groupManager: groupManagerId,
+						blockList: this.#packageConfig.blockListRegistryId,
 						name: options.name,
 						uuid,
 						initialEncryptedDek: Array.from(encryptedDek),
@@ -382,12 +384,16 @@ export class MySoMessagingStackCall {
 		return (tx: Transaction) => {
 			const { groupId, messageLogId } = this.#resolveGroupAndLog(options);
 			return tx.add(
-				messagingLog.sendPaidMessageDigest({
+				messaging.sendPaidMessageDigest({
 					package: this.#packageConfig.latestPackageId,
 					arguments: {
 						version: this.#packageConfig.versionId,
 						group: groupId,
 						log: messageLogId,
+						paidRegistry: this.#derive.paidMessagingRegistryId(),
+						socialGraph: this.#packageConfig.socialGraphId,
+						blockList: this.#packageConfig.blockListRegistryId,
+						groupManager: this.#derive.groupManagerId(),
 						recipient: options.recipient,
 						payment: options.payment,
 						escrowAmount: options.escrowAmount,
@@ -397,6 +403,20 @@ export class MySoMessagingStackCall {
 				}),
 			);
 		};
+	}
+
+	setPaidMessagingPolicy(options: { enabled: boolean; minCost: number | bigint | null }) {
+		return (tx: Transaction) =>
+			tx.add(
+				paidMessagingPolicy.setPaidMessagingPolicy({
+					package: this.#packageConfig.latestPackageId,
+					arguments: {
+						registry: this.#derive.paidMessagingRegistryId(),
+						enabled: options.enabled,
+						minCost: options.minCost,
+					},
+				}),
+			);
 	}
 
 	replyToPaidMessageClaimCoin(
@@ -410,12 +430,13 @@ export class MySoMessagingStackCall {
 		return (tx: Transaction) => {
 			const { groupId, messageLogId } = this.#resolveGroupAndLog(options);
 			return tx.add(
-				messagingLog.replyToPaidMessageClaimCoin({
+				messaging.replyToPaidMessageClaimCoin({
 					package: this.#packageConfig.latestPackageId,
 					arguments: {
 						version: this.#packageConfig.versionId,
 						group: groupId,
 						log: messageLogId,
+						blockList: this.#packageConfig.blockListRegistryId,
 						paidMsgSeq: options.paidMsgSeq,
 						charCount: options.charCount,
 						dedupeKey: this.#byteVec(options.dedupeKey),
@@ -439,12 +460,13 @@ export class MySoMessagingStackCall {
 		return (tx: Transaction) => {
 			const { groupId, messageLogId } = this.#resolveGroupAndLog(options);
 			return tx.add(
-				messagingLog.replyToPaidMessageClaimSettled({
+				messaging.replyToPaidMessageClaimSettled({
 					package: this.#packageConfig.latestPackageId,
 					arguments: {
 						version: this.#packageConfig.versionId,
 						group: groupId,
 						log: messageLogId,
+						blockList: this.#packageConfig.blockListRegistryId,
 						paidMsgSeq: options.paidMsgSeq,
 						charCount: options.charCount,
 						dedupeKey: this.#byteVec(options.dedupeKey),
@@ -465,12 +487,13 @@ export class MySoMessagingStackCall {
 		return (tx: Transaction) => {
 			const { groupId, messageLogId } = this.#resolveGroupAndLog(options);
 			return tx.add(
-				messagingLog.refundPaidEscrow({
+				messaging.refundPaidEscrow({
 					package: this.#packageConfig.latestPackageId,
 					arguments: {
 						version: this.#packageConfig.versionId,
 						group: groupId,
 						log: messageLogId,
+						blockList: this.#packageConfig.blockListRegistryId,
 						paidMsgSeq: options.paidMsgSeq,
 					},
 				}),
@@ -492,7 +515,7 @@ export class MySoMessagingStackCall {
 					package: this.#packageConfig.latestPackageId,
 					arguments: {
 						version: this.#packageConfig.versionId,
-						groupHandleRegistry: registryId,
+						registry: registryId,
 						group: options.groupId,
 						handle: options.handle,
 					},
@@ -510,7 +533,7 @@ export class MySoMessagingStackCall {
 					package: this.#packageConfig.latestPackageId,
 					arguments: {
 						version: this.#packageConfig.versionId,
-						groupHandleRegistry: registryId,
+						registry: registryId,
 						group: options.groupId,
 					},
 				}),

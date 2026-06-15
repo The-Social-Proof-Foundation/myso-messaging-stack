@@ -2,13 +2,18 @@
 // Copyright (c) The Social Proof Foundation, LLC.
 // SPDX-License-Identifier: Apache-2.0
 
-import type { MyDataClient, MyDataClientOptions, MyDataCompatibleClient } from '@socialproof/mydata';
+import type {
+	MyDataClient,
+	MyDataClientOptions,
+	MyDataCompatibleClient,
+} from '@socialproof/mydata';
 import { SessionKey } from '@socialproof/mydata';
 import {
 	createMySoMessagingStackClient as createClient,
 	type RelayerConfig,
 	type RelayerTransport,
 	type MyDataPolicy,
+	type ResolvedGenesisMessagingConfig,
 } from '@socialproof/myso-messaging-stack';
 import type { MySoClientTypes } from '@socialproof/myso/client';
 import type { Ed25519Keypair } from '@socialproof/myso/keypairs/ed25519';
@@ -61,51 +66,25 @@ export interface CreateMySoMessagingStackClientOptions<TApproveContext = void> {
 	url: string;
 	network: MySoClientTypes.Network;
 	transport?: MySoTransport;
-	permissionedGroupsPackageId: string;
-	messagingPackageId: string;
-	namespaceId: string;
-	versionId: string;
+	/** Resolved genesis config from bootstrapLocalnet or testnet discovery. */
+	packageConfig: ResolvedGenesisMessagingConfig;
 	keypair: Ed25519Keypair;
 	mydataPolicy?: MyDataPolicy<TApproveContext>;
-	/**
-	 * Relayer configuration. When provided, the client uses a real relayer transport
-	 * (e.g. HTTPRelayerTransport for E2E tests). When omitted, a noop transport is used
-	 * (suitable for integration tests that only exercise on-chain operations).
-	 */
 	relayer?: RelayerConfig;
-	/**
-	 * MyData configuration override. When provided, uses a real MyDataClient
-	 * (e.g. for testnet E2E with real key servers). When omitted, a mock MyDataClient is used
-	 * (suitable for localnet tests).
-	 */
 	mydata?: MyDataClient | Omit<MyDataClientOptions, 'mysoClient'>;
 }
 
 /**
  * Creates a fully extended MySo client with `mysoGroups`, `mydata`,
  * and `mysoMessagingStack` extensions.
- *
- * By default uses a mock MyDataClient and noop relayer transport (suitable for
- * integration tests that only exercise on-chain operations). Pass `mydata` and/or
- * `relayer` options to use real implementations (e.g. for E2E tests with a real
- * relayer and testnet key servers).
  */
 export function createMySoMessagingStackClient<TApproveContext = void>(
 	options: CreateMySoMessagingStackClientOptions<TApproveContext>,
 ) {
-	const {
-		url,
-		network,
-		transport,
-		permissionedGroupsPackageId,
-		messagingPackageId,
-		namespaceId,
-		versionId,
-		keypair,
-		mydataPolicy,
-		relayer,
-		mydata,
-	} = options;
+	const { url, network, transport, packageConfig, keypair, mydataPolicy, relayer, mydata } =
+		options;
+
+	const messagingPackageId = packageConfig.messaging.originalPackageId;
 
 	const baseClient = createMySoClient({
 		url,
@@ -114,16 +93,13 @@ export function createMySoMessagingStackClient<TApproveContext = void>(
 		mvr: {
 			overrides: {
 				packages: {
-					'@local-pkg/myso-groups': permissionedGroupsPackageId,
-					'@local-pkg/myso-messaging-stack': messagingPackageId,
+					'@local-pkg/myso-groups': packageConfig.permissionedGroups.originalPackageId,
+					'@local-pkg/messaging': messagingPackageId,
 				},
 			},
 		},
 	});
 
-	// When a real MyDataClient/config is provided (testnet), use `{ signer }` so the SDK
-	// creates a proper SessionKey with a real personal message signature.
-	// For localnet (mock mydata), use the fake SessionKey.import() shortcut.
 	const sessionKey = mydata
 		? { signer: keypair }
 		: {
@@ -141,24 +117,14 @@ export function createMySoMessagingStackClient<TApproveContext = void>(
 			};
 
 	return createClient<TApproveContext>(baseClient, {
-		mydata: mydata ?? createMockMyDataClient({ mysoClient: baseClient, packageId: messagingPackageId }),
+		mydata:
+			mydata ?? createMockMyDataClient({ mysoClient: baseClient, packageId: messagingPackageId }),
 		encryption: {
 			sessionKey,
 			mydataPolicy,
 		},
 		relayer: relayer ?? { transport: noopTransport },
-		packageConfig: {
-			messaging: {
-				originalPackageId: messagingPackageId,
-				latestPackageId: messagingPackageId,
-				namespaceId,
-				versionId,
-			},
-			permissionedGroups: {
-				originalPackageId: permissionedGroupsPackageId,
-				latestPackageId: permissionedGroupsPackageId,
-			},
-		},
+		packageConfig,
 	});
 }
 

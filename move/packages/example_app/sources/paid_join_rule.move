@@ -49,9 +49,9 @@
 module example_app::paid_join_rule;
 
 use myso_groups::permissioned_group::{PermissionedGroup, ExtensionPermissionsAdmin};
-use myso_messaging::messaging::{Self, Messaging, MessagingReader, MessagingNamespace};
-use myso_messaging::group_manager::GroupManager;
-use myso_messaging::version::Version;
+use messaging::messaging::{Self, Messaging, MessagingReader, MessagingNamespace};
+use messaging::group_manager::GroupManager;
+use messaging::version::Version;
 use myso::balance::{Self, Balance};
 use myso::coin::{Self, Coin};
 use myso::vec_set;

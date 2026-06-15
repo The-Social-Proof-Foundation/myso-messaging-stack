@@ -57,6 +57,8 @@ function createEnvelopeEncryption(): EnvelopeEncryption {
 				latestPackageId: MOCK_PACKAGE_ID,
 				namespaceId: MOCK_NAMESPACE_ID,
 				versionId: MOCK_VERSION_ID,
+				blockListRegistryId: '0x' + '22'.repeat(32),
+				socialGraphId: '0x' + '33'.repeat(32),
 			},
 		}),
 		originalPackageId: MOCK_PACKAGE_ID,
@@ -421,6 +423,8 @@ describe('AttachmentsManager', () => {
 					latestPackageId: MOCK_PACKAGE_ID,
 					namespaceId: MOCK_NAMESPACE_ID,
 					versionId: MOCK_VERSION_ID,
+					blockListRegistryId: '0x' + '22'.repeat(32),
+					socialGraphId: '0x' + '33'.repeat(32),
 				},
 			});
 			const groupId = derive.groupId({ uuid });

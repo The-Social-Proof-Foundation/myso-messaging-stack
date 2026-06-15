@@ -8,10 +8,6 @@ import type { ClientWithCoreApi } from '@socialproof/myso/client';
 import type { Transaction } from '@socialproof/myso/transactions';
 
 import { MySoMessagingStackClientError } from './error.js';
-import {
-	TESTNET_MYSO_MESSAGING_STACK_PACKAGE_CONFIG,
-	MAINNET_MYSO_MESSAGING_STACK_PACKAGE_CONFIG,
-} from './constants.js';
 import { AttachmentsManager } from './attachments/attachments-manager.js';
 import type { Attachment, AttachmentFile, AttachmentHandle } from './attachments/types.js';
 import { EnvelopeEncryption, buildMessageAad } from './encryption/envelope-encryption.js';
@@ -176,23 +172,13 @@ export class MySoMessagingStackClient<TApproveContext = void> {
 		}
 		this.#client = options.client;
 
-		// Use custom packageConfig if provided, otherwise determine from network
+		// Use custom packageConfig if provided, otherwise resolve genesis shared objects lazily.
 		if (options.packageConfig) {
 			this.#packageConfig = options.packageConfig;
 		} else {
-			const network = options.client.network;
-			switch (network) {
-				case 'testnet':
-					this.#packageConfig = TESTNET_MYSO_MESSAGING_STACK_PACKAGE_CONFIG;
-					break;
-				case 'mainnet':
-					this.#packageConfig = MAINNET_MYSO_MESSAGING_STACK_PACKAGE_CONFIG;
-					break;
-				default:
-					throw new MySoMessagingStackClientError(
-						`Unsupported network: ${network}. Provide a custom packageConfig for localnet/devnet.`,
-					);
-			}
+			throw new MySoMessagingStackClientError(
+				'packageConfig is required. Use createMySoMessagingStackClientAsync to resolve genesis shared objects.',
+			);
 		}
 
 		// Resolve extension dependencies by their registered names
