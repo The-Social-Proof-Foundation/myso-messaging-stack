@@ -10,46 +10,55 @@ import {
 } from 'react';
 import {
   createMySocialAuth,
-  isWalletOnlySession,
   type MySocialAuth,
   type Session,
 } from '@socialproof/mysocial-auth';
 import { Ed25519Keypair } from '@socialproof/myso/keypairs/ed25519';
-import { deriveKeypairFromSaltService } from '../lib/derive-mysocial-keypair';
+import { deriveKeypairFromSubAndSalt } from '../lib/derive-mysocial-keypair';
 import { getOrCreateDevMessengerKeypair } from '../lib/dev-signer';
+import { getSaltFromSession } from '../lib/get-salt-from-session';
+import {
+  canAttemptOAuthKeypairDerivation,
+  isTrueWalletOnlySession,
+  resolveOAuthSubForKeypair,
+  shouldUseRedirectAuth,
+  SESSION_STORAGE_KEY,
+} from '../lib/auth-utils';
 
 function devUnblockEnabled(): boolean {
-	const v = import.meta.env.VITE_DEV_UNBLOCK_MESSAGING_UI;
-	return v === 'true' || v === '1' || v === 'yes';
+  const v = import.meta.env.VITE_DEV_UNBLOCK_MESSAGING_UI;
+  return v === 'true' || v === '1' || v === 'yes';
+}
+
+function applyDevSigner(
+  setKeypair: (kp: Ed25519Keypair) => void,
+  setIsUsingDevMessengerSigner: (v: boolean) => void,
+  setDeriveKeyError: (v: string | null) => void,
+  setDerivingKeypair: (v: boolean) => void,
+): void {
+  setKeypair(getOrCreateDevMessengerKeypair());
+  setIsUsingDevMessengerSigner(true);
+  setDeriveKeyError(null);
+  setDerivingKeypair(false);
 }
 
 interface MySocialAuthContextValue {
   auth: MySocialAuth | null;
-  /** Current session after login refresh, if any */
   session: Session | null;
-  /** Signing key derived from OAuth session + salt; null until derivation succeeds */
   keypair: Ed25519Keypair | null;
-  /** True when using local dev ephemeral signer (see VITE_DEV_UNBLOCK_MESSAGING_UI) */
   isUsingDevMessengerSigner: boolean;
-  /** True when user is authenticated but wallet-only (cannot call /salt) */
   walletOnlyBlocked: boolean;
-  /** Recoverable error while fetching salt / deriving keypair */
   deriveKeyError: string | null;
   derivingKeypair: boolean;
-  /** Misconfigured auth env vars */
   configError: string | null;
-  /** Popup sign-in failure (blocked, timeout, etc.) */
   signInError: string | null;
-  /** Must be invoked synchronously inside a click handler (Safari popup rules). Errors land in signInError. */
   login: () => void;
   logout: () => Promise<void>;
-  /** Wallet address when session exists */
   connectedAddress: string | undefined;
+  refreshSession: () => void;
 }
 
-const MySocialAuthContext = createContext<MySocialAuthContextValue | null>(
-  null,
-);
+const MySocialAuthContext = createContext<MySocialAuthContextValue | null>(null);
 
 function readAuthConfig(): {
   config: Parameters<typeof createMySocialAuth>[0] | null;
@@ -71,7 +80,7 @@ function readAuthConfig(): {
     !redirectUri
   ) {
     const prodHint = import.meta.env.PROD
-      ? ' Preview/production bundles read env only at build time. Run vite build again after changing .env, or use pnpm dev during local development.'
+      ? ' Preview/production bundles read env only at build time. Run vite build again after changing .env.'
       : '';
     return {
       config: null,
@@ -87,7 +96,8 @@ function readAuthConfig(): {
       authOrigin,
       clientId,
       redirectUri,
-      storage: 'session' as const,
+      storage: 'session',
+      proactiveRefresh: true,
     },
     error: null,
   };
@@ -117,11 +127,15 @@ export function MySocialAuthProvider({
   const [deriveKeyError, setDeriveKeyError] = useState<string | null>(null);
   const [derivingKeypair, setDerivingKeypair] = useState(false);
   const [signInError, setSignInError] = useState<string | null>(null);
+  const [deriveNonce, setDeriveNonce] = useState(0);
 
   const authRef = useRef(auth);
   authRef.current = auth;
 
-  // Bootstrap + subscribe
+  const refreshSession = useCallback(() => {
+    setDeriveNonce((n) => n + 1);
+  }, []);
+
   useEffect(() => {
     if (!auth) {
       setSession(null);
@@ -136,19 +150,31 @@ export function MySocialAuthProvider({
 
     const unsub = auth.onAuthStateChange((s) => {
       setSession(s);
+      setDeriveNonce((n) => n + 1);
     });
+
+    const onBroadcast = () => {
+      void auth.getSession().then((s) => {
+        setSession(s);
+        setDeriveNonce((n) => n + 1);
+      });
+    };
+    window.addEventListener('mysocial-auth-broadcast-session', onBroadcast);
+    window.addEventListener('mysocial-auth-session-changed', onBroadcast);
 
     return () => {
       cancelled = true;
       unsub();
+      window.removeEventListener('mysocial-auth-broadcast-session', onBroadcast);
+      window.removeEventListener('mysocial-auth-session-changed', onBroadcast);
     };
   }, [auth]);
 
-  const walletOnlyBlocked = Boolean(session && isWalletOnlySession(session));
-
+  const walletOnlyBlocked = Boolean(
+    session && isTrueWalletOnlySession(session) && !devUnblockEnabled(),
+  );
   const connectedAddress = session?.user?.address;
 
-  // Derive keypair when we have a full OAuth session (not wallet-only)
   useEffect(() => {
     if (!auth) {
       setKeypair(null);
@@ -166,12 +192,14 @@ export function MySocialAuthProvider({
       return;
     }
 
-    if (isWalletOnlySession(session)) {
+    if (isTrueWalletOnlySession(session)) {
       if (devUnblockEnabled()) {
-        setKeypair(getOrCreateDevMessengerKeypair());
-        setIsUsingDevMessengerSigner(true);
-        setDeriveKeyError(null);
-        setDerivingKeypair(false);
+        applyDevSigner(
+          setKeypair,
+          setIsUsingDevMessengerSigner,
+          setDeriveKeyError,
+          setDerivingKeypair,
+        );
         return;
       }
       setKeypair(null);
@@ -186,15 +214,36 @@ export function MySocialAuthProvider({
     const expectedAddress = session.user?.address;
     if (!expectedAddress) {
       if (devUnblockEnabled()) {
-        setKeypair(getOrCreateDevMessengerKeypair());
-        setIsUsingDevMessengerSigner(true);
-        setDeriveKeyError(null);
-        setDerivingKeypair(false);
+        applyDevSigner(
+          setKeypair,
+          setIsUsingDevMessengerSigner,
+          setDeriveKeyError,
+          setDerivingKeypair,
+        );
         return;
       }
       setKeypair(null);
       setIsUsingDevMessengerSigner(false);
       setDeriveKeyError('Session has no wallet address.');
+      setDerivingKeypair(false);
+      return;
+    }
+
+    if (!canAttemptOAuthKeypairDerivation(session)) {
+      if (devUnblockEnabled()) {
+        applyDevSigner(
+          setKeypair,
+          setIsUsingDevMessengerSigner,
+          setDeriveKeyError,
+          setDerivingKeypair,
+        );
+        return;
+      }
+      setKeypair(null);
+      setIsUsingDevMessengerSigner(false);
+      setDeriveKeyError(
+        'This session is missing OAuth credentials needed to derive your signing key.',
+      );
       setDerivingKeypair(false);
       return;
     }
@@ -205,33 +254,56 @@ export function MySocialAuthProvider({
 
     (async () => {
       try {
-        const token = await auth.getAccessTokenForApi();
-        if (!token) {
-          throw new Error('No API access token; cannot call salt service.');
+        const sub = resolveOAuthSubForKeypair(session);
+        if (!sub) {
+          throw new Error('Session is missing OAuth sub for keypair derivation.');
         }
-        const kp = await deriveKeypairFromSaltService({
-          saltUrl,
-          accessToken: token,
-          sub: session.sub,
+
+        const salt = await getSaltFromSession(auth, session, saltUrl);
+        const kp = await deriveKeypairFromSubAndSalt({
+          sub,
+          salt,
           expectedAddress,
         });
+
         if (!cancelled) {
           setKeypair(kp);
           setIsUsingDevMessengerSigner(false);
           setDeriveKeyError(null);
+
+          try {
+            const raw = sessionStorage.getItem(SESSION_STORAGE_KEY);
+            if (raw) {
+              const parsed = JSON.parse(raw) as Session & { salt?: string };
+              if (parsed.salt !== salt) {
+                parsed.salt = salt;
+                sessionStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(parsed));
+              }
+            }
+          } catch {
+            // ignore
+          }
         }
       } catch (e) {
         if (!cancelled) {
           if (devUnblockEnabled()) {
-            setKeypair(getOrCreateDevMessengerKeypair());
-            setIsUsingDevMessengerSigner(true);
-            setDeriveKeyError(null);
+            applyDevSigner(
+              setKeypair,
+              setIsUsingDevMessengerSigner,
+              setDeriveKeyError,
+              setDerivingKeypair,
+            );
+            console.warn(
+              '[MySocialAuth] OAuth keypair derivation failed; using dev signer:',
+              e,
+            );
           } else {
             setKeypair(null);
             setIsUsingDevMessengerSigner(false);
             setDeriveKeyError(
               e instanceof Error ? e.message : 'Failed to derive signing key.',
             );
+            setDerivingKeypair(false);
           }
         }
       } finally {
@@ -244,7 +316,7 @@ export function MySocialAuthProvider({
     return () => {
       cancelled = true;
     };
-  }, [auth, session, saltUrl]);
+  }, [auth, session, saltUrl, deriveNonce]);
 
   const login = useCallback(() => {
     setSignInError(null);
@@ -253,9 +325,24 @@ export function MySocialAuthProvider({
       setSignInError('MySocial auth is not configured.');
       return;
     }
+
+    const mode = shouldUseRedirectAuth() ? 'redirect' : 'popup';
     void a
-      .signIn({ mode: 'popup', provider: 'none' })
+      .signIn({ mode, provider: 'google' })
       .catch((e: unknown) => {
+        if (mode === 'popup') {
+          void a.getSession().then((s) => {
+            if (s?.user?.address) {
+              setSession(s);
+              setDeriveNonce((n) => n + 1);
+              return;
+            }
+            setSignInError(
+              e instanceof Error ? e.message : 'Sign-in failed or was cancelled.',
+            );
+          });
+          return;
+        }
         setSignInError(
           e instanceof Error ? e.message : 'Sign-in failed or was cancelled.',
         );
@@ -289,6 +376,7 @@ export function MySocialAuthProvider({
       login,
       logout,
       connectedAddress,
+      refreshSession,
     }),
     [
       auth,
@@ -303,6 +391,7 @@ export function MySocialAuthProvider({
       login,
       logout,
       connectedAddress,
+      refreshSession,
     ],
   );
 
@@ -321,10 +410,10 @@ export function useMySocialAuth(): MySocialAuthContextValue {
   return ctx;
 }
 
-/** On-chain identity for messaging: always the derived keypair address when signed in (matches signer + permission checks). */
+/** On-chain identity: session address until derived keypair is ready. */
 export function useAuthenticatedAddress(): string | undefined {
-  const { keypair, connectedAddress } = useMySocialAuth();
-  if (keypair) {
+  const { keypair, connectedAddress, derivingKeypair } = useMySocialAuth();
+  if (keypair && !derivingKeypair) {
     return keypair.toMySoAddress();
   }
   return connectedAddress;

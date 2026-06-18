@@ -6,6 +6,7 @@ export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, '.', '');
   return {
     plugins: [tailwindcss(), react()],
+    appType: 'spa',
     server: {
       fs: {
         allow: ['..'],

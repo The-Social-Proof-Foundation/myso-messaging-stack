@@ -27,8 +27,8 @@ importers:
         specifier: file:../ts-sdks/packages/myso-messaging-stack
         version: file:../ts-sdks/packages/myso-messaging-stack(@socialproof/bcs@0.0.2)(@socialproof/mydata@0.0.4(@socialproof/myso@0.0.4(typescript@5.8.3)))(@socialproof/myso-groups@0.0.1(@socialproof/bcs@0.0.2)(@socialproof/myso@0.0.4(typescript@5.8.3)))(@socialproof/myso@0.0.4(typescript@5.8.3))
       '@socialproof/mysocial-auth':
-        specifier: ^0.12.0
-        version: 0.12.0
+        specifier: ^0.12.4
+        version: 0.12.4
       '@tailwindcss/vite':
         specifier: ^4.2.1
         version: 4.2.1(vite@6.4.1(jiti@2.6.1)(lightningcss@1.31.1))
@@ -537,8 +537,8 @@ packages:
     resolution: {integrity: sha512-3SbHrYfv9JdoFQuKAcdWXPUc7viVeMtkmm2/fnQiK7lvg0kmFKt00JEt1apDlG1T0ltPv/uMYUv3hL+cerRDyQ==}
     engines: {node: '>=22'}
 
-  '@socialproof/mysocial-auth@0.12.0':
-    resolution: {integrity: sha512-QdiSbcHZNBSOu14JIUySLO+kdAZ/Xr2B94Bz4Hgkk5WApShADvo1EMCcNmpx3hSom42+J6K0zO9ZKgi9LDSvDA==}
+  '@socialproof/mysocial-auth@0.12.4':
+    resolution: {integrity: sha512-f+1gmaES8to4w1AhoXxyOT637KYBcsWswxwBaGMvpaJl3+6clkYvEl99jZatWuMqXXou88hu23Pe+bjlj4R7Ng==}
 
   '@socialproof/utils@0.0.2':
     resolution: {integrity: sha512-J4mDPEQxUIbzNu9WDvLW21VRlh9F7W5GQtbjA+rit2+fdm+r5TszJ4DmvjkjfRBfFWyAl3nIaVzQGcasRIjOiw==}
@@ -1360,7 +1360,7 @@ snapshots:
       - '@gql.tada/vue-support'
       - typescript
 
-  '@socialproof/mysocial-auth@0.12.0':
+  '@socialproof/mysocial-auth@0.12.4':
     dependencies:
       '@socialproof/utils': 0.0.2
 

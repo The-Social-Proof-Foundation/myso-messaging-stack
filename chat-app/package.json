@@ -3,6 +3,7 @@
   "private": true,
   "version": "0.0.1",
   "type": "module",
+  "packageManager": "pnpm@10.17.0",
   "scripts": {
     "dev": "pnpm build:deps && rm -rf node_modules/.vite && vite",
     "dev:fast": "vite",
@@ -12,7 +13,7 @@
   },
   "dependencies": {
     "@socialproof/bcs": "^0.0.2",
-    "@socialproof/mysocial-auth": "^0.12.0",
+    "@socialproof/mysocial-auth": "^0.12.4",
     "@socialproof/myso-messaging-stack": "file:../ts-sdks/packages/myso-messaging-stack",
     "@socialproof/myso-groups": "^0.0.1",
     "@socialproof/mydata": "^0.0.4",
