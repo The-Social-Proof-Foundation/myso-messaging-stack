@@ -7,6 +7,7 @@
  * - Deduplicates incoming messages by messageId
  */
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { BlockedMessagingError } from '@socialproof/myso-messaging-stack';
 import { useRequiredMessagingClient } from '../contexts/MessagingClientContext';
 import type { AttachmentFile, AttachmentHandle } from '@socialproof/myso-messaging-stack';
 
@@ -61,7 +62,7 @@ function mergeMessage(prev: Message[], incoming: Message): Message[] {
   return [...prev, incoming].sort((a, b) => a.order - b.order);
 }
 
-export function useMessages(uuid: string): UseMessagesResult {
+export function useMessages(uuid: string, groupId: string): UseMessagesResult {
   const { client, signer } = useRequiredMessagingClient();
 
   const [messages, setMessages] = useState<Message[]>([]);
@@ -165,6 +166,22 @@ export function useMessages(uuid: string): UseMessagesResult {
     };
   }, [uuid, client, signer, loading]);
 
+  // Mark thread read + presence heartbeat for push gating
+  useEffect(() => {
+    if (loading || !groupId || messages.length === 0) return;
+
+    const maxOrder = Math.max(...messages.map((m) => m.order));
+    if (!Number.isFinite(maxOrder)) return;
+
+    client.messaging
+      .updateReadState({ signer, groupId, readUpto: maxOrder })
+      .catch((err) => console.warn('Failed to update read state:', err));
+
+    client.messaging.transport
+      .postPresence({ signer, active: true })
+      .catch((err) => console.warn('Failed to post presence:', err));
+  }, [messages, loading, groupId, client, signer]);
+
   // ------------------------------------------------------------------
   // Load older messages (pagination)
   // ------------------------------------------------------------------
@@ -233,9 +250,13 @@ export function useMessages(uuid: string): UseMessagesResult {
         setMessages((prev) => mergeMessage(prev, optimistic));
       } catch (err) {
         console.error('Failed to send message:', err);
-        setError(
-          err instanceof Error ? err.message : 'Failed to send message.',
-        );
+        if (err instanceof BlockedMessagingError) {
+          setError('You cannot message this user.');
+        } else {
+          setError(
+            err instanceof Error ? err.message : 'Failed to send message.',
+          );
+        }
       } finally {
         setSending(false);
       }

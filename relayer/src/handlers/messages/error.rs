@@ -26,25 +26,34 @@ pub enum ApiError {
     Unauthorized(String),
     /// Forbidden - authenticated but not authorized (403)
     Forbidden(String),
+    /// DM blocked by social graph (403, code BLOCKED)
+    Blocked,
 }
 /// Error response body
 #[derive(Serialize)]
 struct ErrorResponse {
     error: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    code: Option<String>,
 }
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        let (status, message) = match self {
-            ApiError::NotFound(msg) => (StatusCode::NOT_FOUND, msg),
-            ApiError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg),
-            ApiError::Conflict(msg) => (StatusCode::CONFLICT, msg),
-            ApiError::Internal(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
-            ApiError::Unauthorized(msg) => (StatusCode::UNAUTHORIZED, msg),
-            ApiError::Forbidden(msg) => (StatusCode::FORBIDDEN, msg),
+        let (status, message, code) = match self {
+            ApiError::NotFound(msg) => (StatusCode::NOT_FOUND, msg, None),
+            ApiError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg, None),
+            ApiError::Conflict(msg) => (StatusCode::CONFLICT, msg, None),
+            ApiError::Internal(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg, None),
+            ApiError::Unauthorized(msg) => (StatusCode::UNAUTHORIZED, msg, None),
+            ApiError::Forbidden(msg) => (StatusCode::FORBIDDEN, msg, None),
+            ApiError::Blocked => (
+                StatusCode::FORBIDDEN,
+                "Messaging blocked between these users".to_string(),
+                Some("BLOCKED".to_string()),
+            ),
         };
 
-        let body = Json(ErrorResponse { error: message });
+        let body = Json(ErrorResponse { error: message, code });
         (status, body).into_response()
     }
 }

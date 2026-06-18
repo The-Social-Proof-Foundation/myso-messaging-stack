@@ -7,6 +7,8 @@ pub mod attachment;
 pub mod group_aux;
 pub mod membership;
 pub mod message;
+pub mod push_device;
+pub mod user_read_state;
 
 // Re-export commonly used types
 pub use attachment::Attachment;
@@ -14,3 +16,5 @@ pub use attachment::Attachment;
 pub use membership::GroupMembership;
 pub use group_aux::{ReactionEntry, ReceiptStateResponse};
 pub use message::{Message, SyncStatus};
+pub use push_device::PushTokenRecord;
+pub use user_read_state::EncryptedBlobRecord;

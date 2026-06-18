@@ -3,6 +3,7 @@ pub mod config;
 pub mod handlers;
 pub mod models;
 pub mod services;
+pub mod server;
 pub mod state;
 pub mod storage;
 pub mod file_storage;

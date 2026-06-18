@@ -3,35 +3,49 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import type { Signer } from '@socialproof/myso/cryptography';
-import { parseSerializedSignature } from '@socialproof/myso/cryptography';
 import { fromHex, toHex } from '@socialproof/myso/utils';
 
-import type { Attachment } from '../attachments/types.js';
 import type { HttpClientConfig } from '../http/types.js';
 import { DEFAULT_HTTP_TIMEOUT } from '../http/types.js';
 import { HttpTimeoutError } from '../http/errors.js';
+import {
+	createBodyAuth,
+	createHeaderAuth,
+	createWalletHeaderAuth,
+	signAndCreateAuthHeaders,
+} from './auth-headers.js';
 import type { RelayerTransport } from './transport.js';
 import type {
 	DeleteMessageParams,
+	DeletePushTokenParams,
 	FetchMessageParams,
 	FetchMessagesParams,
 	FetchMessagesResult,
 	GetGroupReceiptsParams,
+	GetUserReadStateParams,
 	GroupReceiptState,
 	ListGroupPinsParams,
 	ListGroupReactionsParams,
 	PostGroupReceiptsParams,
 	PostGroupReactionParams,
+	PostPresenceParams,
+	PostPushTokenParams,
+	PutUserReadStateParams,
 	RelayerMessage,
 	RelayerReactionEntry,
 	SendMessageParams,
 	SendMessageResult,
 	SetGroupPinParams,
 	SubscribeParams,
-	SyncStatus,
 	UpdateMessageParams,
 } from './types.js';
 import { RelayerTransportError } from './types.js';
+import {
+	fromWireMessage,
+	toWireAttachment,
+	type WireMessageResponse,
+	type WireMessagesListResponse,
+} from './wire.js';
 
 /** Configuration for the HTTP polling transport. */
 export interface HTTPRelayerTransportConfig extends HttpClientConfig {
@@ -52,38 +66,6 @@ export interface HTTPRelayerTransportConfig extends HttpClientConfig {
 	headerAuthTtlMs?: number;
 }
 
-/** Raw attachment JSON shape from the relayer API (snake_case). */
-interface WireAttachment {
-	storage_id: string;
-	nonce: string;
-	encrypted_metadata: string;
-	metadata_nonce: string;
-}
-
-interface WireMessageResponse {
-	message_id: string;
-	group_id: string;
-	order: number;
-	encrypted_text: string | null;
-	nonce: string | null;
-	key_version: number;
-	sender_address: string;
-	created_at: number;
-	updated_at: number;
-	attachments: WireAttachment[] | null;
-	is_edited: boolean;
-	is_deleted: boolean;
-	sync_status: string;
-	quilt_patch_id: string | null;
-	signature: string;
-	public_key: string;
-}
-
-interface WireMessagesListResponse {
-	messages: WireMessageResponse[];
-	hasNext: boolean;
-}
-
 interface WireReactionEntry {
 	chain_seq: number;
 	emoji_code: number;
@@ -99,117 +81,30 @@ interface WireCreateMessageResponse {
 	message_id: string;
 }
 
+interface WireReadStateResponse {
+	encrypted_blob: string;
+	blob_version: number;
+	updated_at?: string;
+}
+
 interface WireErrorResponse {
 	error: string;
 	code?: string;
 }
 
-/** Convert a wire attachment to a domain Attachment. */
-function fromWireAttachment(wire: WireAttachment): Attachment {
-	return {
-		storageId: wire.storage_id,
-		nonce: wire.nonce,
-		encryptedMetadata: wire.encrypted_metadata,
-		metadataNonce: wire.metadata_nonce,
-	};
-}
-
-/** Convert a domain Attachment to the wire shape for POST/PUT payloads. */
-function toWireAttachment(attachment: Attachment): WireAttachment {
-	return {
-		storage_id: attachment.storageId,
-		nonce: attachment.nonce,
-		encrypted_metadata: attachment.encryptedMetadata,
-		metadata_nonce: attachment.metadataNonce,
-	};
-}
-
-/** Convert a relayer JSON message to a RelayerMessage domain object. */
-function fromWireMessage(wire: WireMessageResponse): RelayerMessage {
-	return {
-		messageId: wire.message_id,
-		groupId: wire.group_id,
-		order: wire.order,
-		encryptedText: wire.encrypted_text ? fromHex(wire.encrypted_text) : new Uint8Array(),
-		nonce: wire.nonce ? fromHex(wire.nonce) : new Uint8Array(),
-		keyVersion: BigInt(wire.key_version ?? 0),
-		senderAddress: wire.sender_address,
-		createdAt: wire.created_at,
-		updatedAt: wire.updated_at,
-		attachments: wire.attachments?.map(fromWireAttachment) ?? [],
-		isEdited: wire.is_edited,
-		isDeleted: wire.is_deleted,
-		syncStatus: wire.sync_status as SyncStatus,
-		quiltPatchId: wire.quilt_patch_id,
-		signature: wire.signature ?? '',
-		publicKey: wire.public_key ?? '',
-	};
-}
-
-function extractRawSignature(serializedSignature: string): Uint8Array {
-	const parsed = parseSerializedSignature(serializedSignature);
-	if (!parsed.signature) {
-		throw new Error(
-			'Unsupported signature scheme: only keypair signatures (Ed25519, Secp256k1, Secp256r1) are supported',
-		);
-	}
-	return parsed.signature;
-}
-
-function getPublicKeyHex(signer: Signer): string {
-	return toHex(signer.getPublicKey().toMySoBytes());
-}
-
-async function signAndCreateAuthHeaders(
+async function createWalletDeleteAuth(
 	signer: Signer,
-	messageBytes: Uint8Array,
+	token: string,
 ): Promise<Record<string, string>> {
-	const { signature } = await signer.signPersonalMessage(messageBytes);
-	const rawSig = extractRawSignature(signature);
-	// getPublicKey() is called after signPersonalMessage() so that signers which
-	// lazily resolve their key from the first signature (e.g. wallets that don't
-	// expose publicKey upfront) have it available by this point.
-	return {
-		'x-signature': toHex(rawSig),
-		'x-public-key': getPublicKeyHex(signer),
-	};
-}
-
-/**
- * Create body-based auth for POST/PUT requests.
- * Adds sender_address and timestamp to the payload, signs the full JSON body.
- */
-async function createBodyAuth(
-	signer: Signer,
-	payload: Record<string, unknown>,
-): Promise<{ body: Record<string, unknown>; headers: Record<string, string> }> {
-	const timestamp = Math.floor(Date.now() / 1000);
-	const body = {
-		...payload,
-		sender_address: signer.toMySoAddress(),
-		timestamp,
-	};
-	const bodyStr = JSON.stringify(body);
-	const bodyBytes = new TextEncoder().encode(bodyStr);
-	const headers = await signAndCreateAuthHeaders(signer, bodyBytes);
-	return { body, headers };
-}
-
-/**
- * Create header-based auth for GET/DELETE requests.
- * Signs the canonical string "timestamp:senderAddress:groupId".
- */
-async function createHeaderAuth(signer: Signer, groupId: string): Promise<Record<string, string>> {
 	const timestamp = Math.floor(Date.now() / 1000);
 	const senderAddress = signer.toMySoAddress();
-	const canonical = `${timestamp}:${senderAddress}:${groupId}`;
+	const canonical = `${timestamp}:${senderAddress}:${token}`;
 	const canonicalBytes = new TextEncoder().encode(canonical);
 	const authHeaders = await signAndCreateAuthHeaders(signer, canonicalBytes);
 	return {
 		...authHeaders,
 		'x-sender-address': senderAddress,
 		'x-timestamp': timestamp.toString(),
-		'x-group-id': groupId,
 	};
 }
 
@@ -297,6 +192,11 @@ export class HTTPRelayerTransport implements RelayerTransport {
 	#relayerPath(path: string): string {
 		const rel = path.startsWith('/') ? path : `/${path}`;
 		return this.#apiPrefix ? `${this.#apiPrefix}${rel}` : rel;
+	}
+
+	#v1Path(path: string): string {
+		const rel = path.startsWith('/') ? path : `/${path}`;
+		return `/v1${rel}`;
 	}
 
 	async #cachedHeaderAuth(signer: Signer, groupId: string): Promise<Record<string, string>> {
@@ -482,6 +382,64 @@ export class HTTPRelayerTransport implements RelayerTransport {
 		if (params.readUpto !== undefined) payload.read_upto = params.readUpto;
 		const { body, headers } = await createBodyAuth(params.signer, payload);
 		await this.#request(this.#relayerPath(`/groups/${params.groupId}/receipts`), {
+			method: 'POST',
+			headers: { ...headers, 'Content-Type': 'application/json' },
+			body: JSON.stringify(body),
+		});
+	}
+
+	async getUserReadState(params: GetUserReadStateParams) {
+		const headers = await createWalletHeaderAuth(params.signer);
+		const wire = await this.#request<WireReadStateResponse>(
+			this.#v1Path('/users/read-state'),
+			{ method: 'GET', headers },
+		);
+		return {
+			encryptedBlob: fromHex(wire.encrypted_blob),
+			blobVersion: wire.blob_version,
+			updatedAt: wire.updated_at,
+		};
+	}
+
+	async putUserReadState(params: PutUserReadStateParams): Promise<void> {
+		const payload = {
+			encrypted_blob: toHex(params.encryptedBlob),
+			blob_version: params.blobVersion,
+		};
+		const { body, headers } = await createBodyAuth(params.signer, payload);
+		await this.#request(this.#v1Path('/users/read-state'), {
+			method: 'PUT',
+			headers: { ...headers, 'Content-Type': 'application/json' },
+			body: JSON.stringify(body),
+		});
+	}
+
+	async postPushToken(params: PostPushTokenParams): Promise<void> {
+		const payload = {
+			platform: params.platform,
+			token: params.token,
+			environment: params.environment,
+		};
+		const { body, headers } = await createBodyAuth(params.signer, payload);
+		await this.#request(this.#v1Path('/devices/push-tokens'), {
+			method: 'POST',
+			headers: { ...headers, 'Content-Type': 'application/json' },
+			body: JSON.stringify(body),
+		});
+	}
+
+	async deletePushToken(params: DeletePushTokenParams): Promise<void> {
+		const headers = await createWalletDeleteAuth(params.signer, params.token);
+		await this.#request(this.#v1Path(`/devices/push-tokens/${params.token}`), {
+			method: 'DELETE',
+			headers,
+		});
+	}
+
+	async postPresence(params: PostPresenceParams): Promise<void> {
+		const payload = { active: params.active ?? true };
+		const { body, headers } = await createBodyAuth(params.signer, payload);
+		await this.#request(this.#v1Path('/devices/presence'), {
 			method: 'POST',
 			headers: { ...headers, 'Content-Type': 'application/json' },
 			body: JSON.stringify(body),

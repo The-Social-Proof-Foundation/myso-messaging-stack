@@ -675,6 +675,8 @@ async fn test_create_message_sends_sync_notification() {
     use tower::ServiceExt;
 
     use messaging_relayer::handlers::messages::create_message;
+    use messaging_relayer::services::block_check::BlockCheckService;
+    use messaging_relayer::services::push::PushService;
     use messaging_relayer::state::AppState;
 
     // Ed25519 test wallet (same as auth_integration_test)
@@ -703,7 +705,6 @@ async fn test_create_message_sends_sync_notification() {
     let storage: Arc<dyn StorageAdapter> = Arc::new(InMemoryStorage::new());
     let (sync_tx, mut sync_rx) = mpsc::unbounded_channel::<()>();
     let config = Config::default();
-    let app_state = AppState::new(storage, config.clone(), sync_tx);
 
     // Set up auth middleware with test membership
     let membership_store = Arc::new(InMemoryMembershipStore::new()) as Arc<dyn MembershipStore>;
@@ -712,6 +713,16 @@ async fn test_create_message_sends_sync_notification() {
         group_id,
         address,
         vec![MessagingPermission::MessagingSender],
+    );
+
+    let block_check = BlockCheckService::from_config(&config);
+    let push_service = PushService::from_config(&config);
+    let app_state = AppState::new_for_tests(
+        storage,
+        sync_tx,
+        membership_store.clone(),
+        block_check,
+        push_service,
     );
 
     let auth_state = AuthState {

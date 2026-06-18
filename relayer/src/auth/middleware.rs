@@ -63,7 +63,7 @@ pub struct AuthState {
 }
 
 /// Extracts a header value as a trimmed String.
-fn get_header(headers: &HeaderMap, name: &str) -> Option<String> {
+pub(crate) fn get_header(headers: &HeaderMap, name: &str) -> Option<String> {
     headers
         .get(name)
         .and_then(|v| v.to_str().ok())
@@ -300,7 +300,7 @@ pub async fn auth_middleware(
 }
 
 /// Creates an error response for auth failures.
-fn auth_error_response(status: StatusCode, error: AuthError) -> Response {
+pub(crate) fn auth_error_response(status: StatusCode, error: AuthError) -> Response {
     let code = match &error {
         AuthError::RequestExpired { .. } => "REQUEST_EXPIRED",
         AuthError::InvalidSignatureFormat(_) => "INVALID_SIGNATURE_FORMAT",
@@ -317,7 +317,7 @@ fn auth_error_response(status: StatusCode, error: AuthError) -> Response {
     error_response(status, &error.to_string(), code)
 }
 
-fn error_response(status: StatusCode, message: &str, code: &str) -> Response {
+pub(crate) fn error_response(status: StatusCode, message: &str, code: &str) -> Response {
     let body = AuthErrorResponse {
         error: message.to_string(),
         code: code.to_string(),

@@ -155,6 +155,39 @@ export interface PostGroupReceiptsParams {
 	readUpto?: number;
 }
 
+export interface UserReadStateWire {
+	encryptedBlob: Uint8Array;
+	blobVersion: number;
+	updatedAt?: string;
+}
+
+export interface GetUserReadStateParams {
+	signer: Signer;
+}
+
+export interface PutUserReadStateParams {
+	signer: Signer;
+	encryptedBlob: Uint8Array;
+	blobVersion: number;
+}
+
+export interface PostPushTokenParams {
+	signer: Signer;
+	platform: 'ios';
+	token: string;
+	environment: 'sandbox' | 'production';
+}
+
+export interface DeletePushTokenParams {
+	signer: Signer;
+	token: string;
+}
+
+export interface PostPresenceParams {
+	signer: Signer;
+	active?: boolean;
+}
+
 /**
  * Structured error from a transport implementation.
  * Uses HTTP-style status codes for error discrimination (e.g. 401, 404, 405).
@@ -180,6 +213,13 @@ export type RelayerConfig = RelayerHTTPConfig | RelayerCustomTransportConfig;
 export interface RelayerHTTPConfig extends HttpClientConfig {
 	relayerUrl: string;
 	pollingIntervalMs?: number;
+	/**
+	 * Realtime delivery mode for `subscribe()`.
+	 * - `hybrid` (default): WebSocket with HTTP polling fallback
+	 * - `ws`: WebSocket only (no HTTP polling fallback)
+	 * - `poll`: HTTP polling only
+	 */
+	realtime?: 'ws' | 'poll' | 'hybrid';
 	/**
 	 * Prefix for REST paths, e.g. `/v1` so message CRUD uses `/v1/messages`.
 	 * Default `''` uses legacy `/messages`.

@@ -6,7 +6,7 @@ use uuid::Uuid;
 use crate::models::{Attachment, Message, SyncStatus};
 
 /// Wire-format attachment with hex-encoded binary fields.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct AttachmentResponse {
     pub storage_id: String,
     pub nonce: String,
@@ -26,7 +26,7 @@ impl From<Attachment> for AttachmentResponse {
 }
 
 /// Response for a single message
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct MessageResponse {
     pub message_id: Uuid,
     pub group_id: String,

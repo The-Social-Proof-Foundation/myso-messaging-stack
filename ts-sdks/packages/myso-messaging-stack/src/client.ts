@@ -2,19 +2,24 @@
 // Copyright (c) The Social Proof Foundation, LLC.
 // SPDX-License-Identifier: Apache-2.0
 
+import type { MySoGroupsClient } from '@socialproof/myso-groups';
 import type { MyDataClient } from '@socialproof/mydata';
 import type { Signer } from '@socialproof/myso/cryptography';
 import type { ClientWithCoreApi } from '@socialproof/myso/client';
 import type { Transaction } from '@socialproof/myso/transactions';
 
+import { BlockedMessagingError, BlockGatingClient } from './block-gating.js';
 import { MySoMessagingStackClientError } from './error.js';
+import { ReadStateManager } from './read-state/read-state-manager.js';
+import type { UserReadState } from './read-state/types.js';
 import { AttachmentsManager } from './attachments/attachments-manager.js';
 import type { Attachment, AttachmentFile, AttachmentHandle } from './attachments/types.js';
 import { EnvelopeEncryption, buildMessageAad } from './encryption/envelope-encryption.js';
 import type { EncryptOptions, DecryptOptions } from './encryption/envelope-encryption.js';
 import { HTTPRelayerTransport } from './relayer/http-transport.js';
+import { HybridRelayerTransport } from './relayer/hybrid-transport.js';
 import type { RelayerTransport } from './relayer/transport.js';
-import type { RelayerConfig, RelayerMessage } from './relayer/types.js';
+import type { RelayerConfig, RelayerHTTPConfig, RelayerMessage } from './relayer/types.js';
 import {
 	signMessageContent,
 	verifyMessageSender,
@@ -87,6 +92,7 @@ export function mysoMessagingStack<
 	relayer,
 	attachments,
 	recovery,
+	blockGating,
 }: {
 	name?: Name;
 	/** Name under which the MySoGroupsClient extension is registered (default: 'groups'). */
@@ -101,6 +107,7 @@ export function mysoMessagingStack<
 	attachments?: MySoMessagingStackClientOptions<TApproveContext>['attachments'];
 	/** Optional recovery transport for fetching messages from an alternative storage backend. */
 	recovery?: RecoveryTransport;
+	blockGating?: MySoMessagingStackClientOptions<TApproveContext>['blockGating'];
 }) {
 	return {
 		name,
@@ -114,6 +121,7 @@ export function mysoMessagingStack<
 				relayer,
 				attachments,
 				recovery,
+				blockGating,
 			});
 		},
 	};
@@ -152,6 +160,9 @@ export function mysoMessagingStack<
 export class MySoMessagingStackClient<TApproveContext = void> {
 	#packageConfig: MySoMessagingStackPackageConfig;
 	#client: ClientWithCoreApi;
+	#groupsClient: MySoGroupsClient;
+	#blockGating: BlockGatingClient | undefined;
+	#readState: ReadStateManager;
 	#attachments: AttachmentsManager<TApproveContext> | undefined;
 	#recovery: RecoveryTransport | undefined;
 	readonly #textEncoder = new TextEncoder();
@@ -184,6 +195,11 @@ export class MySoMessagingStackClient<TApproveContext = void> {
 		// Resolve extension dependencies by their registered names
 		const groupsExt = options.client[options.groupsName];
 		const mydataExt = options.client[options.mydataName] as MyDataClient;
+
+		this.#groupsClient = groupsExt;
+		this.#blockGating = options.blockGating
+			? new BlockGatingClient(options.blockGating)
+			: undefined;
 
 		// Build order matters: bcs → derive → view → encryption → call → tx
 		this.bcs = new MySoMessagingStackBCS({ packageConfig: this.#packageConfig });
@@ -223,14 +239,9 @@ export class MySoMessagingStackClient<TApproveContext = void> {
 
 		this.transport = options.relayer.transport
 			? options.relayer.transport
-			: new HTTPRelayerTransport({
-					relayerUrl: options.relayer.relayerUrl,
-					apiPrefix: 'apiPrefix' in options.relayer ? options.relayer.apiPrefix : undefined,
-					pollingIntervalMs: options.relayer.pollingIntervalMs,
-					fetch: options.relayer.fetch,
-					timeout: options.relayer.timeout,
-					onError: options.relayer.onError,
-				});
+			: buildDefaultRelayerTransport(options.relayer);
+
+		this.#readState = new ReadStateManager(this.transport);
 
 		this.#recovery = options.recovery;
 	}
@@ -281,6 +292,8 @@ export class MySoMessagingStackClient<TApproveContext = void> {
 		const { groupId, encryptionHistoryId } = this.derive.resolveGroupRef(options.groupRef);
 		const approveContext = this.#approveContextSpread(options);
 		const senderAddress = options.signer.toMySoAddress();
+
+		await this.#assertDmNotBlocked(groupId, senderAddress);
 
 		// 1. Encrypt text (empty string for attachment-only messages).
 		const textBytes = this.#textEncoder.encode(options.text ?? '');
@@ -504,6 +517,28 @@ export class MySoMessagingStackClient<TApproveContext = void> {
 		}
 	}
 
+	/** Fetch and decrypt the wallet-scoped read-state document from the relayer. */
+	async getReadState(options: { signer: Signer }): Promise<UserReadState> {
+		return this.#readState.getReadState(options.signer);
+	}
+
+	/** Merge and upload an updated read watermark for a group. */
+	async updateReadState(options: {
+		signer: Signer;
+		groupId: string;
+		readUpto: number;
+	}): Promise<UserReadState> {
+		return this.#readState.updateReadState(options);
+	}
+
+	/** Compute unread counts for the given on-chain group IDs. */
+	async getUnreadCounts(options: {
+		signer: Signer;
+		groupIds: string[];
+	}): Promise<Record<string, number>> {
+		return this.#readState.getUnreadCounts(options);
+	}
+
 	/** Disconnect the underlying transport. Active subscriptions will complete. */
 	disconnect(): void {
 		this.transport.disconnect();
@@ -691,6 +726,20 @@ export class MySoMessagingStackClient<TApproveContext = void> {
 	}
 
 	// === Private: Validation ===
+
+	async #assertDmNotBlocked(groupId: string, senderAddress: string): Promise<void> {
+		if (!this.#blockGating) return;
+		const { members } = await this.#groupsClient.view.getMembers({ groupId });
+		const peers = members.filter((m) => m.address !== senderAddress);
+		if (peers.length !== 1) return;
+		const blocked = await this.#blockGating.checkEitherBlocked(
+			senderAddress,
+			peers[0]!.address,
+		);
+		if (blocked) {
+			throw new BlockedMessagingError();
+		}
+	}
 
 	#validateSendInput(options: { text?: string; files?: AttachmentFile[] }): void {
 		const hasText = options.text !== undefined && options.text !== '';
@@ -885,4 +934,27 @@ export class MySoMessagingStackClient<TApproveContext = void> {
 			'clear group handle',
 		);
 	}
+}
+
+function buildDefaultRelayerTransport(relayer: RelayerHTTPConfig): RelayerTransport {
+	const baseConfig = {
+		relayerUrl: relayer.relayerUrl,
+		apiPrefix: relayer.apiPrefix,
+		pollingIntervalMs: relayer.pollingIntervalMs,
+		fetch: relayer.fetch,
+		timeout: relayer.timeout,
+		onError: relayer.onError,
+	};
+
+	const mode = relayer.realtime ?? 'hybrid';
+
+	if (mode === 'poll') {
+		return new HTTPRelayerTransport(baseConfig);
+	}
+
+	return new HybridRelayerTransport({
+		...baseConfig,
+		preferWebSocket: true,
+		fallbackToHttp: mode === 'hybrid',
+	});
 }

@@ -41,6 +41,20 @@ export {
 	type WalletMessagingPolicy,
 	type MessagingGatingClientOptions,
 } from './gating.js';
+export {
+	BlockGatingClient,
+	createBlockGatingClient,
+	BlockedMessagingError,
+	type BlockGatingClientOptions,
+} from './block-gating.js';
+export {
+	ReadStateManager,
+	encryptReadState,
+	decryptReadState,
+	createEmptyReadState,
+	mergeReadState,
+	type UserReadState,
+} from './read-state/index.js';
 export * from './types.js';
 export * from './encryption/index.js';
 export * from './relayer/index.js';

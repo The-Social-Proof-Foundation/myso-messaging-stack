@@ -3,6 +3,7 @@ import { Sidebar } from './components/Sidebar';
 import { ChatArea } from './components/ChatArea';
 import { CreateGroupModal } from './components/CreateGroupModal';
 import { useGroupDiscovery } from './hooks/useGroupDiscovery';
+import { useUnreadCounts } from './hooks/useUnreadCounts';
 import {
   useMessagingClientInitError,
   useMessagingClientLoading,
@@ -38,6 +39,8 @@ function App() {
     loading: discoveryLoading,
     refresh: refreshGroups,
   } = useGroupDiscovery(address);
+
+  const unreadCounts = useUnreadCounts(groups);
 
   const [selectedUuid, setSelectedUuid] = useState<string | null>(null);
   const [showCreateModal, setShowCreateModal] = useState(false);
@@ -204,6 +207,7 @@ function App() {
             <Sidebar
               groups={groups}
               selectedUuid={selectedUuid}
+              unreadCounts={unreadCounts}
               onSelectGroup={setSelectedUuid}
               onCreateGroup={() => setShowCreateModal(true)}
               loading={discoveryLoading}

@@ -25,6 +25,8 @@ use messaging_relayer::{
     config::Config,
     handlers::health::health_check,
     handlers::messages::{create_message, delete_message, get_messages, update_message},
+    services::block_check::BlockCheckService,
+    services::push::PushService,
     state::AppState,
     storage::{create_storage, StorageType},
 };
@@ -58,7 +60,15 @@ fn create_test_app(membership_store: Arc<dyn MembershipStore>) -> Router {
     let config = Config::default();
     let storage = create_storage(StorageType::InMemory);
     let (sync_tx, _rx) = tokio::sync::mpsc::unbounded_channel::<()>();
-    let app_state = AppState::new(storage, config.clone(), sync_tx);
+    let block_check = BlockCheckService::from_config(&config);
+    let push_service = PushService::from_config(&config);
+    let app_state = AppState::new_for_tests(
+        storage,
+        sync_tx,
+        membership_store.clone(),
+        block_check,
+        push_service,
+    );
 
     let auth_state = AuthState {
         membership_store,

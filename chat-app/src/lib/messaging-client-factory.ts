@@ -21,6 +21,8 @@ const KNOWN_RPC_NETWORK =
 const RELAYER_URL =
   import.meta.env.VITE_RELAYER_URL || 'http://localhost:3003';
 
+const SOCIAL_SERVER_URL = import.meta.env.VITE_SOCIAL_SERVER_URL || '';
+
 const FILE_STORAGE_PUBLISHER_URL =
   import.meta.env.VITE_FILE_STORAGE_PUBLISHER_URL || '';
 const FILE_STORAGE_AGGREGATOR_URL =
@@ -127,8 +129,17 @@ export async function createFreshMessagingClient(
     },
     relayer: {
       relayerUrl: RELAYER_URL,
+      apiPrefix: '/v1',
       fetch: (...args: Parameters<typeof fetch>) => fetch(...args),
     },
+    ...(SOCIAL_SERVER_URL
+      ? {
+          blockGating: {
+            socialServerUrl: SOCIAL_SERVER_URL,
+            fetch: (...args: Parameters<typeof fetch>) => fetch(...args),
+          },
+        }
+      : {}),
     attachments: attachmentsConfig,
     genesis: {
       graphqlUrl: getGenesisGraphqlUrl(),

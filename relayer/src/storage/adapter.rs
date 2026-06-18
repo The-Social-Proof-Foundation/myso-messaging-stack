@@ -55,7 +55,10 @@ use async_trait::async_trait;
 use thiserror::Error;
 use uuid::Uuid;
 
-use crate::models::{Attachment, Message, ReactionEntry, ReceiptStateResponse, SyncStatus};
+use crate::models::{
+    Attachment, EncryptedBlobRecord, Message, PushTokenRecord, ReactionEntry, ReceiptStateResponse,
+    SyncStatus,
+};
 
 /// Errors that can occur during storage operations.
 #[derive(Debug, Error)]
@@ -215,4 +218,28 @@ pub trait StorageAdapter: Send + Sync {
         group_id: &str,
         member: &str,
     ) -> StorageResult<ReceiptStateResponse>;
+
+    // === Encrypted user read-state (opaque blob) ===
+
+    async fn get_user_read_state(&self, wallet: &str) -> StorageResult<Option<EncryptedBlobRecord>>;
+
+    async fn put_user_read_state(
+        &self,
+        wallet: &str,
+        record: EncryptedBlobRecord,
+    ) -> StorageResult<()>;
+
+    // === Push device tokens ===
+
+    async fn upsert_push_token(&self, record: PushTokenRecord) -> StorageResult<()>;
+
+    async fn delete_push_token(&self, wallet: &str, token: &str) -> StorageResult<()>;
+
+    async fn list_push_tokens_for_wallet(&self, wallet: &str) -> StorageResult<Vec<PushTokenRecord>>;
+
+    // === Presence (last seen) ===
+
+    async fn update_presence(&self, wallet: &str) -> StorageResult<()>;
+
+    async fn get_presence_last_seen(&self, wallet: &str) -> StorageResult<Option<chrono::DateTime<chrono::Utc>>>;
 }

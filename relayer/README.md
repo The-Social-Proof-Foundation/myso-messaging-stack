@@ -22,8 +22,14 @@ The relayer is an indexer — it only reflects what is on-chain. It never makes 
 - **Permission-based access control** via Groups SDK on-chain events
 - **Membership sync** via gRPC subscription to MySo blockchain checkpoints
 - **File Storage archival** with background sync worker for decentralized backup storage
-- **Pluggable storage** via the `StorageAdapter` trait (in-memory default, PostgreSQL planned)
+- **Pluggable storage** via the `StorageAdapter` trait (in-memory default, PostgreSQL for production)
 - **Ownership enforcement** — only the original sender can edit or delete their message
+- **DM block enforcement** — optional `SOCIAL_SERVER_URL` + `BlockCheckService` returns `403` code `BLOCKED` for 1:1 DMs
+- **Encrypted read-state** — opaque `GET/PUT /v1/users/read-state` per wallet (see `docs/myso-messaging-stack/ReadState.md`)
+- **Optional push** — `POST /v1/devices/push-tokens`, `POST /v1/devices/presence`, env-gated APNs delivery on new messages (see `docs/myso-messaging-stack/ClientSide-iOS.md`)
+- **WebSocket realtime** — `GET /v1/ws` pushes full encrypted `MessageResponse` JSON; Postgres `LISTEN/NOTIFY` coordinates cross-instance delivery (metadata only on NOTIFY)
+
+**Deprecated:** plaintext `GET/POST /v1/groups/:id/receipts` — use encrypted read-state instead.
 
 ---
 
@@ -276,6 +282,37 @@ Soft-deletes a message. Only the original sender can delete their own message (o
 
 ---
 
+### `GET /v1/ws` (WebSocket)
+
+Live message subscription for group members. The relayer **never decrypts** message content — WebSocket frames carry the same encrypted wire JSON as `GET /messages`.
+
+**Auth:** Same canonical string as GET messages: `"timestamp:sender_address:group_id"`. Browsers cannot set custom headers on WebSocket upgrade, so pass auth as query parameters: `group_id`, `sender_address`, `timestamp`, `signature`, `public_key`. Optional `after_order` filters events server-side.
+
+**Wire frame (server → client):**
+
+```json
+{
+  "type": "message.created",
+  "message": {
+    "message_id": "...",
+    "group_id": "...",
+    "order": 11,
+    "encrypted_text": "...",
+    "nonce": "...",
+    "signature": "...",
+    "public_key": "..."
+  }
+}
+```
+
+**Postgres cross-instance signal:** On `STORAGE_TYPE=postgres`, each `INSERT` atomically emits `pg_notify('message_events', metadata_json)` where the payload contains only `message_id`, `group_id`, `order`, and `sender` — **not** ciphertext. Each relayer instance listens, loads the encrypted row from storage, and fans out the full wire frame to local WebSocket subscribers.
+
+**In-memory dev:** The create-message handler publishes directly to the in-process `RealtimeHub` (no NOTIFY).
+
+The TypeScript SDK uses `HybridRelayerTransport` by default (WebSocket primary, HTTP polling fallback). Set `realtime: 'poll'` to force polling only.
+
+---
+
 ### Error Responses
 
 All error responses follow this format:
@@ -349,9 +386,50 @@ Message deleted      ──→  DELETE_PENDING ──→  DELETED
 - `DELETE_PENDING` — Message marked for deletion, pending tombstone archival
 - `DELETED` — Deletion tombstone archived to File Storage
 
-### Future: PostgreSQL
+### PostgreSQL (production)
 
-A PostgreSQL adapter can be implemented against the same `StorageAdapter` trait. This would provide immediate durability (messages persisted to disk before responding to the client) without relying on the File Storage sync window. The storage backend is selected via the `STORAGE_TYPE` environment variable.
+Set `STORAGE_TYPE=postgres` and `DATABASE_URL` for durable storage. The Postgres adapter implements the full `StorageAdapter` trait:
+
+| Data | Postgres table | Notes |
+|------|----------------|-------|
+| Messages | `messages` | Includes unique `(group_id, nonce)` index for replay protection |
+| Encrypted read-state | `user_read_states` | Opaque blobs per wallet |
+| Push tokens | `push_tokens` | iOS/APNs registration |
+| Presence | `presence` | Last-seen for push gating |
+| Reaction tallies | `reaction_tallies` | Off-chain mirror |
+| Group pins | `group_pins` | Off-chain mirror |
+
+**Still in-memory (by design):**
+
+| Data | Rationale |
+|------|-----------|
+| Plaintext receipts (`/v1/groups/:id/receipts`) | Deprecated — use encrypted read-state |
+| Block check cache | TTL LRU; social-server is source of truth |
+
+**Membership cache** is separate from `StorageAdapter`. Set `MEMBERSHIP_STORE_TYPE=postgres` (same `DATABASE_URL`) to persist group permissions across restarts. First deploy with an empty DB still requires live on-chain membership events before auth succeeds (persist-only strategy).
+
+Schema is applied via versioned SQL migrations in `relayer/migrations/` at connect time.
+
+### APNs push delivery
+
+When `PUSH_ENABLED=true` and all APNs credentials are set, the relayer sends **metadata-only** background pushes to offline iOS clients after each new message is stored. Push fan-out runs asynchronously so message POST latency is unaffected.
+
+**Gating:** push is skipped for the sender and for wallets with presence updated within `PRESENCE_TTL_SECS` (default 45s).
+
+**Payload** (no message plaintext — relayer never decrypts):
+
+```json
+{
+  "aps": { "content-available": 1 },
+  "group_id": "<group_id>"
+}
+```
+
+APNs headers: `apns-topic` = `APNS_BUNDLE_ID`, `apns-push-type` = `background`, `apns-priority` = `5`.
+
+**Token lifecycle:** HTTP 410 (Unregistered) responses automatically delete the stale token from storage. Token `environment` must match server `APNS_ENVIRONMENT` (`sandbox` or `production`).
+
+See [`docs/myso-messaging-stack/ClientSide-iOS.md`](../docs/myso-messaging-stack/ClientSide-iOS.md) for the iOS client-side integration flow.
 
 ---
 
@@ -463,17 +541,28 @@ All configuration is loaded from environment variables. The relayer also support
 | Variable | Default | Required | Description |
 |----------|---------|----------|-------------|
 | `PORT` | `3000` | No | HTTP server port |
-| `REQUEST_TTL_SECONDS` | `300` | No | Timestamp validity window in seconds for replay protection (5 minutes) |
-| `STORAGE_TYPE` | `memory` | No | Storage backend — currently only `memory` is implemented |
-| `MEMBERSHIP_STORE_TYPE` | `memory` | No | Membership cache backend — currently only `memory` is implemented |
+| `REQUEST_TTL_SECONDS` | `900` | No | Timestamp validity window in seconds for replay protection (15 minutes) |
+| `STORAGE_TYPE` | `memory` | No | Storage backend: `memory` or `postgres` |
+| `DATABASE_URL` | — | When `STORAGE_TYPE=postgres` or `MEMBERSHIP_STORE_TYPE=postgres` | PostgreSQL connection string |
+| `MEMBERSHIP_STORE_TYPE` | `memory` | No | Membership cache: `memory` or `postgres` (recommended with `DATABASE_URL` in production) |
 | `MYSO_RPC_URL` | — | **Yes** | MySo fullnode gRPC URL for checkpoint subscription (e.g., `https://fullnode.testnet.mysocial.network:443`) |
 | `GROUPS_PACKAGE_ID` | Genesis `0x2` (framework `permissioned_group`) | No | Override only for non-genesis dev chains |
+| `SOCIAL_SERVER_URL` | — | No | myso-social-server base URL for DM block checks |
+| `BLOCK_CHECK_ENABLED` | `true` when URL set | No | Kill switch for block checks |
+| `BLOCK_CACHE_TTL_SECS` | `300` | No | Block check LRU cache TTL |
+| `BLOCK_CACHE_MAX_ENTRIES` | `100000` | No | Block check LRU max entries |
+| `PUSH_ENABLED` | `false` | No | Enable APNs push delivery on new messages |
+| `PRESENCE_TTL_SECS` | `45` | No | Skip push if wallet seen within N seconds |
+| `APNS_KEY_ID`, `APNS_TEAM_ID`, `APNS_BUNDLE_ID`, `APNS_AUTH_KEY_PATH`, `APNS_ENVIRONMENT` | — | When push enabled | APNs credentials (HTTP/2 + JWT via `.p8` key) |
 | `FILE_STORAGE_PUBLISHER_URL` | `https://publisher.file-storage-testnet.mysocial.network` | No | File Storage publisher endpoint for storing blobs/quilts |
 | `FILE_STORAGE_AGGREGATOR_URL` | `https://aggregator.file-storage-testnet.mysocial.network` | No | File Storage aggregator endpoint for reading blobs |
 | `FILE_STORAGE_STORAGE_EPOCHS` | `5` | No | Number of File Storage epochs to persist stored data |
 | `FILE_STORAGE_SYNC_INTERVAL_SECS` | `3600` | No | Seconds between timer-based sync cycles (1 hour) |
 | `FILE_STORAGE_SYNC_BATCH_SIZE` | `100` | No | Max messages per sync cycle (hard-capped at 666 by File Storage quilt limit) |
 | `FILE_STORAGE_SYNC_MESSAGE_THRESHOLD` | `50` | No | Number of new messages that trigger an immediate sync (0 = timer-only) |
+| `REALTIME_ENABLED` | `true` when `STORAGE_TYPE=postgres`, else follows default | No | Master switch for WebSocket endpoint and Postgres LISTEN worker |
+| `WS_PING_INTERVAL_SECS` | `30` | No | Server-side presence refresh interval for active WebSocket connections |
+| `RUST_LOG` | `messaging_relayer=info` | No | Log level |
 
 ---
 

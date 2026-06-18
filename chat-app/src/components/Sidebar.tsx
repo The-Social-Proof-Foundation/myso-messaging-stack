@@ -3,6 +3,7 @@ import type { StoredGroup } from '../lib/group-store';
 interface SidebarProps {
   groups: StoredGroup[];
   selectedUuid: string | null;
+  unreadCounts?: Record<string, number>;
   onSelectGroup: (uuid: string) => void;
   onCreateGroup: () => void;
   loading?: boolean;
@@ -11,6 +12,7 @@ interface SidebarProps {
 export function Sidebar({
   groups,
   selectedUuid,
+  unreadCounts = {},
   onSelectGroup,
   onCreateGroup,
   loading = false,
@@ -51,7 +53,9 @@ export function Sidebar({
           </div>
         ) : (
           <ul className="py-1">
-            {groups.map((group) => (
+            {groups.map((group) => {
+              const unread = unreadCounts[group.groupId] ?? 0;
+              return (
               <li key={group.uuid || group.groupId}>
                 <button
                   onClick={() => onSelectGroup(group.uuid || group.groupId)}
@@ -63,13 +67,21 @@ export function Sidebar({
                       : 'text-secondary-700 hover:bg-secondary-50 dark:text-secondary-300 dark:hover:bg-secondary-700/50'
                   }`}
                 >
-                  <p className="text-sm font-medium truncate">{group.name}</p>
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-sm font-medium truncate">{group.name}</p>
+                    {unread > 0 && (
+                      <span className="shrink-0 rounded-full bg-primary-500 px-2 py-0.5 text-[10px] font-semibold text-white">
+                        {unread > 99 ? '99+' : unread}
+                      </span>
+                    )}
+                  </div>
                   <p className="mt-0.5 text-xs text-secondary-400 font-mono dark:text-secondary-500">
                     {group.groupId.slice(0, 8)}...{group.groupId.slice(-6)}
                   </p>
                 </button>
               </li>
-            ))}
+            );
+            })}
           </ul>
         )}
       </div>

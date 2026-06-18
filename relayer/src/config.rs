@@ -59,6 +59,35 @@ pub struct Config {
     /// Default: 50, set via FILE_STORAGE_SYNC_MESSAGE_THRESHOLD env var.
     /// Set to 0 to disable message-count-based syncing (interval-only).
     pub file_storage_sync_message_threshold: usize,
+
+    /// Base URL for myso-social-server block checks (optional).
+    pub social_server_url: Option<String>,
+    /// Enable DM block checks (default: true when SOCIAL_SERVER_URL is set).
+    pub block_check_enabled: bool,
+    /// Block cache TTL in seconds (default: 300).
+    pub block_cache_ttl_secs: u64,
+    /// Block cache max entries (default: 100000).
+    pub block_cache_max_entries: usize,
+
+    /// Enable push notifications (default: false).
+    pub push_enabled: bool,
+    /// Skip push if wallet presence seen within this many seconds (default: 45).
+    pub presence_ttl_secs: u64,
+    /// APNs key id (optional).
+    pub apns_key_id: Option<String>,
+    /// APNs team id (optional).
+    pub apns_team_id: Option<String>,
+    /// APNs bundle id (optional).
+    pub apns_bundle_id: Option<String>,
+    /// Path to APNs .p8 auth key (optional).
+    pub apns_auth_key_path: Option<String>,
+    /// APNs environment: sandbox or production (default: sandbox).
+    pub apns_environment: String,
+
+    /// Enable WebSocket realtime + Postgres LISTEN worker (default: true).
+    pub realtime_enabled: bool,
+    /// WebSocket presence refresh interval in seconds (default: 30).
+    pub ws_ping_interval_secs: u64,
 }
 
 impl Config {
@@ -89,7 +118,9 @@ impl Config {
             .to_lowercase()
             .as_str()
         {
-            "memory" => StorageType::InMemory,
+            "postgres" => StorageType::Postgres(
+                env::var("DATABASE_URL").expect("DATABASE_URL required for postgres storage"),
+            ),
             _ => StorageType::InMemory,
         };
 
@@ -99,7 +130,7 @@ impl Config {
             .to_lowercase()
             .as_str()
         {
-            "memory" => MembershipStoreType::InMemory,
+            "postgres" => MembershipStoreType::Postgres,
             _ => MembershipStoreType::InMemory,
         };
 
@@ -141,6 +172,43 @@ impl Config {
             .and_then(|v| v.parse().ok())
             .unwrap_or(50);
 
+        let social_server_url = env::var("SOCIAL_SERVER_URL").ok();
+        let block_check_enabled = env::var("BLOCK_CHECK_ENABLED")
+            .ok()
+            .map(|v| v == "true" || v == "1")
+            .unwrap_or(social_server_url.is_some());
+        let block_cache_ttl_secs = env::var("BLOCK_CACHE_TTL_SECS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(300);
+        let block_cache_max_entries = env::var("BLOCK_CACHE_MAX_ENTRIES")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(100_000);
+
+        let push_enabled = env::var("PUSH_ENABLED")
+            .ok()
+            .map(|v| v == "true" || v == "1")
+            .unwrap_or(false);
+        let presence_ttl_secs = env::var("PRESENCE_TTL_SECS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(45);
+        let apns_key_id = env::var("APNS_KEY_ID").ok();
+        let apns_team_id = env::var("APNS_TEAM_ID").ok();
+        let apns_bundle_id = env::var("APNS_BUNDLE_ID").ok();
+        let apns_auth_key_path = env::var("APNS_AUTH_KEY_PATH").ok();
+        let apns_environment = env::var("APNS_ENVIRONMENT").unwrap_or_else(|_| "sandbox".to_string());
+
+        let realtime_enabled = env::var("REALTIME_ENABLED")
+            .ok()
+            .map(|v| v == "true" || v == "1")
+            .unwrap_or(true);
+        let ws_ping_interval_secs = env::var("WS_PING_INTERVAL_SECS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(30);
+
         let config = Self {
             port,
             request_ttl_seconds,
@@ -154,6 +222,19 @@ impl Config {
             file_storage_sync_interval_secs,
             file_storage_sync_batch_size,
             file_storage_sync_message_threshold,
+            social_server_url,
+            block_check_enabled,
+            block_cache_ttl_secs,
+            block_cache_max_entries,
+            push_enabled,
+            presence_ttl_secs,
+            apns_key_id,
+            apns_team_id,
+            apns_bundle_id,
+            apns_auth_key_path,
+            apns_environment,
+            realtime_enabled,
+            ws_ping_interval_secs,
         };
 
         info!("Configuration loaded: {:?}", config);
@@ -176,6 +257,36 @@ impl Default for Config {
             file_storage_sync_interval_secs: 3600,
             file_storage_sync_batch_size: 100,
             file_storage_sync_message_threshold: 50,
+            social_server_url: None,
+            block_check_enabled: false,
+            block_cache_ttl_secs: 300,
+            block_cache_max_entries: 100_000,
+            push_enabled: false,
+            presence_ttl_secs: 45,
+            apns_key_id: None,
+            apns_team_id: None,
+            apns_bundle_id: None,
+            apns_auth_key_path: None,
+            apns_environment: "sandbox".to_string(),
+            realtime_enabled: true,
+            ws_ping_interval_secs: 30,
+        }
+    }
+}
+
+impl Config {
+    pub fn uses_postgres_storage(&self) -> bool {
+        matches!(self.storage_type, StorageType::Postgres(_))
+    }
+
+    pub fn inline_realtime_publish(&self) -> bool {
+        self.realtime_enabled && !self.uses_postgres_storage()
+    }
+
+    pub fn postgres_database_url(&self) -> Option<String> {
+        match &self.storage_type {
+            StorageType::Postgres(url) => Some(url.clone()),
+            StorageType::InMemory => None,
         }
     }
 }

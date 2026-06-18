@@ -144,6 +144,8 @@ export interface MySoMessagingStackClientOptions<
 	 * `recoverMessages()` method on the client.
 	 */
 	recovery?: RecoveryTransport;
+	/** Optional DM block pre-check via myso-social-server. */
+	blockGating?: { socialServerUrl: string; fetch?: typeof fetch };
 }
 
 // === Call/Tx Options (no signer) ===

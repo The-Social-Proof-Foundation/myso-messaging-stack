@@ -29,11 +29,12 @@ pub struct MembershipSyncService {
 
 impl MembershipSyncService {
     pub fn new(config: &Config, membership_store: Arc<dyn MembershipStore>) -> Self {
+        let last_cursor = membership_store.get_last_checkpoint_cursor();
         Self {
             myso_rpc_url: config.myso_rpc_url.clone(),
             groups_package_id: config.groups_package_id.clone(),
             membership_store,
-            last_cursor: None,
+            last_cursor,
         }
     }
 
@@ -95,6 +96,7 @@ impl MembershipSyncService {
 
             // Update cursor position
             self.last_cursor = Some(cursor);
+            self.membership_store.set_last_checkpoint_cursor(cursor);
         }
 
         Ok(())

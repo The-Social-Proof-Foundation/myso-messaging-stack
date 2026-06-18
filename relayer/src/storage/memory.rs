@@ -6,7 +6,10 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::RwLock;
 use uuid::Uuid;
 
-use crate::models::{Attachment, Message, ReactionEntry, ReceiptStateResponse, SyncStatus};
+use crate::models::{
+    Attachment, EncryptedBlobRecord, Message, PushTokenRecord, ReactionEntry, ReceiptStateResponse,
+    SyncStatus,
+};
 
 use super::adapter::{StorageAdapter, StorageError, StorageResult};
 
@@ -29,6 +32,9 @@ pub struct InMemoryStorage {
     /// Delivery watermark per `(group_id, member_address) )`.
     delivered_watermarks: RwLock<HashMap<(String, String), u64>>,
     read_watermarks: RwLock<HashMap<(String, String), u64>>,
+    user_read_states: RwLock<HashMap<String, EncryptedBlobRecord>>,
+    push_tokens: RwLock<HashMap<(String, String), PushTokenRecord>>,
+    presence: RwLock<HashMap<String, chrono::DateTime<chrono::Utc>>>,
 }
 
 impl InMemoryStorage {
@@ -41,6 +47,9 @@ impl InMemoryStorage {
             pins_by_group: RwLock::new(HashMap::new()),
             delivered_watermarks: RwLock::new(HashMap::new()),
             read_watermarks: RwLock::new(HashMap::new()),
+            user_read_states: RwLock::new(HashMap::new()),
+            push_tokens: RwLock::new(HashMap::new()),
+            presence: RwLock::new(HashMap::new()),
         }
     }
 
@@ -371,6 +380,80 @@ impl StorageAdapter for InMemoryStorage {
             delivered_upto: d.get(&key).copied(),
             read_upto: r.get(&key).copied(),
         })
+    }
+
+    async fn get_user_read_state(&self, wallet: &str) -> StorageResult<Option<EncryptedBlobRecord>> {
+        let states = self
+            .user_read_states
+            .read()
+            .map_err(|e| StorageError::OperationFailed(format!("Lock poisoned: {}", e)))?;
+        Ok(states.get(wallet).cloned())
+    }
+
+    async fn put_user_read_state(
+        &self,
+        wallet: &str,
+        record: EncryptedBlobRecord,
+    ) -> StorageResult<()> {
+        let mut states = self
+            .user_read_states
+            .write()
+            .map_err(|e| StorageError::OperationFailed(format!("Lock poisoned: {}", e)))?;
+        states.insert(wallet.to_string(), record);
+        Ok(())
+    }
+
+    async fn upsert_push_token(&self, record: PushTokenRecord) -> StorageResult<()> {
+        let mut tokens = self
+            .push_tokens
+            .write()
+            .map_err(|e| StorageError::OperationFailed(format!("Lock poisoned: {}", e)))?;
+        tokens.insert(
+            (record.wallet.clone(), record.token.clone()),
+            record,
+        );
+        Ok(())
+    }
+
+    async fn delete_push_token(&self, wallet: &str, token: &str) -> StorageResult<()> {
+        let mut tokens = self
+            .push_tokens
+            .write()
+            .map_err(|e| StorageError::OperationFailed(format!("Lock poisoned: {}", e)))?;
+        tokens.remove(&(wallet.to_string(), token.to_string()));
+        Ok(())
+    }
+
+    async fn list_push_tokens_for_wallet(&self, wallet: &str) -> StorageResult<Vec<PushTokenRecord>> {
+        let tokens = self
+            .push_tokens
+            .read()
+            .map_err(|e| StorageError::OperationFailed(format!("Lock poisoned: {}", e)))?;
+        Ok(tokens
+            .values()
+            .filter(|t| t.wallet == wallet)
+            .cloned()
+            .collect())
+    }
+
+    async fn update_presence(&self, wallet: &str) -> StorageResult<()> {
+        let mut presence = self
+            .presence
+            .write()
+            .map_err(|e| StorageError::OperationFailed(format!("Lock poisoned: {}", e)))?;
+        presence.insert(wallet.to_string(), Utc::now());
+        Ok(())
+    }
+
+    async fn get_presence_last_seen(
+        &self,
+        wallet: &str,
+    ) -> StorageResult<Option<chrono::DateTime<chrono::Utc>>> {
+        let presence = self
+            .presence
+            .read()
+            .map_err(|e| StorageError::OperationFailed(format!("Lock poisoned: {}", e)))?;
+        Ok(presence.get(wallet).copied())
     }
 }
 

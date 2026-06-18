@@ -59,6 +59,21 @@ const noopTransport: RelayerTransport = {
 	postGroupReceipts: () => {
 		throw new Error('noopTransport: postGroupReceipts not implemented');
 	},
+	getUserReadState: () => {
+		throw new Error('noopTransport: getUserReadState not implemented');
+	},
+	putUserReadState: () => {
+		throw new Error('noopTransport: putUserReadState not implemented');
+	},
+	postPushToken: () => {
+		throw new Error('noopTransport: postPushToken not implemented');
+	},
+	deletePushToken: () => {
+		throw new Error('noopTransport: deletePushToken not implemented');
+	},
+	postPresence: () => {
+		throw new Error('noopTransport: postPresence not implemented');
+	},
 	disconnect: () => {},
 };
 

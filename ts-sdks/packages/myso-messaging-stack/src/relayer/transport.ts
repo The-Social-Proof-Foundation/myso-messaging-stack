@@ -4,15 +4,20 @@
 
 import type {
 	DeleteMessageParams,
+	DeletePushTokenParams,
 	FetchMessageParams,
 	FetchMessagesParams,
 	FetchMessagesResult,
 	GetGroupReceiptsParams,
+	GetUserReadStateParams,
 	GroupReceiptState,
 	ListGroupPinsParams,
 	ListGroupReactionsParams,
 	PostGroupReceiptsParams,
 	PostGroupReactionParams,
+	PostPresenceParams,
+	PostPushTokenParams,
+	PutUserReadStateParams,
 	RelayerMessage,
 	RelayerReactionEntry,
 	SendMessageParams,
@@ -20,6 +25,7 @@ import type {
 	SetGroupPinParams,
 	SubscribeParams,
 	UpdateMessageParams,
+	UserReadStateWire,
 } from './types.js';
 
 /**
@@ -44,5 +50,10 @@ export interface RelayerTransport {
 	setGroupPin(params: SetGroupPinParams): Promise<void>;
 	getGroupReceipts(params: GetGroupReceiptsParams): Promise<GroupReceiptState>;
 	postGroupReceipts(params: PostGroupReceiptsParams): Promise<void>;
+	getUserReadState(params: GetUserReadStateParams): Promise<UserReadStateWire>;
+	putUserReadState(params: PutUserReadStateParams): Promise<void>;
+	postPushToken(params: PostPushTokenParams): Promise<void>;
+	deletePushToken(params: DeletePushTokenParams): Promise<void>;
+	postPresence(params: PostPresenceParams): Promise<void>;
 	disconnect(): void;
 }

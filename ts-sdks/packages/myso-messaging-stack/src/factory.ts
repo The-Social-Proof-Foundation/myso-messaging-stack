@@ -18,6 +18,7 @@ import type { RelayerConfig } from './relayer/types.js';
 import type { RecoveryTransport } from './recovery/transport.js';
 import type {
 	MySoMessagingStackEncryptionOptions,
+	MySoMessagingStackClientOptions,
 	MySoMessagingStackPackageConfig,
 } from './types.js';
 
@@ -54,6 +55,9 @@ export interface CreateMySoMessagingStackClientOptions<TApproveContext = void> {
 
 	/** Optional recovery transport for fetching messages from an alternative storage backend. */
 	recovery?: RecoveryTransport;
+
+	/** Optional DM block pre-check via myso-social-server. */
+	blockGating?: MySoMessagingStackClientOptions<TApproveContext>['blockGating'];
 }
 
 export interface CreateMySoMessagingStackClientAsyncOptions<
@@ -97,6 +101,7 @@ export function createMySoMessagingStackClient<TApproveContext = void>(
 				relayer: options.relayer,
 				attachments: options.attachments,
 				recovery: options.recovery,
+				blockGating: options.blockGating,
 			}),
 		);
 }

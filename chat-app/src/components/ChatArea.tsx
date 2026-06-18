@@ -114,7 +114,7 @@ function ChatView({
     editMessage,
     deleteMessage,
     loadMore,
-  } = useMessages(group.uuid);
+  } = useMessages(group.uuid, group.groupId);
 
   const [showLeaveConfirm, setShowLeaveConfirm] = useState(false);
   const [leaving, setLeaving] = useState(false);

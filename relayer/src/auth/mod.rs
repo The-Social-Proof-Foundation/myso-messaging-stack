@@ -6,17 +6,21 @@
 //! - Axum middleware for request authentication
 
 pub mod membership;
+pub mod membership_postgres;
 pub mod middleware;
 pub mod permissions;
 pub mod schemes;
 pub mod signature;
 pub mod types;
+pub mod wallet_middleware;
+pub mod ws_auth;
 
 #[allow(unused_imports)]
 pub use membership::{
-    create_membership_store, InMemoryMembershipStore, MembershipError, MembershipStore,
-    MembershipStoreType,
+    create_membership_store, create_membership_store_async, InMemoryMembershipStore,
+    MembershipError, MembershipStore, MembershipStoreType,
 };
 pub use middleware::{auth_middleware, AuthState};
+pub use wallet_middleware::wallet_auth_middleware;
 pub use permissions::MessagingPermission;
 pub use types::AuthContext;

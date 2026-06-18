@@ -37,6 +37,7 @@ pub enum MembershipError {
 pub enum MembershipStoreType {
     #[default]
     InMemory,
+    Postgres,
 }
 
 /// Trait defining the interface for membership storage backends.
@@ -91,12 +92,43 @@ pub trait MembershipStore: Send + Sync {
         group_id: &str,
         members_with_perms: Vec<(String, Vec<MessagingPermission>)>,
     );
+
+    /// Lists all member addresses in a group (any non-empty permission set).
+    fn list_member_addresses(&self, group_id: &str) -> Vec<String>;
+
+    /// Last processed checkpoint cursor (Postgres-backed stores persist this).
+    fn get_last_checkpoint_cursor(&self) -> Option<u64> {
+        None
+    }
+
+    /// Persist last processed checkpoint cursor.
+    fn set_last_checkpoint_cursor(&self, _cursor: u64) {}
 }
 
-/// Creates a membership store based on the configured store type.
+/// Creates a membership store based on the configured store type (in-memory only).
 pub fn create_membership_store(store_type: MembershipStoreType) -> Arc<dyn MembershipStore> {
     match store_type {
         MembershipStoreType::InMemory => Arc::new(InMemoryMembershipStore::new()),
+        MembershipStoreType::Postgres => {
+            panic!("Postgres membership store requires create_membership_store_async")
+        }
+    }
+}
+
+/// Creates a membership store, connecting to Postgres when configured.
+pub async fn create_membership_store_async(
+    store_type: MembershipStoreType,
+    database_url: Option<&str>,
+) -> Arc<dyn MembershipStore> {
+    match store_type {
+        MembershipStoreType::InMemory => Arc::new(InMemoryMembershipStore::new()),
+        MembershipStoreType::Postgres => {
+            let url = database_url
+                .expect("DATABASE_URL required when MEMBERSHIP_STORE_TYPE=postgres");
+            super::membership_postgres::PostgresMembershipStore::connect(url)
+                .await
+                .expect("Failed to connect Postgres membership store")
+        }
     }
 }
 
@@ -271,6 +303,20 @@ impl MembershipStore for InMemoryMembershipStore {
             group_members.insert(address, perm_set);
         }
         members.insert(group_id.to_string(), group_members);
+    }
+
+    fn list_member_addresses(&self, group_id: &str) -> Vec<String> {
+        let members = self.members.read().unwrap();
+        members
+            .get(group_id)
+            .map(|group_members| {
+                group_members
+                    .iter()
+                    .filter(|(_, perms)| !perms.is_empty())
+                    .map(|(address, _)| address.clone())
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 }
 

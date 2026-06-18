@@ -58,9 +58,39 @@ pub async fn create_message(
 
     let attachments = decode_attachments(req.attachments)?;
 
+    // DM block check: exactly one other member in group
+    if state.block_check.is_enabled() {
+        let members = state
+            .membership_store
+            .list_member_addresses(&req.group_id);
+        let peer: Vec<_> = members
+            .iter()
+            .filter(|m| *m != &req.sender_address)
+            .collect();
+        if peer.len() == 1 {
+            match state
+                .block_check
+                .check_either_blocked(&req.sender_address, peer[0])
+                .await
+            {
+                Ok(true) => return Err(ApiError::Blocked),
+                Ok(false) => {}
+                Err(e) => {
+                    return Err(ApiError::Internal(format!(
+                        "Block check unavailable: {}",
+                        e
+                    )));
+                }
+            }
+        }
+    }
+
     // Build the public key with flag prefix for storage
     let mut public_key_with_flag = vec![auth.scheme.flag()];
     public_key_with_flag.extend_from_slice(&auth.public_key);
+
+    let group_id = req.group_id.clone();
+    let sender_address = req.sender_address.clone();
 
     // Create message domain object
     let message = Message::new(
@@ -76,6 +106,23 @@ pub async fn create_message(
 
     // Store message
     let created = state.storage.create_message(message).await?;
+
+    if state.realtime_enabled && state.inline_realtime_publish {
+        let wire: MessageResponse = created.clone().into();
+        state
+            .realtime_hub
+            .publish_wire(&group_id, wire);
+    }
+
+    // Notify push worker for offline group members (metadata-only APNs).
+    let push = state.push_service.clone();
+    let storage = state.storage.clone();
+    let membership = state.membership_store.clone();
+    tokio::spawn(async move {
+        push
+            .notify_new_message(&storage, &membership, &group_id, &sender_address)
+            .await;
+    });
 
     // Notify the File Storage sync worker that a new message was created.
     let _ = state.sync_notifier.send(());
