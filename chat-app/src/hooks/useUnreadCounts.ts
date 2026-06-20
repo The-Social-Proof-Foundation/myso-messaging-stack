@@ -1,24 +1,28 @@
 import { useEffect, useState } from 'react';
-import { useRequiredMessagingClient } from '../contexts/MessagingClientContext';
+import { useMessagingClient } from '../contexts/MessagingClientContext';
+import { useMySocialAuth } from '../contexts/MySocialAuthContext';
 import type { StoredGroup } from '../lib/group-store';
 
 export function useUnreadCounts(groups: StoredGroup[]): Record<string, number> {
-  const { client, signer } = useRequiredMessagingClient();
+  const client = useMessagingClient();
+  const { keypair: signer } = useMySocialAuth();
   const [counts, setCounts] = useState<Record<string, number>>({});
 
   useEffect(() => {
-    if (groups.length === 0) {
+    if (!client || !signer || groups.length === 0) {
       setCounts({});
       return;
     }
 
+    const messagingClient = client;
+    const messagingSigner = signer;
     let cancelled = false;
 
     async function refresh() {
       try {
         const groupIds = groups.map((g) => g.groupId);
-        const next = await client.messaging.getUnreadCounts({
-          signer,
+        const next = await messagingClient.messaging.getUnreadCounts({
+          signer: messagingSigner,
           groupIds,
         });
         if (!cancelled) setCounts(next);
