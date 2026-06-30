@@ -8,7 +8,7 @@ const AGENT_DEV_ENABLED = import.meta.env.VITE_ENABLE_AGENT_DEV === 'true';
 
 interface AgentDevSendPanelProps {
   humanSigner: Signer;
-  groupId: string;
+  groupUuid: string;
 }
 
 /**
@@ -17,7 +17,7 @@ interface AgentDevSendPanelProps {
  */
 export function AgentDevSendPanel({
   humanSigner,
-  groupId,
+  groupUuid,
 }: Readonly<AgentDevSendPanelProps>) {
   const client = useMessagingClient();
   const [text, setText] = useState('Hello from dev agent');
@@ -61,7 +61,7 @@ export function AgentDevSendPanel({
         },
       });
       const result = await agentClient.sendMessage({
-        groupRef: { groupId },
+        groupRef: { uuid: groupUuid },
         text,
       });
       setStatus(`Sent message ${result.messageId}`);
@@ -85,7 +85,7 @@ export function AgentDevSendPanel({
       />
       <button
         type="button"
-        disabled={sending || !groupId}
+        disabled={sending || !groupUuid}
         onClick={() => void handleSend()}
         className="mt-2 rounded bg-amber-600 px-3 py-1 text-xs font-medium text-white hover:bg-amber-700 disabled:opacity-50"
       >

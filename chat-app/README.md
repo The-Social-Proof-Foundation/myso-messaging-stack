@@ -152,8 +152,8 @@ The app follows a 3-layer architecture:
 
 | Dependency                    | Version   | Purpose                 |
 |-------------------------------|-----------|-------------------------|
-| `@socialproof/myso-messaging-stack`    | workspace | E2E encrypted messaging |
-| `@socialproof/myso-groups` | workspace | Permission management   |
+| `@socialproof/myso-messaging-stack`    | ^0.0.6 | E2E encrypted messaging |
+| `@socialproof/myso-groups` | ^0.0.1 | Permission management   |
 | `@socialproof/mysocial-auth`         | npm       | MySocial OAuth + session APIs    |
 | `@socialproof/myso`                 | ^0.x      | MySo RPC (`MySoJsonRpcClient`) |
 | `@socialproof/mydata`               | ^0.x      | Threshold encryption           |
@@ -232,7 +232,7 @@ query VerifyGenesisSingletons {
 **5. Refresh chat-app**
 
 - Copy new `KEY_SERVER_OBJECT_ID` into `VITE_MYDATA_KEY_SERVER_OBJECT_IDS`
-- `pnpm run build:deps && pnpm dev`
+- `pnpm install && pnpm dev`
 - `myso client faucet --address <signer>`
 
 ### Create group fails with `Failed to fetch` / `ERR_CONNECTION_REFUSED` on port 2024 (localnet)

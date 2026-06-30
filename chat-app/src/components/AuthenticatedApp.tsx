@@ -88,7 +88,7 @@ export function AuthenticatedApp({
             keypair && selectedGroup ? (
               <AgentDevSendPanel
                 humanSigner={keypair}
-                groupId={selectedGroup.groupId}
+                groupUuid={selectedGroup.uuid}
               />
             ) : null
           }
