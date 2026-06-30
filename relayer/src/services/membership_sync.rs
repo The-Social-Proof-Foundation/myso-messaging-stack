@@ -7,8 +7,10 @@
 //! - Parses events and updates the MembershipCache
 //! - Runs in a loop automatically reconnecting on errors
 
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+use chrono::{TimeZone, Utc};
 use myso_rpc::field::{FieldMask, FieldMaskUtil};
 use myso_rpc::proto::myso::rpc::v2::subscription_service_client::SubscriptionServiceClient;
 use myso_rpc::proto::myso::rpc::v2::SubscribeCheckpointsRequest;
@@ -17,23 +19,38 @@ use tracing::{debug, error, info, warn};
 
 use crate::auth::MembershipStore;
 use crate::config::Config;
+use crate::storage::AgentGroupStore;
 
-use super::event_parser::{parse_myso_event, GroupsEvent};
+use super::agent_group_detector::{
+    agent_group_from_created_event, detect_agent_groups_in_transaction,
+};
+use super::event_parser::{
+    parse_agent_detection_event, parse_agent_group_created_event, parse_myso_event,
+    AgentDetectionEvent, GroupsEvent,
+};
 
 pub struct MembershipSyncService {
     myso_rpc_url: String,
     groups_package_id: String,
+    messaging_package_id: String,
     membership_store: Arc<dyn MembershipStore>,
+    agent_group_store: Arc<dyn AgentGroupStore>,
     last_cursor: Option<u64>,
 }
 
 impl MembershipSyncService {
-    pub fn new(config: &Config, membership_store: Arc<dyn MembershipStore>) -> Self {
+    pub fn new(
+        config: &Config,
+        membership_store: Arc<dyn MembershipStore>,
+        agent_group_store: Arc<dyn AgentGroupStore>,
+    ) -> Self {
         let last_cursor = membership_store.get_last_checkpoint_cursor();
         Self {
             myso_rpc_url: config.myso_rpc_url.clone(),
             groups_package_id: config.groups_package_id.clone(),
+            messaging_package_id: config.messaging_package_id.clone(),
             membership_store,
+            agent_group_store,
             last_cursor,
         }
     }
@@ -91,7 +108,7 @@ impl MembershipSyncService {
 
             // Process the checkpoint if present
             if let Some(checkpoint) = checkpoint_response.checkpoint {
-                self.process_checkpoint(&checkpoint, cursor);
+                self.process_checkpoint(&checkpoint, cursor).await;
             }
 
             // Update cursor position
@@ -103,25 +120,80 @@ impl MembershipSyncService {
     }
 
     /// Processes a single checkpoint,
-    fn process_checkpoint(
+    async fn process_checkpoint(
         &self,
         checkpoint: &myso_rpc::proto::myso::rpc::v2::Checkpoint,
         cursor: u64,
     ) {
         let mut events_processed = 0;
+        let checkpoint_ts = checkpoint
+            .summary
+            .as_ref()
+            .and_then(|s| s.timestamp.as_ref())
+            .and_then(|ts| Utc.timestamp_opt(ts.seconds, ts.nanos as u32).single())
+            .unwrap_or_else(Utc::now);
 
-        // Iterate through all transactions in the checkpoint
         for transaction in &checkpoint.transactions {
             let events = match &transaction.events {
                 Some(events) => &events.events,
                 None => continue,
             };
 
-            // Process each event
+            let mut group_created = Vec::new();
+            let mut permissions_granted = Vec::new();
+            let mut agent_group_created_map: HashMap<String, _> = HashMap::new();
+
             for event in events {
                 if let Some(groups_event) = parse_myso_event(event, &self.groups_package_id) {
                     self.apply_event(&groups_event);
                     events_processed += 1;
+                }
+
+                if let Some(agent_created) =
+                    parse_agent_group_created_event(event, &self.messaging_package_id)
+                {
+                    agent_group_created_map.insert(agent_created.group_id.clone(), agent_created);
+                }
+
+                if let Some(detection_event) =
+                    parse_agent_detection_event(event, &self.groups_package_id)
+                {
+                    match detection_event {
+                        AgentDetectionEvent::GroupCreated(created) => group_created.push(created),
+                        AgentDetectionEvent::PermissionsGranted(granted) => {
+                            permissions_granted.push(granted);
+                        }
+                    }
+                }
+            }
+
+            for created in agent_group_created_map.values() {
+                let group = agent_group_from_created_event(created);
+                if let Err(e) = self.agent_group_store.upsert_agent_group(&group).await {
+                    warn!(
+                        "Failed to upsert agent messaging group {} from AgentGroupCreated: {}",
+                        group.group_id, e
+                    );
+                }
+            }
+
+            let indexed_group_ids: HashSet<_> =
+                agent_group_created_map.keys().cloned().collect();
+            let agent_groups = detect_agent_groups_in_transaction(
+                &group_created,
+                &permissions_granted,
+                &agent_group_created_map,
+                checkpoint_ts,
+            );
+            for group in agent_groups {
+                if indexed_group_ids.contains(&group.group_id) {
+                    continue;
+                }
+                if let Err(e) = self.agent_group_store.upsert_agent_group(&group).await {
+                    warn!(
+                        "Failed to upsert agent messaging group {}: {}",
+                        group.group_id, e
+                    );
                 }
             }
         }

@@ -38,6 +38,10 @@ export interface RelayerMessage {
 	signature: string;
 	/** Hex-encoded public key with scheme flag prefix. */
 	publicKey: string;
+	principalOwner?: string;
+	subAgentId?: string;
+	identityClass?: 0 | 1 | 2;
+	isAgentMessage: boolean;
 }
 
 export interface SendMessageParams {
@@ -49,6 +53,12 @@ export interface SendMessageParams {
 	attachments?: Attachment[];
 	/** Hex-encoded per-message signature for sender verification. */
 	messageSignature?: string;
+	/** Agent attribution (required when sending as a sub-agent). */
+	attribution?: {
+		principalOwner: string;
+		subAgentId: string;
+		identityClass: 0 | 1 | 2;
+	};
 }
 
 /** Supports cursor-based pagination via afterOrder/beforeOrder. */
@@ -186,6 +196,29 @@ export interface DeletePushTokenParams {
 export interface PostPresenceParams {
 	signer: Signer;
 	active?: boolean;
+}
+
+/** Agent-associated messaging group from relayer discovery. */
+export interface RelayerAgentConversation {
+	groupId: string;
+	creatorActor: string;
+	creatorPrincipal: string;
+	creatorSubAgentId?: string | null;
+	creatorIdentityClass?: number | null;
+	groupName?: string | null;
+	groupUuid?: string | null;
+	createdAt: number;
+}
+
+export interface ListAgentConversationsParams {
+	signer: Signer;
+	limit?: number;
+}
+
+export interface ListGroupsForAgentParams {
+	signer: Signer;
+	derivedAddress: string;
+	limit?: number;
 }
 
 /**

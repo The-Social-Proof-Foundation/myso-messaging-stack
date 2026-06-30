@@ -143,6 +143,7 @@ export async function createFreshMessagingClient(
     attachments: attachmentsConfig,
     genesis: {
       graphqlUrl: getGenesisGraphqlUrl(),
+      rpcUrl: getMessagingRpcUrl(),
     },
   });
 }

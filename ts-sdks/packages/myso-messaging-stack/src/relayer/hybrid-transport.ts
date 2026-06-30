@@ -17,6 +17,8 @@ import type {
 	GroupReceiptState,
 	ListGroupPinsParams,
 	ListGroupReactionsParams,
+	ListAgentConversationsParams,
+	ListGroupsForAgentParams,
 	PostGroupReceiptsParams,
 	PostGroupReactionParams,
 	PostPresenceParams,
@@ -24,6 +26,7 @@ import type {
 	PutUserReadStateParams,
 	RelayerMessage,
 	RelayerReactionEntry,
+	RelayerAgentConversation,
 	SendMessageParams,
 	SendMessageResult,
 	SetGroupPinParams,
@@ -164,6 +167,16 @@ export class HybridRelayerTransport implements RelayerTransport {
 
 	postPresence(params: PostPresenceParams): Promise<void> {
 		return this.#http.postPresence(params);
+	}
+
+	listAgentConversations(
+		params: ListAgentConversationsParams,
+	): Promise<RelayerAgentConversation[]> {
+		return this.#http.listAgentConversations(params);
+	}
+
+	listGroupsForAgent(params: ListGroupsForAgentParams): Promise<RelayerAgentConversation[]> {
+		return this.#http.listGroupsForAgent(params);
 	}
 
 	disconnect(): void {

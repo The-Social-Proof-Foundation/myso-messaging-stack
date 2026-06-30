@@ -58,6 +58,7 @@ impl PushService {
         membership_store: &Arc<dyn MembershipStore>,
         group_id: &str,
         sender: &str,
+        attribution: &crate::models::MessageAttribution,
     ) {
         if !self.is_enabled() {
             return;
@@ -103,7 +104,7 @@ impl PushService {
                     continue;
                 }
 
-                match apns.send_new_message(&token, group_id).await {
+                match apns.send_new_message(&token, group_id, attribution).await {
                     Ok(()) => {
                         tokens_sent += 1;
                     }

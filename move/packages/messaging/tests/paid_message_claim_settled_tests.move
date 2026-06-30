@@ -39,7 +39,7 @@ fun reply_claim_settled_self_recipient_flow() {
     let mut namespace = s.take_shared<MessagingNamespace>();
     let group_manager = s.take_shared<GroupManager>();
     let block_list = s.take_shared<BlockListRegistry>();
-    let (group, encryption_history, msg_log) = messaging::create_group(
+    let (group, encryption_history, msg_log) = messaging::create_group_unchecked(
         &version,
         &mut namespace,
         &group_manager,

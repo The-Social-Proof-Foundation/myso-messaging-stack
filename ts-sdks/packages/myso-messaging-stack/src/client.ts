@@ -41,6 +41,7 @@ import type {
 	ArchiveGroupOptions,
 	ClearGroupHandleOptions,
 	CreateGroupOptions,
+	CreateAgentGroupCallOptions,
 	InsertGroupDataOptions,
 	LeaveOptions,
 	MySoMessagingStackClientOptions,
@@ -174,6 +175,12 @@ export class MySoMessagingStackClient<TApproveContext = void> {
 	bcs: MySoMessagingStackBCS;
 	derive: MySoMessagingStackDerive;
 	encryption: EnvelopeEncryption<TApproveContext>;
+	/** Resolved messaging package configuration. */
+	readonly packageConfig: MySoMessagingStackPackageConfig;
+	/** Base MySo client for advanced transaction composition. */
+	readonly mysoClient: ClientWithCoreApi;
+	/** Underlying permissioned-groups client (same instance registered on the base client). */
+	readonly groups: MySoGroupsClient;
 	/** Low-level transport for direct relayer access. Use `sendMessage()`, `getMessage()`, etc. for the high-level API. */
 	transport: RelayerTransport;
 
@@ -197,6 +204,9 @@ export class MySoMessagingStackClient<TApproveContext = void> {
 		const mydataExt = options.client[options.mydataName] as MyDataClient;
 
 		this.#groupsClient = groupsExt;
+		this.groups = groupsExt;
+		this.packageConfig = this.#packageConfig;
+		this.mysoClient = this.#client;
 		this.#blockGating = options.blockGating
 			? new BlockGatingClient(options.blockGating)
 			: undefined;
@@ -228,6 +238,15 @@ export class MySoMessagingStackClient<TApproveContext = void> {
 			encryptionHistoryTypeName: this.bcs.EncryptionHistory.name,
 			messageLogTypeName: `${this.#packageConfig.originalPackageId}::message_log::MessageLog`,
 			groupsCall: groupsExt.call,
+			resolveMemoryAccountId: async (owner) => {
+				const id = await this.view.memoryAccountIdForOwner({ owner });
+				if (!id) {
+					throw new MySoMessagingStackClientError(
+						`No MemoryAccount found for ${owner}. Pass creatorMemoryAccountId or create a profile with memory linked.`,
+					);
+				}
+				return id;
+			},
 		});
 		this.tx = new MySoMessagingStackTransactions({
 			call: this.call,
@@ -293,7 +312,11 @@ export class MySoMessagingStackClient<TApproveContext = void> {
 		const approveContext = this.#approveContextSpread(options);
 		const senderAddress = options.signer.toMySoAddress();
 
-		await this.#assertDmNotBlocked(groupId, senderAddress);
+		await this.#assertDmNotBlocked(
+			groupId,
+			senderAddress,
+			options.principalOwner ?? options.attribution?.principalOwner,
+		);
 
 		// 1. Encrypt text (empty string for attachment-only messages).
 		const textBytes = this.#textEncoder.encode(options.text ?? '');
@@ -333,6 +356,13 @@ export class MySoMessagingStackClient<TApproveContext = void> {
 			keyVersion: envelope.keyVersion,
 			attachments: attachmentRefs.length > 0 ? attachmentRefs : undefined,
 			messageSignature,
+			attribution: options.attribution
+				? {
+						principalOwner: options.attribution.principalOwner,
+						subAgentId: options.attribution.subAgentId,
+						identityClass: options.attribution.identityClass,
+					}
+				: undefined,
 		});
 
 		return { messageId: result.messageId };
@@ -624,6 +654,10 @@ export class MySoMessagingStackClient<TApproveContext = void> {
 				syncStatus: raw.syncStatus,
 				attachments: [],
 				senderVerified: false,
+				principalOwner: raw.principalOwner,
+				subAgentId: raw.subAgentId,
+				identityClass: raw.identityClass,
+				isAgentMessage: raw.isAgentMessage,
 			};
 		}
 
@@ -682,6 +716,10 @@ export class MySoMessagingStackClient<TApproveContext = void> {
 			syncStatus: raw.syncStatus,
 			attachments,
 			senderVerified,
+			principalOwner: raw.principalOwner,
+			subAgentId: raw.subAgentId,
+			identityClass: raw.identityClass,
+			isAgentMessage: raw.isAgentMessage,
 		};
 	}
 
@@ -727,15 +765,19 @@ export class MySoMessagingStackClient<TApproveContext = void> {
 
 	// === Private: Validation ===
 
-	async #assertDmNotBlocked(groupId: string, senderAddress: string): Promise<void> {
+	async #assertDmNotBlocked(
+		groupId: string,
+		senderAddress: string,
+		principalOwner?: string,
+	): Promise<void> {
 		if (!this.#blockGating) return;
 		const { members } = await this.#groupsClient.view.getMembers({ groupId });
 		const peers = members.filter((m) => m.address !== senderAddress);
 		if (peers.length !== 1) return;
-		const blocked = await this.#blockGating.checkEitherBlocked(
-			senderAddress,
-			peers[0]!.address,
-		);
+		const peerAddress = peers[0]!.address;
+		const blocked = await this.#blockGating.checkEitherBlocked(senderAddress, peerAddress, {
+			principalOwner,
+		});
 		if (blocked) {
 			throw new BlockedMessagingError();
 		}
@@ -778,9 +820,29 @@ export class MySoMessagingStackClient<TApproveContext = void> {
 		...callOptions
 	}: CreateGroupOptions & { transaction?: Transaction }) {
 		return this.#executeTransaction(
-			this.tx.createAndShareGroup({ transaction, ...callOptions }),
+			this.tx.createAndShareGroup({
+				transaction,
+				sender: signer.toMySoAddress(),
+				...callOptions,
+			}),
 			signer,
 			'create and share group',
+		);
+	}
+
+	/**
+	 * Creates and shares a messaging group on behalf of a sub-agent.
+	 * The transaction sender must be the agent derived address with CAP_MESSAGE_SEND.
+	 */
+	async createAgentAndShareGroup({
+		signer,
+		transaction,
+		...callOptions
+	}: CreateAgentGroupCallOptions & { signer: Signer; transaction?: Transaction }) {
+		return this.#executeTransaction(
+			this.tx.createAgentAndShareGroup({ transaction, ...callOptions }),
+			signer,
+			'create and share agent group',
 		);
 	}
 

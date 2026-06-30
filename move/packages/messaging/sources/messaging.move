@@ -36,23 +36,28 @@ use messaging::group_manager::{Self, GroupManager};
 use messaging::message_log::{Self, MessageLog};
 use messaging::metadata;
 use messaging::paid_messaging_policy::{Self, PaidMessagingRegistry};
-use messaging::version::Version;
+use messaging::version::{Self as version, Version};
 use social_contracts::block_list::{Self, BlockListRegistry};
+use social_contracts::memory::{Self, ActingContext, MemoryAccount};
+use social_contracts::platform::{Self, Platform};
 use social_contracts::social_graph::{Self, SocialGraph};
 use myso::permissioned_group::{
     Self,
     PermissionedGroup,
     PermissionsAdmin,
-    ObjectAdmin
+    ObjectAdmin,
 };
-use myso::clock::Clock;
-use myso::coin::Coin;
+use myso::clock::{Self, Clock};
+use myso::coin::{Self, Coin};
 use myso::derived_object;
+use myso::event;
+use myso::hex;
 use myso::myso::MYSO;
 use myso::package;
 use myso::vec_set::{Self, VecSet};
 use std::string;
 use std::string::String;
+use std::u64;
 
 // === Error Codes ===
 
@@ -73,9 +78,20 @@ const EMessageLogMismatch: u64 = 4;
 const EPaidNotRequiredForFollower: u64 = 5;
 /// Escrow is below the recipient's configured minimum for stranger paid DMs.
 const EBelowMinMessageCost: u64 = 6;
+/// Transaction sender does not match the resolved agent actor address.
+const EAgentSenderMismatch: u64 = 8;
+/// Registered sub-agents must use `create_agent_group`, not human `create_group`.
+const ERegisteredAgentCannotCreateGroup: u64 = 9;
 
 const CONVERSATION_KIND_KEY: vector<u8> = b"conversation_kind";
 const CONVERSATION_KIND_DM: vector<u8> = b"dm";
+
+const AGENT_CHAT_KEY: vector<u8> = b"agent_chat";
+const AGENT_CHAT_TRUE: vector<u8> = b"true";
+const CREATOR_ACTOR_KEY: vector<u8> = b"creator_actor";
+const CREATOR_PRINCIPAL_KEY: vector<u8> = b"creator_principal";
+const CREATOR_SUB_AGENT_ID_KEY: vector<u8> = b"creator_sub_agent_id";
+const CREATOR_IDENTITY_CLASS_KEY: vector<u8> = b"creator_identity_class";
 
 // === Witnesses ===
 
@@ -115,6 +131,20 @@ public struct MessagingNamespace has key {
     id: UID,
 }
 
+/// Emitted when a sub-agent creates a messaging group via [`create_agent_group`].
+/// Indexed by the messaging-stack relayer (not the social indexer) for conversation listing.
+public struct AgentGroupCreated has copy, drop {
+    group_id: ID,
+    creator_actor: address,
+    creator_principal: address,
+    creator_sub_agent_id: Option<ID>,
+    creator_identity_class: u64,
+    organization_id: Option<ID>,
+    group_name: String,
+    group_uuid: String,
+    created_at: u64,
+}
+
 fun init(otw: MESSAGING, ctx: &mut TxContext) {
     package::claim_and_keep(otw, ctx);
 
@@ -131,6 +161,7 @@ fun init(otw: MESSAGING, ctx: &mut TxContext) {
     group_manager.share();
     group_handle_registry.share();
     paid_messaging_registry.share();
+    version::share_initial(ctx);
 }
 
 // === Public Functions ===
@@ -161,6 +192,59 @@ fun init(otw: MESSAGING, ctx: &mut TxContext) {
 /// - `EInvalidVersion` (from `version`): if package version doesn't match
 /// - If the UUID has already been used (duplicate derivation)
 public fun create_group(
+    version: &Version,
+    namespace: &mut MessagingNamespace,
+    group_manager: &GroupManager,
+    block_list: &BlockListRegistry,
+    creator_memory_account: &MemoryAccount,
+    name: String,
+    uuid: String,
+    initial_encrypted_dek: vector<u8>,
+    initial_members: VecSet<address>,
+    ctx: &mut TxContext,
+): (PermissionedGroup<Messaging>, EncryptionHistory, MessageLog) {
+    assert_human_group_creator(creator_memory_account, ctx);
+    create_group_inner(
+        version,
+        namespace,
+        group_manager,
+        block_list,
+        name,
+        uuid,
+        initial_encrypted_dek,
+        initial_members,
+        ctx,
+    )
+}
+
+/// Human-only group creation without principal ownership check. Test-only bypass for
+/// legacy unit tests that do not set up a [`MemoryAccount`].
+#[test_only]
+public fun create_group_unchecked(
+    version: &Version,
+    namespace: &mut MessagingNamespace,
+    group_manager: &GroupManager,
+    block_list: &BlockListRegistry,
+    name: String,
+    uuid: String,
+    initial_encrypted_dek: vector<u8>,
+    initial_members: VecSet<address>,
+    ctx: &mut TxContext,
+): (PermissionedGroup<Messaging>, EncryptionHistory, MessageLog) {
+    create_group_inner(
+        version,
+        namespace,
+        group_manager,
+        block_list,
+        name,
+        uuid,
+        initial_encrypted_dek,
+        initial_members,
+        ctx,
+    )
+}
+
+fun create_group_inner(
     version: &Version,
     namespace: &mut MessagingNamespace,
     group_manager: &GroupManager,
@@ -255,6 +339,7 @@ entry fun create_and_share_group(
     namespace: &mut MessagingNamespace,
     group_manager: &GroupManager,
     block_list: &BlockListRegistry,
+    creator_memory_account: &MemoryAccount,
     name: String,
     uuid: String,
     initial_encrypted_dek: vector<u8>,
@@ -266,10 +351,170 @@ entry fun create_and_share_group(
         namespace,
         group_manager,
         block_list,
+        creator_memory_account,
         name,
         uuid,
         initial_encrypted_dek,
         vec_set::from_keys(initial_members),
+        ctx,
+    );
+    transfer::public_share_object(group);
+    transfer::public_share_object(encryption_history);
+    transfer::public_share_object(message_log);
+}
+
+/// Creates a messaging group on behalf of a sub-agent with principal oversight.
+///
+/// The transaction sender must be the sub-agent `derived_address` with
+/// `CAP_MESSAGE_SEND`. The agent receives messaging permissions but not
+/// `PermissionsAdmin`. The human `principal_owner` receives `MessagingReader`
+/// and `PermissionsAdmin`.
+///
+/// For cross-principal agent peers in `initial_members`, pass their
+/// [`MemoryAccount`] as `cross_principal_peer_account`. When all peers are
+/// humans or agents under the same principal, pass the creator account again.
+public fun create_agent_group(
+    version: &Version,
+    namespace: &mut MessagingNamespace,
+    group_manager: &GroupManager,
+    group_leaver: &GroupLeaver,
+    block_list: &BlockListRegistry,
+    platform: &Platform,
+    creator_memory_account: &MemoryAccount,
+    cross_principal_peer_account: &MemoryAccount,
+    name: String,
+    uuid: String,
+    initial_encrypted_dek: vector<u8>,
+    initial_members: VecSet<address>,
+    clock: &Clock,
+    ctx: &mut TxContext,
+): (PermissionedGroup<Messaging>, EncryptionHistory, MessageLog) {
+    version.validate_version();
+    let acting = resolve_messaging_actor(
+        creator_memory_account,
+        platform,
+        block_list,
+        memory::cap_message_send(),
+        0,
+        clock,
+        ctx,
+    );
+    let actor_address = memory::acting_actor_address(&acting);
+    let principal_owner = memory::acting_principal_owner(&acting);
+    assert!(actor_address == ctx.sender(), EAgentSenderMismatch);
+
+    assert_agent_peers_not_blocked(
+        block_list,
+        &acting,
+        &initial_members,
+        actor_address,
+    );
+
+    let mut group: PermissionedGroup<Messaging> = permissioned_group::new_derived<
+        Messaging,
+        encryption_history::PermissionedGroupTag,
+    >(
+        Messaging(),
+        &mut namespace.id,
+        encryption_history::permissions_group_tag(uuid),
+        ctx,
+    );
+
+    // `new_derived` grants PermissionsAdmin to the agent creator. Grant GroupLeaver
+    // admin first so it can revoke the agent's admin caps, then grant the principal.
+    let group_leaver_address = derived_object::derive_address(
+        object::id(namespace),
+        group_leaver::derivation_key(),
+    );
+    group.grant_permission<Messaging, PermissionsAdmin>(group_leaver_address, ctx);
+    grant_agent_messaging_permissions(&mut group, actor_address, ctx);
+    grant_principal_oversight(&mut group, principal_owner, ctx);
+    group.grant_permission<Messaging, ObjectAdmin>(
+        object::id(group_manager).to_address(),
+        ctx,
+    );
+
+    let m = metadata::new(name, uuid, actor_address);
+    group_manager::attach_metadata<Messaging>(group_manager, &mut group, m);
+    attach_agent_creator_metadata(group_manager, &mut group, &acting);
+
+    if (count_non_creator_peers(&initial_members, actor_address) == 1) {
+        let m = group_manager::borrow_metadata_mut<Messaging>(group_manager, &mut group);
+        m.insert_data(
+            string::utf8(CONVERSATION_KIND_KEY),
+            string::utf8(CONVERSATION_KIND_DM),
+        );
+    };
+
+    grant_agent_initial_members(
+        &mut group,
+        creator_memory_account,
+        cross_principal_peer_account,
+        &initial_members,
+        actor_address,
+        ctx,
+    );
+
+    group_leaver::revoke_permissions_admin<Messaging>(group_leaver, &mut group, actor_address);
+    group_leaver::revoke_extension_permissions_admin<Messaging>(group_leaver, &mut group, actor_address);
+
+    let encryption_history = encryption_history::new(
+        &mut namespace.id,
+        uuid,
+        object::id(&group),
+        initial_encrypted_dek,
+        ctx,
+    );
+
+    let message_log = message_log::new(&mut namespace.id, uuid, object::id(&group), ctx);
+
+    event::emit(AgentGroupCreated {
+        group_id: object::id(&group),
+        creator_actor: actor_address,
+        creator_principal: principal_owner,
+        creator_sub_agent_id: memory::acting_sub_agent_id(&acting),
+        creator_identity_class: memory::acting_identity_class(&acting) as u64,
+        organization_id: memory::acting_organization_id(&acting),
+        group_name: name,
+        group_uuid: uuid,
+        created_at: clock::timestamp_ms(clock),
+    });
+
+    (group, encryption_history, message_log)
+}
+
+/// Entry point: create and share an agent-associated messaging group.
+#[allow(lint(share_owned))]
+entry fun create_agent_and_share_group(
+    version: &Version,
+    namespace: &mut MessagingNamespace,
+    group_manager: &GroupManager,
+    group_leaver: &GroupLeaver,
+    block_list: &BlockListRegistry,
+    platform: &Platform,
+    creator_memory_account: &MemoryAccount,
+    cross_principal_peer_account: &MemoryAccount,
+    name: String,
+    uuid: String,
+    initial_encrypted_dek: vector<u8>,
+    initial_members: vector<address>,
+    clock: &Clock,
+    ctx: &mut TxContext,
+) {
+    let (group, encryption_history, message_log) = create_agent_group(
+        version,
+        namespace,
+        group_manager,
+        group_leaver,
+        block_list,
+        platform,
+        creator_memory_account,
+        cross_principal_peer_account,
+        name,
+        uuid,
+        initial_encrypted_dek,
+        vec_set::from_keys(initial_members),
+        clock,
         ctx,
     );
     transfer::public_share_object(group);
@@ -511,12 +756,74 @@ public fun send_paid_message_digest(
         group,
         log,
         sender,
+        sender,
         recipient,
         escrow_amount,
     );
     message_log::send_paid_message(
         log,
         sender,
+        recipient,
+        payment,
+        escrow_amount,
+        dedupe_key,
+        nonce,
+        clock,
+        ctx,
+    );
+}
+
+/// Agent variant of [`send_paid_message_digest`]. Resolves the sub-agent actor and
+/// evaluates paid-DM / social-graph rules against the human `principal_owner`.
+public fun send_agent_paid_message_digest(
+    version: &Version,
+    group: &PermissionedGroup<Messaging>,
+    log: &mut MessageLog,
+    paid_registry: &PaidMessagingRegistry,
+    social_graph: &SocialGraph,
+    block_list: &BlockListRegistry,
+    group_manager: &GroupManager,
+    platform: &Platform,
+    memory_account: &MemoryAccount,
+    recipient: address,
+    payment: Coin<MYSO>,
+    escrow_amount: u64,
+    dedupe_key: vector<u8>,
+    nonce: u128,
+    clock: &Clock,
+    ctx: &mut TxContext,
+) {
+    version.validate_version();
+    assert_group_not_archived(group);
+    assert_message_log_matches_group(log, group);
+    let acting = resolve_messaging_actor(
+        memory_account,
+        platform,
+        block_list,
+        memory::cap_message_send(),
+        coin::value(&payment),
+        clock,
+        ctx,
+    );
+    let actor_address = memory::acting_actor_address(&acting);
+    let principal_owner = memory::acting_principal_owner(&acting);
+    assert!(actor_address == ctx.sender(), EAgentSenderMismatch);
+    assert!(group.has_permission<Messaging, MessagingSender>(actor_address), ENotPermitted);
+    assert_paid_open_allowed(
+        paid_registry,
+        social_graph,
+        block_list,
+        group_manager,
+        group,
+        log,
+        actor_address,
+        principal_owner,
+        recipient,
+        escrow_amount,
+    );
+    message_log::send_paid_message(
+        log,
+        actor_address,
         recipient,
         payment,
         escrow_amount,
@@ -629,6 +936,160 @@ fun grant_all_messaging_permissions(
     group.grant_permission<Messaging, MetadataAdmin>(member, ctx);
 }
 
+/// Messaging permissions for sub-agent creators and agent peers (no admin caps).
+fun grant_agent_messaging_permissions(
+    group: &mut PermissionedGroup<Messaging>,
+    member: address,
+    ctx: &TxContext,
+) {
+    group.grant_permission<Messaging, MessagingSender>(member, ctx);
+    group.grant_permission<Messaging, MessagingReader>(member, ctx);
+}
+
+/// Principal human oversight: read-only membership plus group admin control.
+fun grant_principal_oversight(
+    group: &mut PermissionedGroup<Messaging>,
+    principal: address,
+    ctx: &TxContext,
+) {
+    group.grant_permission<Messaging, MessagingReader>(principal, ctx);
+    group.grant_permission<Messaging, PermissionsAdmin>(principal, ctx);
+}
+
+/// Default permissions for human peers joining an agent-created group.
+fun grant_human_peer_permissions(
+    group: &mut PermissionedGroup<Messaging>,
+    member: address,
+    ctx: &TxContext,
+) {
+    group.grant_permission<Messaging, MessagingSender>(member, ctx);
+    group.grant_permission<Messaging, MessagingReader>(member, ctx);
+}
+
+fun assert_human_group_creator(memory_account: &MemoryAccount, ctx: &TxContext) {
+    let sender = ctx.sender();
+    assert!(sender == memory::owner(memory_account), ENotPermitted);
+    assert!(
+        !memory::is_registered_agent(memory_account, sender),
+        ERegisteredAgentCannotCreateGroup,
+    );
+}
+
+fun resolve_messaging_actor(
+    memory_account: &MemoryAccount,
+    platform: &Platform,
+    block_list: &BlockListRegistry,
+    required_cap: u64,
+    spend_amount: u64,
+    clock: &Clock,
+    ctx: &TxContext,
+): ActingContext {
+    let platform_id = object::uid_to_address(platform::id(platform));
+    let acting = memory::resolve_actor_with_cap(
+        memory_account,
+        required_cap,
+        option::some(platform_id),
+        spend_amount,
+        clock,
+        ctx,
+    );
+    memory::assert_direct_execution_allowed(memory_account, required_cap, ctx);
+    let principal = memory::acting_principal_owner(&acting);
+    assert!(memory::owner(memory_account) == principal, ENotPermitted);
+    assert!(platform::has_joined_platform(platform, principal), ENotPermitted);
+    assert!(
+        !block_list::is_blocked(block_list, platform_id, principal),
+        ENotPermitted,
+    );
+    acting
+}
+
+fun attach_agent_creator_metadata(
+    group_manager: &GroupManager,
+    group: &mut PermissionedGroup<Messaging>,
+    acting: &ActingContext,
+) {
+    let m = group_manager::borrow_metadata_mut<Messaging>(group_manager, group);
+    m.insert_data(string::utf8(AGENT_CHAT_KEY), string::utf8(AGENT_CHAT_TRUE));
+    m.insert_data(
+        string::utf8(CREATOR_ACTOR_KEY),
+        address_to_metadata_string(memory::acting_actor_address(acting)),
+    );
+    m.insert_data(
+        string::utf8(CREATOR_PRINCIPAL_KEY),
+        address_to_metadata_string(memory::acting_principal_owner(acting)),
+    );
+    if (option::is_some(&memory::acting_sub_agent_id(acting))) {
+        m.insert_data(
+            string::utf8(CREATOR_SUB_AGENT_ID_KEY),
+            id_to_metadata_string(*option::borrow(&memory::acting_sub_agent_id(acting))),
+        );
+    };
+    m.insert_data(
+        string::utf8(CREATOR_IDENTITY_CLASS_KEY),
+        u64_to_metadata_string(memory::acting_identity_class(acting) as u64),
+    );
+}
+
+fun grant_agent_initial_members(
+    group: &mut PermissionedGroup<Messaging>,
+    creator_account: &MemoryAccount,
+    cross_principal_peer_account: &MemoryAccount,
+    initial_members: &VecSet<address>,
+    actor_address: address,
+    ctx: &TxContext,
+) {
+    let keys = initial_members.keys();
+    let len = vector::length(keys);
+    let mut i = 0;
+    while (i < len) {
+        let member = *vector::borrow(keys, i);
+        if (member != actor_address) {
+            if (memory::is_registered_agent(creator_account, member)) {
+                grant_agent_messaging_permissions(group, member, ctx);
+            } else if (memory::is_registered_agent(cross_principal_peer_account, member)) {
+                grant_agent_messaging_permissions(group, member, ctx);
+                grant_principal_oversight(group, memory::owner(cross_principal_peer_account), ctx);
+            } else {
+                grant_human_peer_permissions(group, member, ctx);
+            };
+        };
+        i = i + 1;
+    };
+}
+
+fun assert_agent_peers_not_blocked(
+    block_list: &BlockListRegistry,
+    acting: &ActingContext,
+    members: &VecSet<address>,
+    actor_address: address,
+) {
+    let principal = memory::acting_principal_owner(acting);
+    let keys = members.keys();
+    let len = vector::length(keys);
+    let mut i = 0;
+    while (i < len) {
+        let member = *vector::borrow(keys, i);
+        if (member != actor_address) {
+            block_list::assert_not_blocked(block_list, actor_address, member);
+            block_list::assert_not_blocked(block_list, principal, member);
+        };
+        i = i + 1;
+    };
+}
+
+fun address_to_metadata_string(addr: address): String {
+    string::utf8(hex::encode(addr.to_bytes()))
+}
+
+fun id_to_metadata_string(id: ID): String {
+    string::utf8(hex::encode(id.to_bytes()))
+}
+
+fun u64_to_metadata_string(value: u64): String {
+    u64::to_string(value)
+}
+
 fun assert_peers_not_blocked(
     block_list: &BlockListRegistry,
     creator: address,
@@ -675,6 +1136,8 @@ fun is_direct_message_group(
     }
 }
 
+/// Paid-DM gate for new 1:1 conversations. `sender` is the transaction actor; `social_identity`
+/// is the human whose follow graph and paid policy apply (sender for humans, principal for agents).
 fun assert_paid_open_allowed(
     paid_registry: &PaidMessagingRegistry,
     social_graph: &SocialGraph,
@@ -683,17 +1146,19 @@ fun assert_paid_open_allowed(
     group: &PermissionedGroup<Messaging>,
     log: &MessageLog,
     sender: address,
+    social_identity: address,
     recipient: address,
     escrow_amount: u64,
 ) {
     block_list::assert_not_blocked(block_list, sender, recipient);
+    block_list::assert_not_blocked(block_list, social_identity, recipient);
     if (!is_direct_message_group(group_manager, group)) {
         return
     };
     if (message_log::next_seq(log) != 0) {
         return
     };
-    if (social_graph::is_following(social_graph, sender, recipient)) {
+    if (social_graph::is_following(social_graph, social_identity, recipient)) {
         abort EPaidNotRequiredForFollower
     };
     let min_cost = paid_messaging_policy::requires_payment_from(paid_registry, recipient);
@@ -727,9 +1192,16 @@ fun assert_paid_parties_not_blocked(
 
 #[test_only]
 public fun init_for_testing(ctx: &mut TxContext) {
+    let clock = clock::create_for_testing(ctx);
+    init_for_testing_with_clock(&clock, ctx);
+    clock::share_for_testing(clock);
+}
+
+#[test_only]
+public fun init_for_testing_with_clock(clock: &Clock, ctx: &mut TxContext) {
     init(MESSAGING(), ctx);
-    block_list::test_init(ctx);
-    social_graph::init_for_testing(ctx);
+    block_list::test_init(clock, ctx);
+    social_graph::init_for_testing(clock, ctx);
 }
 
 #[test_only]

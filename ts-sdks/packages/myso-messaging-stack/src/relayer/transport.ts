@@ -13,6 +13,8 @@ import type {
 	GroupReceiptState,
 	ListGroupPinsParams,
 	ListGroupReactionsParams,
+	ListAgentConversationsParams,
+	ListGroupsForAgentParams,
 	PostGroupReceiptsParams,
 	PostGroupReactionParams,
 	PostPresenceParams,
@@ -20,6 +22,7 @@ import type {
 	PutUserReadStateParams,
 	RelayerMessage,
 	RelayerReactionEntry,
+	RelayerAgentConversation,
 	SendMessageParams,
 	SendMessageResult,
 	SetGroupPinParams,
@@ -55,5 +58,9 @@ export interface RelayerTransport {
 	postPushToken(params: PostPushTokenParams): Promise<void>;
 	deletePushToken(params: DeletePushTokenParams): Promise<void>;
 	postPresence(params: PostPresenceParams): Promise<void>;
+	/** Wallet-authenticated agent group discovery for the signing principal. */
+	listAgentConversations(params: ListAgentConversationsParams): Promise<RelayerAgentConversation[]>;
+	/** Wallet-authenticated groups where `derivedAddress` is the creator actor. */
+	listGroupsForAgent(params: ListGroupsForAgentParams): Promise<RelayerAgentConversation[]>;
 	disconnect(): void;
 }

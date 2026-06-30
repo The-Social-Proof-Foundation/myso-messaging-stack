@@ -2,7 +2,7 @@
 //! Run with: DATABASE_URL=postgres://... cargo test --test storage_postgres_test -- --ignored
 
 use chrono::Utc;
-use messaging_relayer::models::{Message, SyncStatus};
+use messaging_relayer::models::{Message, MessageAttribution, SyncStatus};
 use messaging_relayer::storage::{create_postgres_storage, StorageAdapter, StorageError};
 use uuid::Uuid;
 
@@ -22,6 +22,7 @@ fn sample_message(group_id: &str, nonce: Vec<u8>) -> Message {
         attachments: vec![],
         signature: vec![1; 64],
         public_key: vec![0; 33],
+        attribution: MessageAttribution::human_message(),
     }
 }
 

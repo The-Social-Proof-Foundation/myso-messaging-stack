@@ -4,7 +4,11 @@ import { ChatArea } from './ChatArea';
 import { CreateGroupModal } from './CreateGroupModal';
 import { useGroupDiscovery } from '../hooks/useGroupDiscovery';
 import { useUnreadCounts } from '../hooks/useUnreadCounts';
-import { useAuthenticatedAddress } from '../contexts/MySocialAuthContext';
+import { useAuthenticatedAddress, useMySocialAuth } from '../contexts/MySocialAuthContext';
+import { AgentConversationsPanel } from './AgentConversationsPanel';
+import { PaidMessagingSettings } from './PaidMessagingSettings';
+import { AgentDevSendPanel } from './AgentDevSendPanel';
+import { useAgentConversations } from '../hooks/useAgentConversations';
 
 interface AuthenticatedAppProps {
   isUsingDevMessengerSigner: boolean;
@@ -14,6 +18,9 @@ export function AuthenticatedApp({
   isUsingDevMessengerSigner,
 }: Readonly<AuthenticatedAppProps>) {
   const address = useAuthenticatedAddress();
+  const { keypair } = useMySocialAuth();
+
+  const agentConversations = useAgentConversations();
 
   const {
     groups,
@@ -61,8 +68,31 @@ export function AuthenticatedApp({
           onSelectGroup={setSelectedUuid}
           onCreateGroup={() => setShowCreateModal(true)}
           loading={discoveryLoading}
+          agentPanel={
+            <AgentConversationsPanel
+              conversations={agentConversations.conversations}
+              loading={agentConversations.loading}
+              error={agentConversations.error}
+              onSelectGroup={(groupId) => {
+                const match = groups.find((g) => g.groupId === groupId);
+                setSelectedUuid(match?.uuid ?? groupId);
+              }}
+            />
+          }
+          settingsPanel={<PaidMessagingSettings />}
         />
-        <ChatArea selectedGroup={selectedGroup} onLeaveGroup={handleLeaveGroup} />
+        <ChatArea
+          selectedGroup={selectedGroup}
+          onLeaveGroup={handleLeaveGroup}
+          devAgentPanel={
+            keypair && selectedGroup ? (
+              <AgentDevSendPanel
+                humanSigner={keypair}
+                groupId={selectedGroup.groupId}
+              />
+            ) : null
+          }
+        />
       </div>
       {showCreateModal && (
         <CreateGroupModal

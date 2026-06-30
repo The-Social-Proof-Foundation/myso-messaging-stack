@@ -9,7 +9,7 @@ use uuid::Uuid;
 
 use crate::auth::signature::verify_signature;
 use crate::auth::AuthContext;
-use crate::models::{Attachment, Message};
+use crate::models::{Attachment, Message, MessageAttribution};
 use crate::state::AppState;
 
 use super::error::ApiError;
@@ -58,6 +58,26 @@ pub async fn create_message(
 
     let attachments = decode_attachments(req.attachments)?;
 
+    let attribution = validate_message_attribution(
+        &req.sender_address,
+        req.principal_owner.as_deref(),
+        req.sub_agent_id.as_deref(),
+        req.identity_class,
+    )?;
+
+    if attribution.is_agent_message() {
+        if let (Some(principal), Some(sub_agent)) = (
+            attribution.principal_owner.as_deref(),
+            attribution.sub_agent_id.as_deref(),
+        ) {
+            state
+                .attribution_verify
+                .verify_agent_attribution_or_warn(&req.sender_address, principal, sub_agent)
+                .await
+                .map_err(|e| ApiError::BadRequest(e.to_string()))?;
+        }
+    }
+
     // DM block check: exactly one other member in group
     if state.block_check.is_enabled() {
         let members = state
@@ -68,18 +88,25 @@ pub async fn create_message(
             .filter(|m| *m != &req.sender_address)
             .collect();
         if peer.len() == 1 {
-            match state
+            let peer_addr = peer[0];
+            let blocked = state
                 .block_check
-                .check_either_blocked(&req.sender_address, peer[0])
+                .check_either_blocked(&req.sender_address, peer_addr)
                 .await
-            {
-                Ok(true) => return Err(ApiError::Blocked),
-                Ok(false) => {}
-                Err(e) => {
-                    return Err(ApiError::Internal(format!(
-                        "Block check unavailable: {}",
-                        e
-                    )));
+                .map_err(|e| ApiError::Internal(format!("Block check unavailable: {}", e)))?;
+            if blocked {
+                return Err(ApiError::Blocked);
+            }
+            if let Some(principal) = attribution.principal_owner.as_deref() {
+                let principal_blocked = state
+                    .block_check
+                    .check_either_blocked(principal, peer_addr)
+                    .await
+                    .map_err(|e| {
+                        ApiError::Internal(format!("Block check unavailable: {}", e))
+                    })?;
+                if principal_blocked {
+                    return Err(ApiError::Blocked);
                 }
             }
         }
@@ -93,7 +120,7 @@ pub async fn create_message(
     let sender_address = req.sender_address.clone();
 
     // Create message domain object
-    let message = Message::new(
+    let message = Message::with_attribution(
         req.group_id,
         req.sender_address,
         encrypted_msg,
@@ -102,6 +129,7 @@ pub async fn create_message(
         attachments,
         signature,
         public_key_with_flag,
+        attribution,
     );
 
     // Store message
@@ -118,9 +146,16 @@ pub async fn create_message(
     let push = state.push_service.clone();
     let storage = state.storage.clone();
     let membership = state.membership_store.clone();
+    let push_attribution = created.attribution.clone();
     tokio::spawn(async move {
         push
-            .notify_new_message(&storage, &membership, &group_id, &sender_address)
+            .notify_new_message(
+                &storage,
+                &membership,
+                &group_id,
+                &sender_address,
+                &push_attribution,
+            )
             .await;
     });
 
@@ -325,4 +360,36 @@ fn decode_attachments(requests: Vec<AttachmentRequest>) -> Result<Vec<Attachment
         .into_iter()
         .map(|r| r.try_into_attachment().map_err(ApiError::BadRequest))
         .collect()
+}
+
+fn validate_message_attribution(
+    sender_address: &str,
+    principal_owner: Option<&str>,
+    sub_agent_id: Option<&str>,
+    identity_class: Option<i16>,
+) -> Result<MessageAttribution, ApiError> {
+    let has_any = principal_owner.is_some() || sub_agent_id.is_some() || identity_class.is_some();
+    if !has_any {
+        return Ok(MessageAttribution::human_message());
+    }
+    let principal = principal_owner.ok_or_else(|| {
+        ApiError::BadRequest("principal_owner required for agent attribution".into())
+    })?;
+    let sub_agent = sub_agent_id.ok_or_else(|| {
+        ApiError::BadRequest("sub_agent_id required for agent attribution".into())
+    })?;
+    let class = identity_class.ok_or_else(|| {
+        ApiError::BadRequest("identity_class required for agent attribution".into())
+    })?;
+    if sender_address == principal {
+        return Err(ApiError::BadRequest(
+            "sender_address cannot equal principal_owner for agent messages".into(),
+        ));
+    }
+    Ok(MessageAttribution {
+        principal_owner: Some(principal.to_string()),
+        sub_agent_id: Some(sub_agent.to_string()),
+        identity_class: Some(class),
+        attribution_version: 1,
+    })
 }

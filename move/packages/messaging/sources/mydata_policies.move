@@ -23,6 +23,9 @@ use myso::permissioned_group::PermissionedGroup;
 use messaging::messaging::{MessagingReader, Messaging};
 use messaging::encryption_history::EncryptionHistory;
 use messaging::version::Version;
+use social_contracts::memory::{Self, MemoryAccount};
+use social_contracts::platform::{Self, Platform};
+use myso::clock::Clock;
 use myso::bcs;
 
 // === Error Codes ===
@@ -111,4 +114,60 @@ entry fun mydata_approve_reader(
     version.validate_version();
     validate_identity(group, encryption_history, id);
     assert!(group.has_permission<Messaging, MessagingReader>(ctx.sender()), ENotPermitted);
+}
+
+/// Principal oversight fallback: allows the human owner to decrypt when they hold
+/// no direct `MessagingReader` but a registered sub-agent on the same
+/// [`MemoryAccount`] does.
+public fun mydata_approve_reader_with_oversight(
+    id: vector<u8>,
+    version: &Version,
+    group: &PermissionedGroup<Messaging>,
+    encryption_history: &EncryptionHistory,
+    memory_account: &MemoryAccount,
+    agent_derived_address: address,
+    ctx: &TxContext,
+) {
+    version.validate_version();
+    validate_identity(group, encryption_history, id);
+    let sender = ctx.sender();
+    if (group.has_permission<Messaging, MessagingReader>(sender)) {
+        return
+    };
+    assert!(memory::owner(memory_account) == sender, ENotPermitted);
+    assert!(memory::is_registered_agent(memory_account, agent_derived_address), ENotPermitted);
+    assert!(
+        group.has_permission<Messaging, MessagingReader>(agent_derived_address),
+        ENotPermitted,
+    );
+}
+
+/// Sub-agent MyData reader approval via `CAP_MESSAGE_READ` on the [`MemoryAccount`].
+entry fun mydata_approve_agent_reader(
+    id: vector<u8>,
+    version: &Version,
+    group: &PermissionedGroup<Messaging>,
+    encryption_history: &EncryptionHistory,
+    platform: &Platform,
+    memory_account: &MemoryAccount,
+    clock: &Clock,
+    ctx: &TxContext,
+) {
+    version.validate_version();
+    validate_identity(group, encryption_history, id);
+    let platform_id = object::uid_to_address(platform::id(platform));
+    let acting = memory::resolve_actor_with_cap(
+        memory_account,
+        memory::cap_message_read(),
+        option::some(platform_id),
+        0,
+        clock,
+        ctx,
+    );
+    let actor_address = memory::acting_actor_address(&acting);
+    assert!(actor_address == ctx.sender(), ENotPermitted);
+    assert!(
+        group.has_permission<Messaging, MessagingReader>(actor_address),
+        ENotPermitted,
+    );
 }

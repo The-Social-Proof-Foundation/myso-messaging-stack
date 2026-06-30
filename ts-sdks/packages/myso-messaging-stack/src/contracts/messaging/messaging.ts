@@ -85,6 +85,7 @@ export interface CreateGroupArguments {
 	namespace: RawTransactionArgument<string>;
 	groupManager: RawTransactionArgument<string>;
 	blockList: RawTransactionArgument<string>;
+	creatorMemoryAccount: RawTransactionArgument<string>;
 	name: RawTransactionArgument<string>;
 	uuid: RawTransactionArgument<string>;
 	initialEncryptedDek: RawTransactionArgument<number[]>;
@@ -99,6 +100,7 @@ export interface CreateGroupOptions {
 				namespace: RawTransactionArgument<string>,
 				groupManager: RawTransactionArgument<string>,
 				blockList: RawTransactionArgument<string>,
+				creatorMemoryAccount: RawTransactionArgument<string>,
 				name: RawTransactionArgument<string>,
 				uuid: RawTransactionArgument<string>,
 				initialEncryptedDek: RawTransactionArgument<number[]>,
@@ -143,6 +145,7 @@ export function createGroup(options: CreateGroupOptions) {
 		null,
 		null,
 		null,
+		null,
 		'0x1::string::String',
 		'0x1::string::String',
 		'vector<u8>',
@@ -153,6 +156,7 @@ export function createGroup(options: CreateGroupOptions) {
 		'namespace',
 		'groupManager',
 		'blockList',
+		'creatorMemoryAccount',
 		'name',
 		'uuid',
 		'initialEncryptedDek',
@@ -171,6 +175,7 @@ export interface CreateAndShareGroupArguments {
 	namespace: RawTransactionArgument<string>;
 	groupManager: RawTransactionArgument<string>;
 	blockList: RawTransactionArgument<string>;
+	creatorMemoryAccount: RawTransactionArgument<string>;
 	name: RawTransactionArgument<string>;
 	uuid: RawTransactionArgument<string>;
 	initialEncryptedDek: RawTransactionArgument<number[]>;
@@ -185,6 +190,7 @@ export interface CreateAndShareGroupOptions {
 				namespace: RawTransactionArgument<string>,
 				groupManager: RawTransactionArgument<string>,
 				blockList: RawTransactionArgument<string>,
+				creatorMemoryAccount: RawTransactionArgument<string>,
 				name: RawTransactionArgument<string>,
 				uuid: RawTransactionArgument<string>,
 				initialEncryptedDek: RawTransactionArgument<number[]>,
@@ -217,6 +223,7 @@ export function createAndShareGroup(options: CreateAndShareGroupOptions) {
 		null,
 		null,
 		null,
+		null,
 		'0x1::string::String',
 		'0x1::string::String',
 		'vector<u8>',
@@ -227,6 +234,7 @@ export function createAndShareGroup(options: CreateAndShareGroupOptions) {
 		'namespace',
 		'groupManager',
 		'blockList',
+		'creatorMemoryAccount',
 		'name',
 		'uuid',
 		'initialEncryptedDek',
@@ -237,6 +245,81 @@ export function createAndShareGroup(options: CreateAndShareGroupOptions) {
 			package: packageAddress,
 			module: 'messaging',
 			function: 'create_and_share_group',
+			arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
+		});
+}
+export interface CreateAgentAndShareGroupArguments {
+	version: RawTransactionArgument<string>;
+	namespace: RawTransactionArgument<string>;
+	groupManager: RawTransactionArgument<string>;
+	groupLeaver: RawTransactionArgument<string>;
+	blockList: RawTransactionArgument<string>;
+	platform: RawTransactionArgument<string>;
+	creatorMemoryAccount: RawTransactionArgument<string>;
+	crossPrincipalPeerMemoryAccount: RawTransactionArgument<string>;
+	name: RawTransactionArgument<string>;
+	uuid: RawTransactionArgument<string>;
+	initialEncryptedDek: RawTransactionArgument<number[]>;
+	initialMembers: RawTransactionArgument<string[]>;
+	clock: RawTransactionArgument<string>;
+}
+export interface CreateAgentAndShareGroupOptions {
+	package?: string;
+	arguments:
+		| CreateAgentAndShareGroupArguments
+		| [
+				version: RawTransactionArgument<string>,
+				namespace: RawTransactionArgument<string>,
+				groupManager: RawTransactionArgument<string>,
+				groupLeaver: RawTransactionArgument<string>,
+				blockList: RawTransactionArgument<string>,
+				platform: RawTransactionArgument<string>,
+				creatorMemoryAccount: RawTransactionArgument<string>,
+				crossPrincipalPeerMemoryAccount: RawTransactionArgument<string>,
+				name: RawTransactionArgument<string>,
+				uuid: RawTransactionArgument<string>,
+				initialEncryptedDek: RawTransactionArgument<number[]>,
+				initialMembers: RawTransactionArgument<string[]>,
+				clock: RawTransactionArgument<string>,
+		  ];
+}
+export function createAgentAndShareGroup(options: CreateAgentAndShareGroupOptions) {
+	const packageAddress = options.package ?? '@local-pkg/messaging';
+	const argumentsTypes = [
+		null,
+		null,
+		null,
+		null,
+		null,
+		null,
+		null,
+		null,
+		'0x1::string::String',
+		'0x1::string::String',
+		'vector<u8>',
+		'vector<address>',
+		null,
+	] satisfies (string | null)[];
+	const parameterNames = [
+		'version',
+		'namespace',
+		'groupManager',
+		'groupLeaver',
+		'blockList',
+		'platform',
+		'creatorMemoryAccount',
+		'crossPrincipalPeerMemoryAccount',
+		'name',
+		'uuid',
+		'initialEncryptedDek',
+		'initialMembers',
+		'clock',
+	];
+	return (tx: Transaction) =>
+		tx.moveCall({
+			package: packageAddress,
+			module: 'messaging',
+			function: 'create_agent_and_share_group',
 			arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
 		});
 }
@@ -671,6 +754,91 @@ export function sendPaidMessageDigest(options: SendPaidMessageDigestOptions) {
 			package: packageAddress,
 			module: 'messaging',
 			function: 'send_paid_message_digest',
+			arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
+		});
+}
+export interface SendAgentPaidMessageDigestArguments {
+	version: RawTransactionArgument<string>;
+	group: RawTransactionArgument<string>;
+	log: RawTransactionArgument<string>;
+	paidRegistry: RawTransactionArgument<string>;
+	socialGraph: RawTransactionArgument<string>;
+	blockList: RawTransactionArgument<string>;
+	groupManager: RawTransactionArgument<string>;
+	platform: RawTransactionArgument<string>;
+	memoryAccount: RawTransactionArgument<string>;
+	recipient: RawTransactionArgument<string>;
+	payment: RawTransactionArgument<string>;
+	escrowAmount: RawTransactionArgument<number | bigint>;
+	dedupeKey: RawTransactionArgument<number[]>;
+	nonce: RawTransactionArgument<number | bigint>;
+}
+export interface SendAgentPaidMessageDigestOptions {
+	package?: string;
+	arguments:
+		| SendAgentPaidMessageDigestArguments
+		| [
+				version: RawTransactionArgument<string>,
+				group: RawTransactionArgument<string>,
+				log: RawTransactionArgument<string>,
+				paidRegistry: RawTransactionArgument<string>,
+				socialGraph: RawTransactionArgument<string>,
+				blockList: RawTransactionArgument<string>,
+				groupManager: RawTransactionArgument<string>,
+				platform: RawTransactionArgument<string>,
+				memoryAccount: RawTransactionArgument<string>,
+				recipient: RawTransactionArgument<string>,
+				payment: RawTransactionArgument<string>,
+				escrowAmount: RawTransactionArgument<number | bigint>,
+				dedupeKey: RawTransactionArgument<number[]>,
+				nonce: RawTransactionArgument<number | bigint>,
+		  ];
+}
+/**
+ * Agent variant of [`send_paid_message_digest`]. Resolves the sub-agent actor and
+ * evaluates paid-DM / social-graph rules against the human `principal_owner`.
+ */
+export function sendAgentPaidMessageDigest(options: SendAgentPaidMessageDigestOptions) {
+	const packageAddress = options.package ?? '@local-pkg/messaging';
+	const argumentsTypes = [
+		null,
+		null,
+		null,
+		null,
+		null,
+		null,
+		null,
+		null,
+		null,
+		null,
+		'address',
+		null,
+		'u64',
+		'vector<u8>',
+		'u128',
+		'0x2::clock::Clock',
+	] satisfies (string | null)[];
+	const parameterNames = [
+		'version',
+		'group',
+		'log',
+		'paidRegistry',
+		'socialGraph',
+		'blockList',
+		'groupManager',
+		'platform',
+		'memoryAccount',
+		'recipient',
+		'payment',
+		'escrowAmount',
+		'dedupeKey',
+		'nonce',
+	];
+	return (tx: Transaction) =>
+		tx.moveCall({
+			package: packageAddress,
+			module: 'messaging',
+			function: 'send_agent_paid_message_digest',
 			arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
 		});
 }

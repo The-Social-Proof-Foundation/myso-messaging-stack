@@ -1,13 +1,10 @@
 # @socialproof/myso-messaging-stack
 
-> [!NOTE] The MySocial Messaging Stack tooling is currently in Beta and available on both Testnet
-> and Mainnet.
+> [!NOTE] The MySocial Messaging Stack tooling is currently in Beta.
 >
 > The tooling is production-capable for many use cases, but developers should evaluate their own
 > security, reliability, and operational requirements before deploying to production.
->
-> For questions, feedback, or production discussions, reach out to the team on
-> [MySo Discord](https://discord.com/channels/916379725201563759/1417696942074630194).
+>.
 
 TypeScript SDK for encrypted group messaging on MySocial, powered by
 [MyData](https://github.com/the-social-proof-foundation/myso-mydata) for end-to-end encryption.

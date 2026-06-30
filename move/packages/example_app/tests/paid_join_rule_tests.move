@@ -29,7 +29,6 @@ fun setup_for_testing(ts: &mut Scenario): ID {
     // Initialize the messaging module (creates MessagingNamespace)
     ts.next_tx(ALICE);
     messaging::init_for_testing(ts.ctx());
-    version::init_for_testing(ts.ctx());
 
     // Alice creates a token-gated group in a single call
     ts.next_tx(ALICE);
@@ -129,7 +128,6 @@ fun join_rule_not_member() {
     // Initialize messaging module
     ts.next_tx(ALICE);
     messaging::init_for_testing(ts.ctx());
-    version::init_for_testing(ts.ctx());
 
     // Create group without setting up the rule with permissions
     ts.next_tx(ALICE);
@@ -178,7 +176,6 @@ fun join_rule_without_manager_permission() {
     // Initialize messaging module
     ts.next_tx(ALICE);
     messaging::init_for_testing(ts.ctx());
-    version::init_for_testing(ts.ctx());
 
     // Create group
     ts.next_tx(ALICE);
@@ -384,7 +381,6 @@ fun join_wrong_group() {
     // Initialize messaging module
     ts.next_tx(ALICE);
     messaging::init_for_testing(ts.ctx());
-    version::init_for_testing(ts.ctx());
 
     // Create two groups
     ts.next_tx(ALICE);

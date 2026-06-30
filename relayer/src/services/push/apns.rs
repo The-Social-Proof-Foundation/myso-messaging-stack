@@ -12,7 +12,7 @@ use serde_json::{json, Value};
 use tracing::{debug, info, warn};
 
 use crate::config::Config;
-use crate::models::PushTokenRecord;
+use crate::models::{MessageAttribution, PushTokenRecord};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ApnsEnvironment {
@@ -88,11 +88,18 @@ pub struct ApnsClient {
     backend: ApnsBackend,
 }
 
-pub fn new_message_payload_json(group_id: &str) -> Value {
-    json!({
+pub fn new_message_payload_json(group_id: &str, attribution: &MessageAttribution) -> Value {
+    let mut payload = json!({
         "aps": { "content-available": 1 },
         "group_id": group_id,
-    })
+        "is_agent_message": attribution.is_agent_message(),
+    });
+    if let Some(principal) = &attribution.principal_owner {
+        if let Some(obj) = payload.as_object_mut() {
+            obj.insert("principal_owner".to_string(), json!(principal));
+        }
+    }
+    payload
 }
 
 impl ApnsClient {
@@ -175,6 +182,7 @@ impl ApnsClient {
         &self,
         token: &PushTokenRecord,
         group_id: &str,
+        attribution: &crate::models::MessageAttribution,
     ) -> Result<(), ApnsSendError> {
         if !Self::is_ios_token(token) {
             return Err(ApnsSendError::Other("non-ios platform".to_string()));
@@ -187,9 +195,9 @@ impl ApnsClient {
         }
 
         match &self.backend {
-            ApnsBackend::A2(client) => self.send_via_a2(client, token, group_id).await,
+            ApnsBackend::A2(client) => self.send_via_a2(client, token, group_id, attribution).await,
             ApnsBackend::HttpTest { client, base_url } => {
-                self.send_via_http_test(client, base_url, token, group_id)
+                self.send_via_http_test(client, base_url, token, group_id, attribution)
                     .await
             }
         }
@@ -200,6 +208,7 @@ impl ApnsClient {
         client: &Client,
         token: &PushTokenRecord,
         group_id: &str,
+        attribution: &crate::models::MessageAttribution,
     ) -> Result<(), ApnsSendError> {
         let mut payload = DefaultNotificationBuilder::new()
             .set_content_available()
@@ -215,6 +224,14 @@ impl ApnsClient {
         payload
             .add_custom_data("group_id", &group_id)
             .map_err(|err| ApnsSendError::Other(err.to_string()))?;
+        payload
+            .add_custom_data("is_agent_message", &attribution.is_agent_message())
+            .map_err(|err| ApnsSendError::Other(err.to_string()))?;
+        if let Some(principal) = &attribution.principal_owner {
+            payload
+                .add_custom_data("principal_owner", principal)
+                .map_err(|err| ApnsSendError::Other(err.to_string()))?;
+        }
 
         debug!(
             "APNs metadata push: topic={} env={:?} token={} group={}",
@@ -237,13 +254,14 @@ impl ApnsClient {
         base_url: &str,
         token: &PushTokenRecord,
         group_id: &str,
+        attribution: &crate::models::MessageAttribution,
     ) -> Result<(), ApnsSendError> {
         let url = format!(
             "{}/3/device/{}",
             base_url.trim_end_matches('/'),
             token.token
         );
-        let body = new_message_payload_json(group_id);
+        let body = new_message_payload_json(group_id, attribution);
 
         let response = client
             .post(url)
@@ -333,9 +351,10 @@ mod tests {
 
     #[test]
     fn new_message_payload_shape() {
-        let payload = new_message_payload_json("group-123");
+        let payload = new_message_payload_json("group-123", &MessageAttribution::human_message());
         assert_eq!(payload["aps"]["content-available"], 1);
         assert_eq!(payload["group_id"], "group-123");
+        assert_eq!(payload["is_agent_message"], false);
     }
 
     #[test]

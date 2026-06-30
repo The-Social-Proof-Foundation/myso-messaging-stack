@@ -9,6 +9,7 @@ import type {
 	ArchiveGroupCallOptions,
 	ClearGroupHandleCallOptions,
 	CreateGroupCallOptions,
+	CreateAgentGroupCallOptions,
 	InsertGroupDataCallOptions,
 	LeaveCallOptions,
 	RemoveGroupDataCallOptions,
@@ -53,9 +54,26 @@ export class MySoMessagingStackTransactions {
 	 */
 	createAndShareGroup({
 		transaction = new Transaction(),
+		sender,
 		...options
-	}: CreateGroupCallOptions & { transaction?: Transaction }): Transaction {
-		transaction.add(this.#call.createAndShareGroup(options));
+	}: CreateGroupCallOptions & { transaction?: Transaction; sender?: string }): Transaction {
+		if (!sender) {
+			throw new Error(
+				'createAndShareGroup requires sender (wallet address) for MemoryAccount resolution',
+			);
+		}
+		transaction.add(this.#call.createAndShareGroup({ ...options, sender }));
+		return transaction;
+	}
+
+	/**
+	 * Creates a Transaction that creates and shares an agent-associated messaging group.
+	 */
+	createAgentAndShareGroup({
+		transaction = new Transaction(),
+		...options
+	}: CreateAgentGroupCallOptions & { transaction?: Transaction }): Transaction {
+		transaction.add(this.#call.createAgentAndShareGroup(options));
 		return transaction;
 	}
 

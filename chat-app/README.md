@@ -187,6 +187,54 @@ The app follows a 3-layer architecture:
 
 `VITE_MYSOCIAL_AUTH_API_BASE_URL` must be the **MySocial API** host (see [@socialproof/mysocial-auth](https://www.npmjs.com/package/@socialproof/mysocial-auth)), **not** the salt URL (`VITE_MYSOCIAL_SALT_URL` is separate).
 
+### Messaging client init fails: `Version` not found (`GraphQL found 0 and RPC publish-tx lookup found 0`)
+
+The `0xe110::version::Version` shared object was never created at genesis. GraphQL may show `MessagingNamespace` but `version.nodes` is empty. Rebuild myso from **myso-core** (after the `version::share_initial` change in `messaging.init`), then force-regenesis.
+
+**1. Rebuild binaries**
+
+```bash
+cd ../myso-mydata && cargo build -p key-server -p mydata-cli
+cd ../myso-core && cargo build -p myso
+```
+
+**2. Reset indexer (after prior regenesis)**
+
+```bash
+cd ../myso-core
+cargo run --bin myso-indexer-alt -- reset-database \
+  --database-url postgresql://postgres@localhost:5432/sui_indexer
+```
+
+**3. Force regenesis**
+
+```bash
+cargo run --bin myso -- start --with-faucet --force-regenesis \
+  --with-indexer=postgresql://postgres@localhost:5432/sui_indexer \
+  --with-social-indexer --with-mydata --with-graphql
+```
+
+**4. Verify genesis singletons** (`http://localhost:9125/graphql`)
+
+```graphql
+query VerifyGenesisSingletons {
+  version: objects(filter: { type: "0xe110::version::Version", ownerKind: SHARED }, first: 1) {
+    nodes { address }
+  }
+  namespace: objects(filter: { type: "0xe110::messaging::MessagingNamespace", ownerKind: SHARED }, first: 1) {
+    nodes { address }
+  }
+}
+```
+
+`version.nodes` and `namespace.nodes` must each have length **1**.
+
+**5. Refresh chat-app**
+
+- Copy new `KEY_SERVER_OBJECT_ID` into `VITE_MYDATA_KEY_SERVER_OBJECT_IDS`
+- `pnpm run build:deps && pnpm dev`
+- `myso client faucet --address <signer>`
+
 ### Create group fails with `Failed to fetch` / `ERR_CONNECTION_REFUSED` on port 2024 (localnet)
 
 Group creation encrypts the group DEK via **MyData key servers**. On localnet, `myso start --with-mydata` registers a key server at `http://127.0.0.1:2024`.
@@ -205,7 +253,7 @@ Group creation encrypts the group DEK via **MyData key servers**. On localnet, `
 After regenesis, genesis singleton IDs and the MyData key server object ID change. Update `chat-app/.env` from the latest `myso start` output, **restart `pnpm dev`**, and fund your dev signer again (`myso client faucet <address>`).
 
 - **Console diagnostics (dev):** Create Group logs `[chat-app] mydata key servers`, `[chat-app] signer gas`, and `[chat-app] create-group tx inputs` before signing.
-- **`DeprecatedSDKVersionError`:** Rebuild `myso` so generated `key-server-config.yaml` sets `ts_sdk_version_requirement: '>=0.0.4'` (matches `@socialproof/mydata` in this app). Regenesis and restart localnet.
+- **`DeprecatedSDKVersionError`:** Rebuild `myso` so generated `key-server-config.yaml` sets `ts_sdk_version_requirement: '>=0.0.5'` (matches `@socialproof/mydata` in this app). Regenesis and restart localnet.
 - **Object `does not exist` with a derived-looking ID:** You likely set `VITE_MYDATA_KEY_SERVER_OBJECT_IDS` to the Field child instead of the parent `KeyServer` object.
 - **Stale gas coin from `listCoins`:** The app resolves gas via RPC-verified coins before sign; compare `myso client gas` with `[chat-app] signer gas` in the console.
 - **`InvalidKeyServerError`:** On-chain registered public key did not match the running key-server HTTP key. Rebuild `myso` from myso-core (uses `gen-seed` + `derive-key --index 0`), regenesis, and verify `PUBLIC_KEY` in `myso start` output equals `Client "local_key_server" uses public key` in key-server logs.
@@ -249,6 +297,25 @@ Optional HTTP check:
 curl -H "Client-Sdk-Version: 0.0.4" \
   "http://127.0.0.1:2024/v1/service?service_id=<KEY_SERVER_OBJECT_ID>"
 ```
+
+---
+
+## 8. Agent messaging and paid DMs
+
+| Env var | Purpose |
+|---------|---------|
+| `VITE_SOCIAL_SERVER_URL` | Enables paid policy gating + sidebar **Paid messaging** panel |
+| `VITE_ENABLE_AGENT_DEV=true` | Shows dev agent send panel in chat |
+| `VITE_AGENT_SUB_AGENT_ID` | Sub-agent object id (dev panel) |
+| `VITE_AGENT_SECRET_KEY` | Agent Ed25519 secret key hex (dev panel) |
+| `VITE_AGENT_PLATFORM_ID` | Platform shared object id |
+| `VITE_AGENT_MEMORY_ACCOUNT_ID` | Principal MemoryAccount id |
+
+The sidebar lists **Agent conversations** from relayer `GET /v1/agent-conversations` (wallet auth). Agent messages show an **Agent** badge when relayer attribution is present.
+
+Relayer env for indexing: `MESSAGING_PACKAGE_ID` (default genesis `0xe110`), optional `ATTRIBUTION_STRICT_VERIFY` + `MYSO_JSON_RPC_URL`.
+
+See [AgentMessaging.md](../docs/myso-messaging-stack/AgentMessaging.md) and [PaidMessaging.md](../docs/myso-messaging-stack/PaidMessaging.md).
 
 ---
 

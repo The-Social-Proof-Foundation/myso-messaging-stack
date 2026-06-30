@@ -14,7 +14,7 @@
 /// - `messaging::leave` - removes the caller from a group
 module messaging::group_leaver;
 
-use myso::permissioned_group::PermissionedGroup;
+use myso::permissioned_group::{PermissionedGroup, PermissionsAdmin, ExtensionPermissionsAdmin};
 use std::string::String;
 use myso::derived_object;
 
@@ -80,4 +80,22 @@ public(package) fun leave<T: drop>(
     ctx: &TxContext,
 ) {
     group.object_remove_member<T>(&self.id, ctx.sender());
+}
+
+/// Revokes `PermissionsAdmin` from `member` using this actor's admin capability.
+public(package) fun revoke_permissions_admin<T: drop>(
+    self: &GroupLeaver,
+    group: &mut PermissionedGroup<T>,
+    member: address,
+) {
+    group.object_revoke_permission<T, PermissionsAdmin>(&self.id, member);
+}
+
+/// Revokes `ExtensionPermissionsAdmin` from `member` using this actor's admin capability.
+public(package) fun revoke_extension_permissions_admin<T: drop>(
+    self: &GroupLeaver,
+    group: &mut PermissionedGroup<T>,
+    member: address,
+) {
+    group.object_revoke_permission<T, ExtensionPermissionsAdmin>(&self.id, member);
 }

@@ -13,7 +13,9 @@ import { deriveDynamicFieldID, normalizeMySoAddress, toHex } from '@socialproof/
 
 import type { MySoMessagingStackBCS, ParsedMetadata } from './bcs.js';
 import { METADATA_SCHEMA_VERSION, metadataKeyType } from './constants.js';
+import { GENESIS_PACKAGE_IDS } from './genesis.js';
 import type { MySoMessagingStackDerive } from './derive.js';
+import { requiresPaymentFrom } from './contracts/messaging/paid_messaging_policy.js';
 import { MySoMessagingStackClientError } from './error.js';
 import type {
 	EncryptedKeyViewOptions,
@@ -234,6 +236,109 @@ export class MySoMessagingStackView {
 		return parseOptionObjectIdBcs(new Uint8Array(byteList));
 	}
 
+	/**
+	 * Resolves a principal's linked {@link MemoryAccount} object id via the on-chain registry.
+	 * Returns null when the owner has no MemoryAccount (e.g. legacy profile without memory).
+	 */
+	async memoryAccountIdForOwner(options: {
+		owner: string;
+		memoryRegistryId?: string;
+		signal?: AbortSignal;
+	}): Promise<string | null> {
+		const registryId = options.memoryRegistryId ?? this.#packageConfig.memoryRegistryId;
+		if (!registryId) {
+			throw new MySoMessagingStackClientError(
+				'memoryAccountIdForOwner requires memoryRegistryId in packageConfig (resolve genesis config).',
+			);
+		}
+
+		const root = this.#client as ClientWithCoreApi & {
+			devInspectTransactionBlock?: (
+				input: DevInspectTransactionBlockParams,
+			) => Promise<DevInspectResults>;
+		};
+		if (typeof root.devInspectTransactionBlock !== 'function') {
+			throw new MySoMessagingStackClientError(
+				'memoryAccountIdForOwner requires a JSON-RPC client with devInspectTransactionBlock.',
+			);
+		}
+
+		const tx = new Transaction();
+		tx.moveCall({
+			target: `${GENESIS_PACKAGE_IDS.social}::memory::account_id_for_owner`,
+			arguments: [tx.object(registryId), tx.pure.address(normalizeMySoAddress(options.owner))],
+		});
+		const inspected = await root.devInspectTransactionBlock({
+			sender: normalizeMySoAddress('0x0'),
+			transactionBlock: tx,
+			signal: options.signal,
+		});
+		if (inspected.error) {
+			throw new MySoMessagingStackClientError(
+				`memoryAccountIdForOwner failed: ${inspected.error}`,
+			);
+		}
+		const ret = inspected.results?.[0]?.returnValues?.[0];
+		if (!ret) {
+			throw new MySoMessagingStackClientError(
+				'memoryAccountIdForOwner: no return value from dev-inspect',
+			);
+		}
+		const [byteList] = ret;
+		return parseOptionObjectIdBcs(new Uint8Array(byteList));
+	}
+
+	/**
+	 * Returns whether a recipient requires paid stranger DMs and their minimum escrow.
+	 * Uses on-chain `requires_payment_from` via dev-inspect (no gas).
+	 */
+	async requiresPaymentFromRecipient(recipient: string): Promise<{
+		enabled: boolean;
+		minCost: bigint | null;
+	}> {
+		const registryId = this.#derive.paidMessagingRegistryId();
+		const root = this.#client as ClientWithCoreApi & {
+			devInspectTransactionBlock?: (
+				input: DevInspectTransactionBlockParams,
+			) => Promise<DevInspectResults>;
+		};
+		if (typeof root.devInspectTransactionBlock !== 'function') {
+			throw new MySoMessagingStackClientError(
+				'requiresPaymentFromRecipient requires a JSON-RPC client with devInspectTransactionBlock.',
+			);
+		}
+
+		const tx = new Transaction();
+		requiresPaymentFrom({
+			package: this.#packageConfig.latestPackageId,
+			arguments: {
+				registry: registryId,
+				recipient: normalizeMySoAddress(recipient),
+			},
+		})(tx);
+
+		const inspected = await root.devInspectTransactionBlock({
+			sender: normalizeMySoAddress(recipient),
+			transactionBlock: tx,
+		});
+		if (inspected.error) {
+			throw new MySoMessagingStackClientError(
+				`requiresPaymentFromRecipient failed: ${inspected.error}`,
+			);
+		}
+
+		const ret = inspected.results?.[0]?.returnValues?.[0];
+		if (!ret) {
+			return { enabled: false, minCost: null };
+		}
+
+		const minCost = parseOptionU64Bcs(new Uint8Array(ret[0]));
+		return {
+			enabled: minCost !== null,
+			minCost,
+		};
+	}
+
 	// === Private Helpers ===
 
 	/**
@@ -319,4 +424,21 @@ function parseOptionObjectIdBcs(bytes: Uint8Array): string | null {
 		);
 	}
 	return normalizeMySoAddress(toHex(idBytes));
+}
+
+/** BCS for Move `std::option::Option<u64>`: `0` (none) or `1` + u64 LE. */
+function parseOptionU64Bcs(bytes: Uint8Array): bigint | null {
+	if (bytes.length < 1) {
+		return null;
+	}
+	const tag = bytes[0];
+	if (tag === 0) return null;
+	if (tag !== 1 || bytes.length < 9) {
+		throw new MySoMessagingStackClientError(`Unexpected Option<u64> BCS payload (${bytes.length} bytes)`);
+	}
+	let value = 0n;
+	for (let i = 0; i < 8; i += 1) {
+		value += BigInt(bytes[1 + i]!) << BigInt(i * 8);
+	}
+	return value;
 }

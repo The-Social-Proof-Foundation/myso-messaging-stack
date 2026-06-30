@@ -26,6 +26,8 @@ import type {
 	GroupReceiptState,
 	ListGroupPinsParams,
 	ListGroupReactionsParams,
+	ListAgentConversationsParams,
+	ListGroupsForAgentParams,
 	PostGroupReceiptsParams,
 	PostGroupReactionParams,
 	PostPresenceParams,
@@ -33,6 +35,7 @@ import type {
 	PutUserReadStateParams,
 	RelayerMessage,
 	RelayerReactionEntry,
+	RelayerAgentConversation,
 	SendMessageParams,
 	SendMessageResult,
 	SetGroupPinParams,
@@ -85,6 +88,34 @@ interface WireReadStateResponse {
 	encrypted_blob: string;
 	blob_version: number;
 	updated_at?: string;
+}
+
+interface WireAgentConversation {
+	group_id: string;
+	creator_actor: string;
+	creator_principal: string;
+	creator_sub_agent_id?: string | null;
+	creator_identity_class?: number | null;
+	group_name?: string | null;
+	group_uuid?: string | null;
+	created_at: number;
+}
+
+interface WireAgentConversationsResponse {
+	conversations: WireAgentConversation[];
+}
+
+function fromWireAgentConversation(wire: WireAgentConversation): RelayerAgentConversation {
+	return {
+		groupId: wire.group_id,
+		creatorActor: wire.creator_actor,
+		creatorPrincipal: wire.creator_principal,
+		creatorSubAgentId: wire.creator_sub_agent_id,
+		creatorIdentityClass: wire.creator_identity_class,
+		groupName: wire.group_name,
+		groupUuid: wire.group_uuid,
+		createdAt: wire.created_at,
+	};
 }
 
 interface WireErrorResponse {
@@ -221,6 +252,11 @@ export class HTTPRelayerTransport implements RelayerTransport {
 
 		if (params.messageSignature) {
 			wirePayload.message_signature = params.messageSignature;
+		}
+		if (params.attribution) {
+			wirePayload.principal_owner = params.attribution.principalOwner;
+			wirePayload.sub_agent_id = params.attribution.subAgentId;
+			wirePayload.identity_class = params.attribution.identityClass;
 		}
 
 		const { body, headers } = await createBodyAuth(params.signer, wirePayload);
@@ -444,6 +480,31 @@ export class HTTPRelayerTransport implements RelayerTransport {
 			headers: { ...headers, 'Content-Type': 'application/json' },
 			body: JSON.stringify(body),
 		});
+	}
+
+	async listAgentConversations(
+		params: ListAgentConversationsParams,
+	): Promise<RelayerAgentConversation[]> {
+		const headers = await createWalletHeaderAuth(params.signer);
+		const limit = params.limit ?? 100;
+		const wire = await this.#request<WireAgentConversationsResponse>(
+			this.#v1Path(`/agent-conversations?limit=${limit}`),
+			{ method: 'GET', headers },
+		);
+		return wire.conversations.map(fromWireAgentConversation);
+	}
+
+	async listGroupsForAgent(
+		params: ListGroupsForAgentParams,
+	): Promise<RelayerAgentConversation[]> {
+		const headers = await createWalletHeaderAuth(params.signer);
+		const limit = params.limit ?? 100;
+		const encoded = encodeURIComponent(params.derivedAddress);
+		const wire = await this.#request<WireAgentConversationsResponse>(
+			this.#v1Path(`/agent-conversations/by-agent/${encoded}?limit=${limit}`),
+			{ method: 'GET', headers },
+		);
+		return wire.conversations.map(fromWireAgentConversation);
 	}
 
 	async *subscribe(params: SubscribeParams): AsyncIterable<RelayerMessage> {

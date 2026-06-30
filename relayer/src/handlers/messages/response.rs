@@ -46,6 +46,15 @@ pub struct MessageResponse {
     pub signature: String,
     /// Hex-encoded sender public key (flag byte + key bytes)
     pub public_key: String,
+    /// Human principal owner when the sender is a sub-agent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub principal_owner: Option<String>,
+    /// On-chain SubAgent object ID for agent senders.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sub_agent_id: Option<String>,
+    /// Identity class: 0=human, 1=delegated AI, 2=organization.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub identity_class: Option<i16>,
 }
 
 impl From<Message> for MessageResponse {
@@ -77,6 +86,9 @@ impl From<Message> for MessageResponse {
             quilt_patch_id: msg.quilt_patch_id,
             signature: hex::encode(&msg.signature),
             public_key: hex::encode(&msg.public_key),
+            principal_owner: msg.attribution.principal_owner.clone(),
+            sub_agent_id: msg.attribution.sub_agent_id.clone(),
+            identity_class: msg.attribution.identity_class,
         }
     }
 }

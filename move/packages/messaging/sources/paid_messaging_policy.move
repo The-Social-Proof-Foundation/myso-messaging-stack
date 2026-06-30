@@ -57,6 +57,7 @@ public(package) fun share(self: PaidMessagingRegistry) {
 /// Sets paid DM policy for the transaction sender's wallet.
 ///
 /// When `enabled` is true, `min_cost` must be set (enforced on stranger 1:1 paid opens).
+#[allow(lint(public_entry))]
 public entry fun set_paid_messaging_policy(
     registry: &mut PaidMessagingRegistry,
     enabled: bool,

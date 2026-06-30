@@ -15,6 +15,7 @@ use crate::auth::{
 };
 use crate::config::Config;
 use crate::file_storage::FileStorageClient;
+use crate::handlers::agent_groups;
 use crate::handlers::group_features;
 use crate::handlers::health::health_check;
 use crate::handlers::messages::{create_message, delete_message, get_messages, update_message};
@@ -23,11 +24,11 @@ use crate::handlers::push_devices::{delete_push_token, post_push_token};
 use crate::handlers::user_read_state::{get_read_state, put_read_state};
 use crate::handlers::ws::ws_handler;
 use crate::services::{
-    BlockCheckService, FileStorageSyncService, MembershipSyncService, PgListenerService,
-    PushService, RealtimeHub,
+    AttributionVerifyService, BlockCheckService, FileStorageSyncService, MembershipSyncService,
+    PgListenerService, PushService, RealtimeHub,
 };
 use crate::state::AppState;
-use crate::storage::create_storage_async;
+use crate::storage::{create_agent_group_store_async, create_storage_async};
 
 pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     dotenvy::dotenv().ok();
@@ -49,6 +50,11 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let membership_store =
         create_membership_store_async(config.membership_store_type.clone(), database_url.as_deref())
             .await;
+    let agent_group_store = create_agent_group_store_async(
+        config.membership_store_type.clone(),
+        database_url.as_deref(),
+    )
+    .await;
     let block_check = BlockCheckService::from_config(&config);
     let push_service = PushService::from_config(&config);
     let realtime_hub = Arc::new(RealtimeHub::new());
@@ -57,6 +63,8 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         storage.clone(),
         sync_tx,
         membership_store.clone(),
+        agent_group_store.clone(),
+        AttributionVerifyService::from_config(&config),
         block_check,
         push_service,
         realtime_hub.clone(),
@@ -75,7 +83,8 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         }
     }
 
-    let mut sync_service = MembershipSyncService::new(&config, membership_store.clone());
+    let mut sync_service =
+        MembershipSyncService::new(&config, membership_store.clone(), agent_group_store.clone());
     tokio::spawn(async move {
         sync_service.run().await;
     });
@@ -116,7 +125,15 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .route("/users/read-state", get(get_read_state).put(put_read_state))
         .route("/devices/push-tokens", post(post_push_token))
         .route("/devices/push-tokens/:token", delete(delete_push_token))
-        .route("/devices/presence", post(post_presence));
+        .route("/devices/presence", post(post_presence))
+        .route(
+            "/agent-conversations",
+            get(agent_groups::list_agent_conversations),
+        )
+        .route(
+            "/agent-conversations/by-agent/:derived_address",
+            get(agent_groups::list_groups_for_agent),
+        );
 
     let realtime_routes = Router::new()
         .route("/ws", get(ws_handler))

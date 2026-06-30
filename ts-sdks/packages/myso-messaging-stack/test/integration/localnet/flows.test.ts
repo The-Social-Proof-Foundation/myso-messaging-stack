@@ -54,7 +54,10 @@ describe('Full Flows', () => {
 
 	describe('group creation', () => {
 		it('should create a messaging group transaction', () => {
-			const tx = adminClient.messaging.tx.createAndShareGroup({ name: 'Test Group' });
+			const tx = adminClient.messaging.tx.createAndShareGroup({
+				name: 'Test Group',
+				sender: adminKeypair.toMySoAddress(),
+			});
 			expect(tx).toBeDefined();
 			expect(tx.getData).toBeDefined();
 		});

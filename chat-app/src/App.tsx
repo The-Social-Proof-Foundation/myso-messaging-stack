@@ -1,4 +1,5 @@
 import {
+  useMessagingClient,
   useMessagingClientInitError,
   useMessagingClientLoading,
 } from './contexts/MessagingClientContext';
@@ -23,10 +24,12 @@ function App() {
     logout,
   } = useMySocialAuth();
 
+  const messagingClient = useMessagingClient();
   const messagingClientInitError = useMessagingClientInitError();
   const messagingClientLoading = useMessagingClientLoading();
 
   const connected = Boolean(session && keypair);
+  const messagingReady = Boolean(messagingClient && !messagingClientLoading);
 
   return (
     <div className="flex h-screen flex-col bg-secondary-50 dark:bg-secondary-900">
@@ -140,24 +143,34 @@ function App() {
             {messagingClientInitError}
           </pre>
           <p className="max-w-xl text-center text-xs text-secondary-600 dark:text-secondary-400">
-            Genesis package IDs (0x2 / 0xe110 / 0x50c1) are resolved automatically.
-            Check{' '}
-            <code className="rounded bg-secondary-200 px-1 dark:bg-secondary-700">
-              VITE_MYSO_RPC_URL
-            </code>{' '}
-            and{' '}
-            <code className="rounded bg-secondary-200 px-1 dark:bg-secondary-700">
-              VITE_MYSO_GRAPHQL_URL
-            </code>{' '}
-            point at a v112 genesis network with social bootstrap completed.
+            {messagingClientInitError.includes('RPC publish-tx lookup found 0') ? (
+              <>
+                The <code className="rounded bg-secondary-200 px-1 dark:bg-secondary-700">Version</code>{' '}
+                shared object is missing on chain. Rebuild myso from myso-core and run{' '}
+                <code className="rounded bg-secondary-200 px-1 dark:bg-secondary-700">
+                  myso start --force-regenesis --with-graphql --with-mydata
+                </code>
+                . See chat-app README → &quot;Version not found&quot;.
+              </>
+            ) : (
+              <>
+                Genesis package IDs (0x2 / 0xe110 / 0x50c1) are resolved automatically.
+                Check{' '}
+                <code className="rounded bg-secondary-200 px-1 dark:bg-secondary-700">
+                  VITE_MYSO_RPC_URL
+                </code>{' '}
+                and{' '}
+                <code className="rounded bg-secondary-200 px-1 dark:bg-secondary-700">
+                  VITE_MYSO_GRAPHQL_URL
+                </code>{' '}
+                point at a v112 genesis network with social bootstrap completed.
+              </>
+            )}
           </p>
         </main>
       )}
 
-      {!configError &&
-        connected &&
-        !messagingClientLoading &&
-        !messagingClientInitError && (
+      {!configError && connected && messagingReady && !messagingClientInitError && (
         <AuthenticatedApp isUsingDevMessengerSigner={isUsingDevMessengerSigner} />
       )}
     </div>

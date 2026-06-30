@@ -46,7 +46,7 @@ fun setup_group(ts: &mut ts::Scenario): ID {
     let version = ts.take_shared<Version>();
     let group_manager = ts.take_shared<GroupManager>();
     let block_list = ts.take_shared<BlockListRegistry>();
-    let (group, encryption_history, msg_log) = messaging::create_group(
+    let (group, encryption_history, msg_log) = messaging::create_group_unchecked(
         &version,
         &mut namespace,
         &group_manager,
@@ -257,7 +257,7 @@ fun mydata_approve_reader_mismatched_encryption_history_fails() {
     let version = ts.take_shared<Version>();
     let group_manager = ts.take_shared<GroupManager>();
     let block_list = ts.take_shared<BlockListRegistry>();
-    let (group1, encryption_history1, msg_log1) = messaging::create_group(
+    let (group1, encryption_history1, msg_log1) = messaging::create_group_unchecked(
         &version,
         &mut namespace,
         &group_manager,
@@ -275,7 +275,7 @@ fun mydata_approve_reader_mismatched_encryption_history_fails() {
     destroy(msg_log1);
 
     // Create second group
-    let (group2, encryption_history2, msg_log2) = messaging::create_group(
+    let (group2, encryption_history2, msg_log2) = messaging::create_group_unchecked(
         &version,
         &mut namespace,
         &group_manager,

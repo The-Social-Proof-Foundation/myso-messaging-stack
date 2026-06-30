@@ -9,8 +9,8 @@ use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
 use crate::models::{
-    Attachment, EncryptedBlobRecord, Message, PushTokenRecord, ReactionEntry, ReceiptStateResponse,
-    SyncStatus,
+    Attachment, EncryptedBlobRecord, Message, MessageAttribution, PushTokenRecord,
+    ReactionEntry, ReceiptStateResponse, SyncStatus,
 };
 use crate::services::realtime::{MessageCreatedEvent, MESSAGE_EVENTS_CHANNEL};
 
@@ -80,6 +80,12 @@ fn row_to_message(row: &sqlx::postgres::PgRow) -> Message {
         attachments,
         signature: row.get("signature"),
         public_key: row.get("public_key"),
+        attribution: MessageAttribution {
+            principal_owner: row.get("principal_owner"),
+            sub_agent_id: row.get("sub_agent_id"),
+            identity_class: row.get("identity_class"),
+            attribution_version: row.try_get("attribution_version").unwrap_or(1),
+        },
     }
 }
 
@@ -117,8 +123,9 @@ impl StorageAdapter for PostgresStorage {
             r#"INSERT INTO messages (
                 id, group_id, order_num, sender_wallet_addr, encrypted_msg, nonce,
                 key_version, created_at, updated_at, sync_status, quilt_patch_id,
-                attachments, signature, public_key
-            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)"#,
+                attachments, signature, public_key,
+                principal_owner, sub_agent_id, identity_class, attribution_version
+            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)"#,
         )
         .bind(message.id)
         .bind(&message.group_id)
@@ -134,6 +141,10 @@ impl StorageAdapter for PostgresStorage {
         .bind(attachments)
         .bind(&message.signature)
         .bind(&message.public_key)
+        .bind(&message.attribution.principal_owner)
+        .bind(&message.attribution.sub_agent_id)
+        .bind(message.attribution.identity_class)
+        .bind(message.attribution.attribution_version)
         .execute(&mut *tx)
         .await
         .map_err(map_db_error)?;

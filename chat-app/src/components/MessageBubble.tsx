@@ -263,6 +263,18 @@ export function MessageBubble({
           {!isOwnMessage && message.senderAddress && (
             <p className="mb-0.5 text-xs font-medium text-secondary-500 dark:text-secondary-400">
               {truncateAddress(message.senderAddress)}
+              {message.isAgentMessage && (
+                <span
+                  className="ml-1 rounded bg-secondary-200/80 px-1 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-secondary-600 dark:bg-secondary-600/80 dark:text-secondary-200"
+                  title={
+                    message.principalOwner
+                      ? `Agent of ${truncateAddress(message.principalOwner)}`
+                      : 'Agent message'
+                  }
+                >
+                  Agent
+                </span>
+              )}
               {message.senderVerified && (
                 <span className="ml-1 text-green-500" title="Sender verified">
                   ✓

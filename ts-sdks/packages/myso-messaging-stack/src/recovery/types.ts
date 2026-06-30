@@ -35,4 +35,7 @@ export interface FileStorageMessageWire {
 	attachments: FileStorageAttachmentWire[];
 	signature?: string;
 	public_key?: string;
+	principal_owner?: string | null;
+	sub_agent_id?: string | null;
+	identity_class?: number | null;
 }

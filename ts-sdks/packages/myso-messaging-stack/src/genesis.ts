@@ -27,6 +27,7 @@ export const GENESIS_MYSO_MESSAGING_STACK_PACKAGE_CONFIG = {
 	versionId: '',
 	blockListRegistryId: '',
 	socialGraphId: '',
+	memoryRegistryId: '',
 } satisfies MySoMessagingStackPackageConfig;
 
 export interface ResolvedGenesisMessagingConfig {
@@ -37,6 +38,8 @@ export interface ResolvedGenesisMessagingConfig {
 export interface ResolveGenesisMessagingConfigOptions {
 	/** GraphQL URL for shared-object discovery. Defaults from network when omitted. */
 	graphqlUrl?: string;
+	/** JSON-RPC URL for publish-tx fallback when GraphQL misses a singleton. */
+	rpcUrl?: string;
 	signal?: AbortSignal;
 }
 
@@ -76,8 +79,160 @@ function socialStructType(module: string, struct: string): string {
 	return `${GENESIS_PACKAGE_IDS.social}::${module}::${struct}`;
 }
 
+function defaultRpcUrl(network: string): string {
+	switch (network) {
+		case 'mainnet':
+			return 'https://fullnode.mainnet.mysocial.network:443';
+		case 'testnet':
+			return 'https://fullnode.testnet.mysocial.network:9000';
+		case 'localnet':
+		case 'devnet':
+		default:
+			return 'http://127.0.0.1:9000';
+	}
+}
+
+function isSharedOwner(owner: unknown): boolean {
+	return typeof owner === 'object' && owner !== null && 'Shared' in owner;
+}
+
+interface RawTransactionEffectsCreated {
+	owner: unknown;
+	reference: { objectId: string };
+}
+
+async function fetchTransactionEffectsCreated(
+	rpcUrl: string,
+	digest: string,
+	signal?: AbortSignal,
+): Promise<RawTransactionEffectsCreated[]> {
+	const response = await fetch(rpcUrl, {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify({
+			jsonrpc: '2.0',
+			id: 1,
+			method: 'myso_getTransactionBlock',
+			params: [digest, { showEffects: true }],
+		}),
+		signal,
+	});
+
+	if (!response.ok) {
+		throw new MySoMessagingStackClientError(
+			`RPC request failed while reading transaction effects: ${response.status} ${response.statusText}`,
+		);
+	}
+
+	const payload = (await response.json()) as {
+		result?: { effects?: { created?: RawTransactionEffectsCreated[] } };
+		error?: { message: string };
+	};
+
+	if (payload.error) {
+		throw new MySoMessagingStackClientError(
+			`RPC error while reading transaction effects: ${payload.error.message}`,
+		);
+	}
+
+	return payload.result?.effects?.created ?? [];
+}
+
+async function findSharedObjectIdsByTypeInPublishTx(
+	client: ClientWithCoreApi,
+	rpcUrl: string,
+	packageId: string,
+	moveType: string,
+	signal?: AbortSignal,
+): Promise<string[]> {
+	const { object } = await client.core.getObject({
+		objectId: packageId,
+		include: { previousTransaction: true },
+	});
+
+	const digest = object.previousTransaction;
+	if (!digest) {
+		return [];
+	}
+
+	const sharedObjectIds = (await fetchTransactionEffectsCreated(rpcUrl, digest, signal))
+		.filter((created) => isSharedOwner(created.owner))
+		.map((created) => created.reference.objectId);
+
+	const matches: string[] = [];
+	for (const objectId of sharedObjectIds) {
+		const { object: candidate } = await client.core.getObject({ objectId });
+		if (candidate.type === moveType) {
+			matches.push(objectId);
+		}
+	}
+
+	return matches;
+}
+
+/**
+ * Resolves a genesis singleton from the package publish transaction when GraphQL
+ * indexing misses it (e.g. Version not indexed as SHARED).
+ */
+async function findSharedObjectByTypeFromPackagePublishTx(
+	client: ClientWithCoreApi,
+	rpcUrl: string,
+	packageId: string,
+	moveType: string,
+	signal?: AbortSignal,
+): Promise<string | null> {
+	try {
+		const { object } = await client.core.getObject({
+			objectId: packageId,
+			include: { previousTransaction: true },
+		});
+
+		const digest = object.previousTransaction;
+		if (digest) {
+			const { Transaction, FailedTransaction } = await client.core.getTransaction({
+				digest,
+				include: { effects: true, objectTypes: true },
+			});
+
+			const txResult = Transaction ?? FailedTransaction;
+			if (txResult?.effects) {
+				const objectTypes = txResult.objectTypes ?? {};
+				const matches = txResult.effects.changedObjects
+					.filter((obj) => {
+						if (obj.idOperation !== 'Created') return false;
+						return objectTypes[obj.objectId] === moveType;
+					})
+					.map((obj) => obj.objectId);
+
+				if (matches.length === 1) {
+					return matches[0] ?? null;
+				}
+			}
+		}
+	} catch {
+		// Fall through to raw RPC effects scan (genesis txs may fail SDK BCS parsing).
+	}
+
+	const rawMatches = await findSharedObjectIdsByTypeInPublishTx(
+		client,
+		rpcUrl,
+		packageId,
+		moveType,
+		signal,
+	);
+
+	if (rawMatches.length === 1) {
+		return rawMatches[0] ?? null;
+	}
+
+	return null;
+}
+
 async function findSharedObjectByType(
+	client: ClientWithCoreApi,
 	graphqlUrl: string,
+	rpcUrl: string,
+	packageId: string,
 	moveType: string,
 	label: string,
 	signal?: AbortSignal,
@@ -115,14 +270,35 @@ async function findSharedObjectByType(
 	}
 
 	const nodes = payload.data?.objects?.nodes ?? [];
-	if (nodes.length !== 1 || !nodes[0]?.address) {
+	if (nodes.length === 1 && nodes[0]?.address) {
+		return nodes[0].address;
+	}
+
+	if (nodes.length > 1) {
 		throw new MySoMessagingStackClientError(
-			`Expected exactly one shared ${label} (${moveType}); found ${nodes.length}. ` +
-				'Ensure genesis messaging/social bootstrap ran on this network.',
+			`Expected exactly one shared ${label} (${moveType}); GraphQL found ${nodes.length}.`,
 		);
 	}
 
-	return nodes[0].address;
+	const rpcMatch = await findSharedObjectByTypeFromPackagePublishTx(
+		client,
+		rpcUrl,
+		packageId,
+		moveType,
+		signal,
+	);
+	if (rpcMatch) {
+		console.warn(
+			`[myso-messaging-stack] GraphQL missed shared ${label} (${moveType}); ` +
+				`resolved via RPC publish-tx lookup: ${rpcMatch}`,
+		);
+		return rpcMatch;
+	}
+
+	throw new MySoMessagingStackClientError(
+		`Expected exactly one shared ${label} (${moveType}); GraphQL found 0 and RPC publish-tx lookup found 0. ` +
+			'Check VITE_MYSO_RPC_URL points at the network where genesis packages 0xe110/0x50c1 were published.',
+	);
 }
 
 /**
@@ -138,35 +314,58 @@ export async function resolveGenesisMessagingConfig(
 		(client.network === 'localnet' || client.network === 'devnet'
 			? LOCALNET_GRAPHQL_URL
 			: defaultGraphqlUrl(client.network));
+	const rpcUrl = options.rpcUrl ?? defaultRpcUrl(client.network);
 
 	const cached = genesisConfigCache.get(graphqlUrl);
 	if (cached) {
 		return cached;
 	}
 
-	const [namespaceId, versionId, blockListRegistryId, socialGraphId] = await Promise.all([
+	const [namespaceId, versionId, blockListRegistryId, socialGraphId, memoryRegistryId] =
+		await Promise.all([
 		findSharedObjectByType(
+			client,
 			graphqlUrl,
+			rpcUrl,
+			GENESIS_PACKAGE_IDS.messaging,
 			messagingStructType('messaging', 'MessagingNamespace'),
 			'MessagingNamespace',
 			options.signal,
 		),
 		findSharedObjectByType(
+			client,
 			graphqlUrl,
+			rpcUrl,
+			GENESIS_PACKAGE_IDS.messaging,
 			messagingStructType('version', 'Version'),
 			'Version',
 			options.signal,
 		),
 		findSharedObjectByType(
+			client,
 			graphqlUrl,
+			rpcUrl,
+			GENESIS_PACKAGE_IDS.social,
 			socialStructType('block_list', 'BlockListRegistry'),
 			'BlockListRegistry',
 			options.signal,
 		),
 		findSharedObjectByType(
+			client,
 			graphqlUrl,
+			rpcUrl,
+			GENESIS_PACKAGE_IDS.social,
 			socialStructType('social_graph', 'SocialGraph'),
 			'SocialGraph',
+			options.signal,
+		),
+		findSharedObjectByType(
+			client,
+			graphqlUrl,
+			rpcUrl,
+			GENESIS_PACKAGE_IDS.social,
+			socialStructType('memory', 'MemoryRegistry'),
+			'MemoryRegistry',
 			options.signal,
 		),
 	]);
@@ -179,6 +378,7 @@ export async function resolveGenesisMessagingConfig(
 			versionId,
 			blockListRegistryId,
 			socialGraphId,
+			memoryRegistryId,
 		},
 		permissionedGroups: GENESIS_MYSO_GROUPS_PACKAGE_CONFIG,
 	};

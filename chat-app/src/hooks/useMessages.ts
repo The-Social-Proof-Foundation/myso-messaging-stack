@@ -24,6 +24,9 @@ export interface Message {
   syncStatus?: string;
   attachments: AttachmentHandle[];
   senderVerified: boolean;
+  isAgentMessage?: boolean;
+  principalOwner?: string;
+  subAgentId?: string;
 }
 
 export interface UseMessagesResult {

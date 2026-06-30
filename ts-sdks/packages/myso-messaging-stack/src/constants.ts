@@ -51,6 +51,14 @@ export const GROUP_HANDLE_REGISTRY_DERIVATION_KEY = 'group_handle_registry';
  */
 export const PAID_MESSAGING_REGISTRY_DERIVATION_KEY = 'paid_messaging_registry';
 
+/** Metadata keys for agent-associated messaging groups (must match messaging.move). */
+export const METADATA_AGENT_CHAT = 'agent_chat';
+export const METADATA_CREATOR_ACTOR = 'creator_actor';
+export const METADATA_CREATOR_PRINCIPAL = 'creator_principal';
+export const METADATA_CREATOR_SUB_AGENT_ID = 'creator_sub_agent_id';
+export const METADATA_CREATOR_IDENTITY_CLASS = 'creator_identity_class';
+export const METADATA_AGENT_CHAT_TRUE = 'true';
+
 /**
  * Returns full Move type paths for all messaging-specific permissions.
  *
@@ -90,4 +98,5 @@ export const GENESIS_MYSO_MESSAGING_STACK_PACKAGE_CONFIG_SHELL = {
 	versionId: '',
 	blockListRegistryId: '',
 	socialGraphId: '',
+	memoryRegistryId: '',
 } satisfies MySoMessagingStackPackageConfig;

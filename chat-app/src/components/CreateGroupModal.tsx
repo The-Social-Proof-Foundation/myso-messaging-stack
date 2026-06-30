@@ -76,6 +76,7 @@ export function CreateGroupModal({
       const tx = client.messaging.tx.createAndShareGroup({
         uuid,
         name: trimmedName,
+        sender: signer.toMySoAddress(),
         ...(initialMembers.length > 0 && { initialMembers }),
       });
 

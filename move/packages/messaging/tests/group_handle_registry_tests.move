@@ -38,7 +38,7 @@ fun set_group_handle_without_permission_fails() {
     let version = ts.take_shared<Version>();
     let group_manager = ts.take_shared<GroupManager>();
     let block_list = ts.take_shared<BlockListRegistry>();
-    let (mut group, encryption_history, msg_log) = msg::create_group(
+    let (mut group, encryption_history, msg_log) = msg::create_group_unchecked(
         &version,
         &mut namespace,
         &group_manager,
@@ -87,7 +87,7 @@ fun set_group_handle_and_lookup_succeeds() {
     let version = ts.take_shared<Version>();
     let group_manager = ts.take_shared<GroupManager>();
     let block_list = ts.take_shared<BlockListRegistry>();
-    let (group, encryption_history, msg_log) = msg::create_group(
+    let (group, encryption_history, msg_log) = msg::create_group_unchecked(
         &version,
         &mut namespace,
         &group_manager,
@@ -144,7 +144,7 @@ fun duplicate_group_handle_fails() {
     let group_manager = ts.take_shared<GroupManager>();
     let block_list = ts.take_shared<BlockListRegistry>();
 
-    let (g1, eh1, ml1) = msg::create_group(
+    let (g1, eh1, ml1) = msg::create_group_unchecked(
         &version,
         &mut namespace,
         &group_manager,
@@ -155,7 +155,7 @@ fun duplicate_group_handle_fails() {
         vec_set::empty(),
         ts.ctx(),
     );
-    let (g2, eh2, ml2) = msg::create_group(
+    let (g2, eh2, ml2) = msg::create_group_unchecked(
         &version,
         &mut namespace,
         &group_manager,

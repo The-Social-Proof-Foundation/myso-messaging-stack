@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use chrono::Utc;
 use messaging_relayer::auth::{InMemoryMembershipStore, MembershipStore, MessagingPermission};
-use messaging_relayer::models::PushTokenRecord;
+use messaging_relayer::models::{MessageAttribution, PushTokenRecord};
 use messaging_relayer::services::push::{ApnsClient, ApnsEnvironment, PushService};
 use messaging_relayer::storage::{InMemoryStorage, StorageAdapter};
 use wiremock::matchers::{method, path_regex};
@@ -70,7 +70,7 @@ async fn push_sent_when_recipient_inactive() {
     let push = setup_push_service(&mock.uri()).await;
 
     push
-        .notify_new_message(&storage, &membership, GROUP_ID, SENDER)
+        .notify_new_message(&storage, &membership, GROUP_ID, SENDER, &MessageAttribution::human_message())
         .await;
 
     mock.verify().await;
@@ -97,7 +97,7 @@ async fn push_skipped_when_recipient_recently_active() {
     let push = setup_push_service(&mock.uri()).await;
 
     push
-        .notify_new_message(&storage, &membership, GROUP_ID, SENDER)
+        .notify_new_message(&storage, &membership, GROUP_ID, SENDER, &MessageAttribution::human_message())
         .await;
 
     mock.verify().await;
@@ -123,7 +123,7 @@ async fn unregistered_token_is_pruned() {
     let push = setup_push_service(&mock.uri()).await;
 
     push
-        .notify_new_message(&storage, &membership, GROUP_ID, SENDER)
+        .notify_new_message(&storage, &membership, GROUP_ID, SENDER, &MessageAttribution::human_message())
         .await;
 
     let remaining = storage
@@ -154,7 +154,7 @@ async fn push_skipped_when_token_environment_mismatch() {
     let push = setup_push_service(&mock.uri()).await;
 
     push
-        .notify_new_message(&storage, &membership, GROUP_ID, SENDER)
+        .notify_new_message(&storage, &membership, GROUP_ID, SENDER, &MessageAttribution::human_message())
         .await;
 
     mock.verify().await;

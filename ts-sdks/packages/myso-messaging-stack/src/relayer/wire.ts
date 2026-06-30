@@ -31,6 +31,9 @@ export interface WireMessageResponse {
 	quilt_patch_id: string | null;
 	signature: string;
 	public_key: string;
+	principal_owner?: string | null;
+	sub_agent_id?: string | null;
+	identity_class?: number | null;
 }
 
 export interface WireMessageCreatedEvent {
@@ -80,5 +83,12 @@ export function fromWireMessage(wire: WireMessageResponse): RelayerMessage {
 		quiltPatchId: wire.quilt_patch_id,
 		signature: wire.signature ?? '',
 		publicKey: wire.public_key ?? '',
+		principalOwner: wire.principal_owner ?? undefined,
+		subAgentId: wire.sub_agent_id ?? undefined,
+		identityClass:
+			wire.identity_class === null || wire.identity_class === undefined
+				? undefined
+				: (wire.identity_class as 0 | 1 | 2),
+		isAgentMessage: Boolean(wire.principal_owner),
 	};
 }

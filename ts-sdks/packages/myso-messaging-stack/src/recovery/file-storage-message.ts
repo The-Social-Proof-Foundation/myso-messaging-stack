@@ -32,6 +32,8 @@ export function fromFileStorageMessage(wire: FileStorageMessageWire): RelayerMes
 	const updatedAt = Math.floor(new Date(wire.updated_at).getTime() / 1000);
 	const isEdited = wire.created_at !== wire.updated_at;
 	const isDeleted = wire.sync_status === 'DELETE_PENDING' || wire.sync_status === 'DELETED';
+	const hasAttribution =
+		wire.principal_owner != null || wire.sub_agent_id != null || wire.identity_class != null;
 
 	return {
 		messageId: wire.id,
@@ -50,5 +52,12 @@ export function fromFileStorageMessage(wire: FileStorageMessageWire): RelayerMes
 		quiltPatchId: wire.quilt_patch_id,
 		signature: wire.signature ?? '',
 		publicKey: wire.public_key ?? '',
+		principalOwner: wire.principal_owner ?? undefined,
+		subAgentId: wire.sub_agent_id ?? undefined,
+		identityClass:
+			wire.identity_class === 0 || wire.identity_class === 1 || wire.identity_class === 2
+				? wire.identity_class
+				: undefined,
+		isAgentMessage: hasAttribution,
 	};
 }

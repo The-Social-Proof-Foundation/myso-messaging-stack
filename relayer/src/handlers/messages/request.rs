@@ -68,6 +68,12 @@ pub struct CreateMessageRequest {
     /// Attachments for this message (optional)
     #[serde(default)]
     pub attachments: Vec<AttachmentRequest>,
+    /// Human principal owner when the sender is a sub-agent.
+    pub principal_owner: Option<String>,
+    /// On-chain SubAgent object ID for agent senders.
+    pub sub_agent_id: Option<String>,
+    /// Identity class: 0=human, 1=delegated AI, 2=organization.
+    pub identity_class: Option<i16>,
 }
 
 /// Request body for PUT /messages

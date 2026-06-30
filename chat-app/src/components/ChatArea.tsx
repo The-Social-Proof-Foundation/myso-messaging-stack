@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect, useCallback, type ReactNode } from 'react';
 import type { StoredGroup } from '../lib/group-store';
 import { removeStoredGroup } from '../lib/group-store';
 import { useRequiredMessagingClient } from '../contexts/MessagingClientContext';
@@ -13,10 +13,15 @@ import { AdminPanel } from './AdminPanel';
 interface ChatAreaProps {
   selectedGroup: StoredGroup | null;
   onLeaveGroup?: () => void;
+  devAgentPanel?: ReactNode;
 }
 
 /** Wrapper that requires a UUID to render the chat. */
-export function ChatArea({ selectedGroup, onLeaveGroup }: Readonly<ChatAreaProps>) {
+export function ChatArea({
+  selectedGroup,
+  onLeaveGroup,
+  devAgentPanel,
+}: Readonly<ChatAreaProps>) {
   if (!selectedGroup) {
     return (
       <div className="flex flex-1 items-center justify-center">
@@ -43,7 +48,13 @@ export function ChatArea({ selectedGroup, onLeaveGroup }: Readonly<ChatAreaProps
     );
   }
 
-  return <ChatView group={selectedGroup} onLeaveGroup={onLeaveGroup} />;
+  return (
+    <ChatView
+      group={selectedGroup}
+      onLeaveGroup={onLeaveGroup}
+      devAgentPanel={devAgentPanel}
+    />
+  );
 }
 
 function ChatHeader({
@@ -95,9 +106,11 @@ function ChatHeader({
 function ChatView({
   group,
   onLeaveGroup,
+  devAgentPanel,
 }: Readonly<{
   group: StoredGroup;
   onLeaveGroup?: () => void;
+  devAgentPanel?: ReactNode;
 }>) {
   const myAddress = useAuthenticatedAddress();
   const { client, signer } = useRequiredMessagingClient();
@@ -286,6 +299,8 @@ function ChatView({
           {error}
         </div>
       )}
+
+      {devAgentPanel}
 
       {/* Message input: while permissions load, show disabled composer (avoid false "no permission"). */}
       {permissionsLoading ? (

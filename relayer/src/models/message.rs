@@ -4,6 +4,7 @@ use std::fmt;
 use uuid::Uuid;
 
 use super::attachment::Attachment;
+use super::message_attribution::MessageAttribution;
 
 /// Represents a message in the relayer storage.
 /// Messages are received via HTTP POST requests and stored temporarily before
@@ -42,6 +43,8 @@ pub struct Message {
     pub signature: Vec<u8>,
     /// Sender's public key (flag byte + key bytes) for signature verification.
     pub public_key: Vec<u8>,
+    /// Optional agent attribution (principal, sub-agent id, identity class).
+    pub attribution: MessageAttribution,
 }
 
 /// Tracks the synchronization status of a message with File Storage storage.
@@ -98,6 +101,30 @@ impl Message {
         signature: Vec<u8>,
         public_key: Vec<u8>,
     ) -> Self {
+        Self::with_attribution(
+            group_id,
+            sender_wallet_addr,
+            encrypted_msg,
+            nonce,
+            key_version,
+            attachments,
+            signature,
+            public_key,
+            MessageAttribution::human_message(),
+        )
+    }
+
+    pub fn with_attribution(
+        group_id: String,
+        sender_wallet_addr: String,
+        encrypted_msg: Vec<u8>,
+        nonce: Vec<u8>,
+        key_version: i64,
+        attachments: Vec<Attachment>,
+        signature: Vec<u8>,
+        public_key: Vec<u8>,
+        attribution: MessageAttribution,
+    ) -> Self {
         let now = Utc::now();
         Self {
             id: Uuid::new_v4(),
@@ -114,6 +141,7 @@ impl Message {
             attachments,
             signature,
             public_key,
+            attribution,
         }
     }
 

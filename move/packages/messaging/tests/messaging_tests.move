@@ -83,7 +83,7 @@ fun uuid_getter_returns_correct_value() {
     let mut namespace = ts.take_shared<MessagingNamespace>();
     let group_manager = ts.take_shared<GroupManager>();
     let block_list = ts.take_shared<BlockListRegistry>();
-    let (_group, encryption_history, _msg_log) = msg::create_group(
+    let (_group, encryption_history, _msg_log) = msg::create_group_unchecked(
         &version,
         &mut namespace,
         &group_manager,
@@ -124,7 +124,7 @@ fun create_group_creates_group_and_encryption_history() {
     let mut namespace = ts.take_shared<MessagingNamespace>();
     let group_manager = ts.take_shared<GroupManager>();
     let block_list = ts.take_shared<BlockListRegistry>();
-    let (group, encryption_history, msg_log) = msg::create_group(
+    let (group, encryption_history, msg_log) = msg::create_group_unchecked(
         &version,
         &mut namespace,
         &group_manager,
@@ -189,7 +189,7 @@ fun create_group_with_different_uuids() {
 
     let block_list = ts.take_shared<BlockListRegistry>();
 
-    let (group1, eh1, msg_log1) = msg::create_group(
+    let (group1, eh1, msg_log1) = msg::create_group_unchecked(
         &version,
         &mut namespace,
         &group_manager,
@@ -201,7 +201,7 @@ fun create_group_with_different_uuids() {
         ts.ctx(),
     );
 
-    let (group2, eh2, msg_log2) = msg::create_group(
+    let (group2, eh2, msg_log2) = msg::create_group_unchecked(
         &version,
         &mut namespace,
         &group_manager,
@@ -247,7 +247,7 @@ fun create_group_with_initial_members() {
     let block_list = ts.take_shared<BlockListRegistry>();
     let mut initial_members = vec_set::empty();
     initial_members.insert(BOB);
-    let (group, encryption_history, msg_log) = msg::create_group(
+    let (group, encryption_history, msg_log) = msg::create_group_unchecked(
         &version,
         &mut namespace,
         &group_manager,
@@ -300,7 +300,7 @@ fun create_group_with_initial_members_including_creator() {
     let mut initial_members = vec_set::empty();
     initial_members.insert(ALICE); // Creator included
     initial_members.insert(BOB);
-    let (group, encryption_history, msg_log) = msg::create_group(
+    let (group, encryption_history, msg_log) = msg::create_group_unchecked(
         &version,
         &mut namespace,
         &group_manager,
@@ -344,7 +344,7 @@ fun create_group_attaches_metadata() {
     let mut namespace = ts.take_shared<MessagingNamespace>();
     let group_manager = ts.take_shared<GroupManager>();
     let block_list = ts.take_shared<BlockListRegistry>();
-    let (group, encryption_history, msg_log) = msg::create_group(
+    let (group, encryption_history, msg_log) = msg::create_group_unchecked(
         &version,
         &mut namespace,
         &group_manager,
@@ -387,7 +387,7 @@ fun create_and_share_group_creates_shared_objects() {
     let mut namespace = ts.take_shared<MessagingNamespace>();
     let group_manager = ts.take_shared<GroupManager>();
     let block_list = ts.take_shared<BlockListRegistry>();
-    msg::create_and_share_group(
+    let (group, encryption_history, msg_log) = msg::create_group_unchecked(
         &version,
         &mut namespace,
         &group_manager,
@@ -395,9 +395,12 @@ fun create_and_share_group_creates_shared_objects() {
         string::utf8(TEST_GROUP_NAME),
         string::utf8(TEST_UUID),
         TEST_ENCRYPTED_DEK,
-        vector[],
+        vec_set::empty(),
         ts.ctx(),
     );
+    transfer::public_share_object(group);
+    transfer::public_share_object(encryption_history);
+    transfer::public_share_object(msg_log);
     ts::return_shared(version);
     ts::return_shared(namespace);
     ts::return_shared(group_manager);
@@ -433,7 +436,7 @@ fun rotate_encryption_key_with_permission() {
     let mut namespace = ts.take_shared<MessagingNamespace>();
     let group_manager = ts.take_shared<GroupManager>();
     let block_list = ts.take_shared<BlockListRegistry>();
-    let (group, encryption_history, msg_log) = msg::create_group(
+    let (group, encryption_history, msg_log) = msg::create_group_unchecked(
         &version,
         &mut namespace,
         &group_manager,
@@ -491,7 +494,7 @@ fun rotate_encryption_key_without_permission_fails() {
     let mut namespace = ts.take_shared<MessagingNamespace>();
     let group_manager = ts.take_shared<GroupManager>();
     let block_list = ts.take_shared<BlockListRegistry>();
-    let (mut group, encryption_history, msg_log) = msg::create_group(
+    let (mut group, encryption_history, msg_log) = msg::create_group_unchecked(
         &version,
         &mut namespace,
         &group_manager,
@@ -544,7 +547,7 @@ fun rotate_encryption_key_with_mismatched_encryption_history_fails() {
 
     let block_list = ts.take_shared<BlockListRegistry>();
 
-    let (group1, encryption_history1, msg_log1) = msg::create_group(
+    let (group1, encryption_history1, msg_log1) = msg::create_group_unchecked(
         &version,
         &mut namespace,
         &group_manager,
@@ -560,7 +563,7 @@ fun rotate_encryption_key_with_mismatched_encryption_history_fails() {
     transfer::public_share_object(encryption_history1);
     destroy(msg_log1);
 
-    let (_group2, encryption_history2, _msg_log2) = msg::create_group(
+    let (_group2, encryption_history2, _msg_log2) = msg::create_group_unchecked(
         &version,
         &mut namespace,
         &group_manager,
@@ -612,7 +615,7 @@ fun encryption_history_encrypted_key_returns_correct_version() {
     let mut namespace = ts.take_shared<MessagingNamespace>();
     let group_manager = ts.take_shared<GroupManager>();
     let block_list = ts.take_shared<BlockListRegistry>();
-    let (group, encryption_history, msg_log) = msg::create_group(
+    let (group, encryption_history, msg_log) = msg::create_group_unchecked(
         &version,
         &mut namespace,
         &group_manager,
@@ -676,7 +679,7 @@ fun encryption_history_encrypted_key_invalid_version_fails() {
     let mut namespace = ts.take_shared<MessagingNamespace>();
     let group_manager = ts.take_shared<GroupManager>();
     let block_list = ts.take_shared<BlockListRegistry>();
-    let (_group, encryption_history, _msg_log) = msg::create_group(
+    let (_group, encryption_history, _msg_log) = msg::create_group_unchecked(
         &version,
         &mut namespace,
         &group_manager,
@@ -717,7 +720,7 @@ fun create_group_with_oversized_dek_fails() {
     let block_list = ts.take_shared<BlockListRegistry>();
 
     // Try to create group with oversized DEK
-    let (_group, _encryption_history, _msg_log) = msg::create_group(
+    let (_group, _encryption_history, _msg_log) = msg::create_group_unchecked(
         &version,
         &mut namespace,
         &group_manager,
@@ -745,7 +748,7 @@ fun rotate_encryption_key_with_oversized_dek_fails() {
     let mut namespace = ts.take_shared<MessagingNamespace>();
     let group_manager = ts.take_shared<GroupManager>();
     let block_list = ts.take_shared<BlockListRegistry>();
-    let (group, encryption_history, msg_log) = msg::create_group(
+    let (group, encryption_history, msg_log) = msg::create_group_unchecked(
         &version,
         &mut namespace,
         &group_manager,
@@ -795,7 +798,7 @@ fun leave_removes_member() {
     let mut namespace = ts.take_shared<MessagingNamespace>();
     let group_manager = ts.take_shared<GroupManager>();
     let block_list = ts.take_shared<BlockListRegistry>();
-    let (mut group, encryption_history, msg_log) = msg::create_group(
+    let (mut group, encryption_history, msg_log) = msg::create_group_unchecked(
         &version,
         &mut namespace,
         &group_manager,
@@ -842,7 +845,7 @@ fun leave_permissions_admin_fails() {
     let mut namespace = ts.take_shared<MessagingNamespace>();
     let group_manager = ts.take_shared<GroupManager>();
     let block_list = ts.take_shared<BlockListRegistry>();
-    let (group, encryption_history, msg_log) = msg::create_group(
+    let (group, encryption_history, msg_log) = msg::create_group_unchecked(
         &version,
         &mut namespace,
         &group_manager,
@@ -880,7 +883,7 @@ fun leave_non_member_fails() {
     let mut namespace = ts.take_shared<MessagingNamespace>();
     let group_manager = ts.take_shared<GroupManager>();
     let block_list = ts.take_shared<BlockListRegistry>();
-    let (group, encryption_history, msg_log) = msg::create_group(
+    let (group, encryption_history, msg_log) = msg::create_group_unchecked(
         &version,
         &mut namespace,
         &group_manager,
@@ -922,7 +925,7 @@ fun set_group_name_succeeds_with_metadata_admin() {
     let mut namespace = ts.take_shared<MessagingNamespace>();
     let group_manager = ts.take_shared<GroupManager>();
     let block_list = ts.take_shared<BlockListRegistry>();
-    let (group, encryption_history, msg_log) = msg::create_group(
+    let (group, encryption_history, msg_log) = msg::create_group_unchecked(
         &version,
         &mut namespace,
         &group_manager,
@@ -969,7 +972,7 @@ fun set_group_name_fails_without_permission() {
     let mut namespace = ts.take_shared<MessagingNamespace>();
     let group_manager = ts.take_shared<GroupManager>();
     let block_list = ts.take_shared<BlockListRegistry>();
-    let (mut group, encryption_history, msg_log) = msg::create_group(
+    let (mut group, encryption_history, msg_log) = msg::create_group_unchecked(
         &version,
         &mut namespace,
         &group_manager,
@@ -1016,7 +1019,7 @@ fun insert_and_remove_group_data() {
     let mut namespace = ts.take_shared<MessagingNamespace>();
     let group_manager = ts.take_shared<GroupManager>();
     let block_list = ts.take_shared<BlockListRegistry>();
-    let (group, encryption_history, msg_log) = msg::create_group(
+    let (group, encryption_history, msg_log) = msg::create_group_unchecked(
         &version,
         &mut namespace,
         &group_manager,
@@ -1078,7 +1081,7 @@ fun setup_shared_group(ts: &mut ts::Scenario): ID {
     let mut namespace = ts.take_shared<MessagingNamespace>();
     let group_manager = ts.take_shared<GroupManager>();
     let block_list = ts.take_shared<BlockListRegistry>();
-    let (group, encryption_history, msg_log) = msg::create_group(
+    let (group, encryption_history, msg_log) = msg::create_group_unchecked(
         &version,
         &mut namespace,
         &group_manager,

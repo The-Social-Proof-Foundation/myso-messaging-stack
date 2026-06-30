@@ -1,13 +1,25 @@
-import { StrictMode } from 'react';
+import { StrictMode, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MessagingClientProvider } from './contexts/MessagingClientContext';
-import { MySocialAuthProvider } from './contexts/MySocialAuthContext';
+import {
+  MySocialAuthProvider,
+  useMySocialAuth,
+} from './contexts/MySocialAuthContext';
 import { MySocialAuthBroadcastListener } from './components/MySocialAuthBroadcastListener';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import AuthCallback from './pages/AuthCallback';
 import App from './App';
 import './index.css';
+
+function AppErrorBoundary({ children }: Readonly<{ children: ReactNode }>) {
+  const { connectedAddress } = useMySocialAuth();
+  return (
+    <ErrorBoundary resetKey={connectedAddress ?? 'logged-out'}>
+      {children}
+    </ErrorBoundary>
+  );
+}
 
 const queryClient = new QueryClient();
 const isAuthCallback =
@@ -29,9 +41,9 @@ if (isAuthCallback) {
         <MySocialAuthProvider>
           <MySocialAuthBroadcastListener />
           <MessagingClientProvider>
-            <ErrorBoundary>
+            <AppErrorBoundary>
               <App />
-            </ErrorBoundary>
+            </AppErrorBoundary>
           </MessagingClientProvider>
         </MySocialAuthProvider>
       </QueryClientProvider>

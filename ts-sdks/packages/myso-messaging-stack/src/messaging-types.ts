@@ -20,8 +20,15 @@ export type WithApproveContext<TBase, TApproveContext> = TApproveContext extends
 
 // ── Public types ─────────────────────────────────────────────────
 
+/** Cleartext agent attribution returned by the relayer for agent-sent messages. */
+export interface MessageAttribution {
+	principalOwner?: string;
+	subAgentId?: string;
+	identityClass?: 0 | 1 | 2;
+}
+
 /** A decrypted message returned by {@link MySoMessagingStackClient} methods. */
-export interface DecryptedMessage {
+export interface DecryptedMessage extends MessageAttribution {
 	messageId: string;
 	groupId: string;
 	order: number;
@@ -38,6 +45,8 @@ export interface DecryptedMessage {
 	attachments: AttachmentHandle[];
 	/** Whether the per-message sender signature was verified successfully. */
 	senderVerified: boolean;
+	/** True when the relayer stored agent attribution metadata. */
+	isAgentMessage: boolean;
 }
 
 // ── Options types ────────────────────────────────────────────────
@@ -49,6 +58,14 @@ interface SendMessageOptionsBase {
 	text?: string;
 	/** Files to attach. Requires attachments support to be configured. */
 	files?: AttachmentFile[];
+	/** Optional agent attribution for relayer POST body. */
+	attribution?: MessageAttribution & {
+		principalOwner: string;
+		subAgentId: string;
+		identityClass: 0 | 1 | 2;
+	};
+	/** Principal owner for principal-aware DM block checks (agent senders). */
+	principalOwner?: string;
 }
 
 /** Options for {@link MySoMessagingStackClient.sendMessage}. */

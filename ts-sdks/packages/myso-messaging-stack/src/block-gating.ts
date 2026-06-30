@@ -7,9 +7,14 @@ export interface BlockGatingClientOptions {
 	fetch?: typeof fetch;
 }
 
+export interface BlockCheckOptions {
+	/** When set, also checks blocks involving the agent principal (agent DM path). */
+	principalOwner?: string;
+}
+
 /**
  * Off-chain block checks for DM messaging.
- * Mirrors on-chain `either_blocked(a, b)`.
+ * Mirrors on-chain `either_blocked(a, b)` with optional principal-aware extension.
  */
 export class BlockGatingClient {
 	#baseUrl: string;
@@ -20,7 +25,29 @@ export class BlockGatingClient {
 		this.#fetch = options.fetch ?? fetch;
 	}
 
-	async checkEitherBlocked(a: string, b: string): Promise<boolean> {
+	async checkEitherBlocked(a: string, b: string, options?: BlockCheckOptions): Promise<boolean> {
+		if (await this.#checkPair(a, b)) {
+			return true;
+		}
+		const principal = options?.principalOwner;
+		if (principal && principal !== a) {
+			return this.#checkPair(principal, b);
+		}
+		return false;
+	}
+
+	async assertEitherNotBlocked(
+		a: string,
+		b: string,
+		options?: BlockCheckOptions,
+	): Promise<void> {
+		const blocked = await this.checkEitherBlocked(a, b, options);
+		if (blocked) {
+			throw new BlockedMessagingError();
+		}
+	}
+
+	async #checkPair(a: string, b: string): Promise<boolean> {
 		const response = await this.#fetch(
 			`${this.#baseUrl}/blocklist/check/either/${encodeURIComponent(a)}/${encodeURIComponent(b)}`,
 		);
@@ -33,13 +60,6 @@ export class BlockGatingClient {
 
 		const body = (await response.json()) as { blocked?: boolean };
 		return body.blocked ?? false;
-	}
-
-	async assertEitherNotBlocked(a: string, b: string): Promise<void> {
-		const blocked = await this.checkEitherBlocked(a, b);
-		if (blocked) {
-			throw new Error('Messaging blocked between these users');
-		}
 	}
 }
 

@@ -5,11 +5,16 @@
 use std::sync::Arc;
 
 pub mod adapter;
+pub mod agent_groups;
 pub mod memory;
 pub mod migrations;
 pub mod postgres;
 #[allow(unused_imports)]
 pub use adapter::{StorageAdapter, StorageError, StorageResult};
+pub use agent_groups::{
+    create_agent_group_store_async, AgentGroupStore, InMemoryAgentGroupStore, NoOpAgentGroupStore,
+    PostgresAgentGroupStore,
+};
 pub use memory::InMemoryStorage;
 pub use postgres::create_postgres_storage;
 

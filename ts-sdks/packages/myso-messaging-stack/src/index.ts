@@ -68,6 +68,42 @@ export {
 	buildCanonicalMessage,
 	type VerifyMessageSenderParams,
 } from './verification.js';
+export {
+	createAgentMessagingClient,
+	createPrincipalMessagingClient,
+	waitForMembership,
+	type AgentMessagingClient,
+	type AgentSignerContext,
+	type AgentSendMessageOptions,
+	type CreateAgentGroupOptions,
+	type CreateAgentGroupAndWaitOptions,
+	type PrincipalMessagingClient,
+	type CreateAgentMessagingClientOptions,
+	type CreatePrincipalMessagingClientOptions,
+	type AgentMessagingPermission,
+	type WaitForMembershipOptions,
+	type AgentSendPaidMessageOptions,
+	createPrincipalOversightPolicy,
+	type PrincipalOversightPolicyOptions,
+} from './agent-messaging.js';
+export {
+	fetchAgentConversations,
+	fetchGroupsForAgent,
+	type AgentConversation,
+	type AgentDiscoveryClientOptions,
+} from './agent-discovery.js';
+export { revokeAgentFromAllGroups, type RevokeAgentFromAllGroupsOptions } from './agent-lifecycle.js';
+export {
+	createPaidMessagingClient,
+	createPaidMessagingClientWithGating,
+	PaidMessagingClient,
+	type PaidMessagingClientOptions,
+	type OpenPaidDmOptions,
+	type OpenAgentPaidDmOptions,
+	type ReplyAndClaimSettledOptions,
+	type RefundPaidEscrowOptions,
+	type SetPaidPolicyOptions,
+} from './paid-messaging.js';
 export type {
 	ParsedMessagingNamespace,
 	ParsedMessaging,

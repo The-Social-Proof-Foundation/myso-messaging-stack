@@ -1,4 +1,5 @@
 #[test_only]
+#[allow(unused_mut_ref, unused_let_mut)]
 module messaging::paid_messaging_policy_tests;
 
 use messaging::group_manager::GroupManager;
@@ -18,7 +19,6 @@ use myso::test_scenario as ts;
 use myso::vec_set;
 use social_contracts::block_list::{Self, BlockListRegistry};
 use social_contracts::social_graph::{Self, SocialGraph};
-use std::option;
 use std::string;
 use std::unit_test::{assert_eq, destroy};
 
@@ -47,7 +47,7 @@ fun setup_dm(
     let block_list = ts::take_shared<BlockListRegistry>(scenario);
     let mut members = vec_set::empty();
     members.insert(peer);
-    let (group, encryption_history, msg_log) = msg::create_group(
+    let (group, encryption_history, msg_log) = msg::create_group_unchecked(
         &version,
         &mut namespace,
         &group_manager,
@@ -83,7 +83,7 @@ fun create_dm_tags_conversation_kind() {
     let block_list = ts::take_shared<BlockListRegistry>(&mut scenario);
     let mut members = vec_set::empty();
     members.insert(BOB);
-    let (group, encryption_history, msg_log) = msg::create_group(
+    let (group, encryption_history, msg_log) = msg::create_group_unchecked(
         &version,
         &mut namespace,
         &group_manager,
@@ -298,7 +298,7 @@ fun group_chat_skips_paid_policy_gates() {
     let mut namespace = ts::take_shared<MessagingNamespace>(&mut scenario);
     let group_manager = ts::take_shared<GroupManager>(&mut scenario);
     let block_list = ts::take_shared<BlockListRegistry>(&mut scenario);
-    let (group, encryption_history, msg_log) = msg::create_group(
+    let (group, encryption_history, msg_log) = msg::create_group_unchecked(
         &version,
         &mut namespace,
         &group_manager,
@@ -376,7 +376,7 @@ fun blocked_peer_cannot_create_dm() {
     let block_list = ts::take_shared<BlockListRegistry>(&mut scenario);
     let mut members = vec_set::empty();
     members.insert(ALICE);
-    let (_group, _eh, _ml) = msg::create_group(
+    let (_group, _eh, _ml) = msg::create_group_unchecked(
         &version,
         &mut namespace,
         &group_manager,

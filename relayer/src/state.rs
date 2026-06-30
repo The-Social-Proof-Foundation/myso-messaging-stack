@@ -5,10 +5,12 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 
 use crate::auth::MembershipStore;
+use crate::config::Config;
 use crate::services::block_check::BlockCheckService;
 use crate::services::push::PushService;
 use crate::services::realtime::RealtimeHub;
-use crate::storage::StorageAdapter;
+use crate::services::AttributionVerifyService;
+use crate::storage::{AgentGroupStore, StorageAdapter};
 
 /// Shared application state passed to all route handlers.
 #[derive(Clone)]
@@ -17,6 +19,8 @@ pub struct AppState {
     pub storage: Arc<dyn StorageAdapter>,
     pub sync_notifier: mpsc::UnboundedSender<()>,
     pub membership_store: Arc<dyn MembershipStore>,
+    pub agent_group_store: Arc<dyn AgentGroupStore>,
+    pub attribution_verify: AttributionVerifyService,
     pub block_check: BlockCheckService,
     pub push_service: PushService,
     pub realtime_hub: Arc<RealtimeHub>,
@@ -31,6 +35,8 @@ impl AppState {
         storage: Arc<dyn StorageAdapter>,
         sync_notifier: mpsc::UnboundedSender<()>,
         membership_store: Arc<dyn MembershipStore>,
+        agent_group_store: Arc<dyn AgentGroupStore>,
+        attribution_verify: AttributionVerifyService,
         block_check: BlockCheckService,
         push_service: PushService,
         realtime_hub: Arc<RealtimeHub>,
@@ -43,6 +49,8 @@ impl AppState {
             storage,
             sync_notifier,
             membership_store,
+            agent_group_store,
+            attribution_verify,
             block_check,
             push_service,
             realtime_hub,
@@ -65,6 +73,8 @@ impl AppState {
             storage,
             sync_notifier,
             membership_store,
+            Arc::new(crate::storage::NoOpAgentGroupStore),
+            AttributionVerifyService::from_config(&Config::default()),
             block_check,
             push_service,
             Arc::new(RealtimeHub::new()),

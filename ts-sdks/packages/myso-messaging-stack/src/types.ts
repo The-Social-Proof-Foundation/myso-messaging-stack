@@ -36,6 +36,8 @@ export type MySoMessagingStackPackageConfig = {
 	blockListRegistryId: string;
 	/** Social SocialGraph shared object ID (`0x50c1::social_graph::SocialGraph`) */
 	socialGraphId: string;
+	/** Social MemoryRegistry shared object ID (`0x50c1::memory::MemoryRegistry`) */
+	memoryRegistryId: string;
 };
 
 /**
@@ -157,6 +159,11 @@ export interface CreateGroupCallOptions {
 	 * Generated internally if omitted.
 	 */
 	uuid?: string;
+	/**
+	 * Creator MemoryAccount shared object id. When omitted, resolved from the
+	 * transaction sender via {@link MySoMessagingStackView.memoryAccountIdForOwner}.
+	 */
+	creatorMemoryAccountId?: string;
 	/** Human-readable group name. */
 	name: string;
 	/**
@@ -164,6 +171,19 @@ export interface CreateGroupCallOptions {
 	 * The creator is automatically granted all permissions and should not be included.
 	 */
 	initialMembers?: string[];
+}
+
+/** Options for creating an agent-associated messaging group. */
+export interface CreateAgentGroupCallOptions extends CreateGroupCallOptions {
+	/** Shared Platform object id for capability / join checks. */
+	platformId: string;
+	/** Creator MemoryAccount shared object id. */
+	creatorMemoryAccountId: string;
+	/**
+	 * MemoryAccount for cross-principal agent peers. Pass the creator account again
+	 * when all initial members are humans or same-principal agents.
+	 */
+	crossPrincipalPeerMemoryAccountId: string;
 }
 
 /**

@@ -37,7 +37,6 @@ fun setup_group(ts: &mut Scenario): (ID, ID) {
     // Initialize the messaging module (creates MessagingNamespace)
     ts.next_tx(ALICE);
     messaging::init_for_testing(ts.ctx());
-    version::init_for_testing(ts.ctx());
 
     // Alice creates group using the real flow
     ts.next_tx(ALICE);
@@ -183,7 +182,6 @@ fun mydata_approve_wrong_group() {
     // Initialize messaging
     ts.next_tx(ALICE);
     messaging::init_for_testing(ts.ctx());
-    version::init_for_testing(ts.ctx());
 
     // Create two groups
     ts.next_tx(ALICE);

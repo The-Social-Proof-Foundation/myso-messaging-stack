@@ -25,6 +25,11 @@ public struct Version has key {
 // === Initialization ===
 fun init(otw: VERSION, ctx: &mut TxContext) {
     package::claim_and_keep(otw, ctx);
+}
+
+/// Shares the genesis `Version` singleton. Called from `messaging::init` so Version
+/// is always created alongside `MessagingNamespace`.
+public(package) fun share_initial(ctx: &mut TxContext) {
     transfer::share_object(Version {
         id: object::new(ctx),
         version: PACKAGE_VERSION,
@@ -51,6 +56,7 @@ public(package) fun validate_version(self: &Version) {
 #[test_only]
 public fun init_for_testing(ctx: &mut TxContext) {
     init(VERSION(), ctx);
+    share_initial(ctx);
 }
 
 // Will need to enable this when we decide to make a contract upgrade

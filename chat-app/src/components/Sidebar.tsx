@@ -1,4 +1,5 @@
 import type { StoredGroup } from '../lib/group-store';
+import type { ReactNode } from 'react';
 
 interface SidebarProps {
   groups: StoredGroup[];
@@ -7,6 +8,8 @@ interface SidebarProps {
   onSelectGroup: (uuid: string) => void;
   onCreateGroup: () => void;
   loading?: boolean;
+  agentPanel?: ReactNode;
+  settingsPanel?: ReactNode;
 }
 
 export function Sidebar({
@@ -16,6 +19,8 @@ export function Sidebar({
   onSelectGroup,
   onCreateGroup,
   loading = false,
+  agentPanel,
+  settingsPanel,
 }: Readonly<SidebarProps>) {
   return (
     <aside className="flex w-72 flex-col border-r border-secondary-200 bg-white dark:border-secondary-700 dark:bg-secondary-800">
@@ -36,6 +41,9 @@ export function Sidebar({
           + New
         </button>
       </div>
+
+      {settingsPanel}
+      {agentPanel}
 
       {/* Group list */}
       <div className="flex-1 overflow-y-auto">

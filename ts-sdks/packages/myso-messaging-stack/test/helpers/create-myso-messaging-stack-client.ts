@@ -74,6 +74,12 @@ const noopTransport: RelayerTransport = {
 	postPresence: () => {
 		throw new Error('noopTransport: postPresence not implemented');
 	},
+	listAgentConversations: () => {
+		throw new Error('noopTransport: listAgentConversations not implemented');
+	},
+	listGroupsForAgent: () => {
+		throw new Error('noopTransport: listGroupsForAgent not implemented');
+	},
 	disconnect: () => {},
 };
 

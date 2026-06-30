@@ -17,6 +17,7 @@ use tonic::{Request, Response, Status};
 use messaging_relayer::auth::{InMemoryMembershipStore, MembershipStore, MessagingPermission};
 use messaging_relayer::config::Config;
 use messaging_relayer::services::MembershipSyncService;
+use messaging_relayer::storage::NoOpAgentGroupStore;
 
 /// BCS layout for MemberAdded / MemberRemoved events
 #[derive(serde::Serialize)]
@@ -249,7 +250,7 @@ async fn test_member_added_event() {
 
     // Create the service pointing at our mock server
     let config = test_config(&mock_url, PACKAGE_ID);
-    let mut service = MembershipSyncService::new(&config, store.clone());
+    let mut service = MembershipSyncService::new(&config, store.clone(), Arc::new(NoOpAgentGroupStore));
 
     // Run the subscription, processes mock checkpoints, then stream ends
     let result = service.run_subscription().await;
@@ -297,7 +298,7 @@ async fn test_member_removed_event() {
 
     let store: Arc<dyn MembershipStore> = Arc::new(InMemoryMembershipStore::new());
     let config = test_config(&mock_url, PACKAGE_ID);
-    let mut service = MembershipSyncService::new(&config, store.clone());
+    let mut service = MembershipSyncService::new(&config, store.clone(), Arc::new(NoOpAgentGroupStore));
 
     let result = service.run_subscription().await;
     assert!(result.is_ok());
@@ -336,7 +337,7 @@ async fn test_permissions_granted_event() {
 
     let store: Arc<dyn MembershipStore> = Arc::new(InMemoryMembershipStore::new());
     let config = test_config(&mock_url, PACKAGE_ID);
-    let mut service = MembershipSyncService::new(&config, store.clone());
+    let mut service = MembershipSyncService::new(&config, store.clone(), Arc::new(NoOpAgentGroupStore));
 
     let result = service.run_subscription().await;
     assert!(result.is_ok());
@@ -408,7 +409,7 @@ async fn test_permissions_revoked_event() {
 
     let store: Arc<dyn MembershipStore> = Arc::new(InMemoryMembershipStore::new());
     let config = test_config(&mock_url, PACKAGE_ID);
-    let mut service = MembershipSyncService::new(&config, store.clone());
+    let mut service = MembershipSyncService::new(&config, store.clone(), Arc::new(NoOpAgentGroupStore));
 
     let result = service.run_subscription().await;
     assert!(result.is_ok());
@@ -471,7 +472,7 @@ async fn test_multiple_checkpoints_with_multiple_events() {
 
     let store: Arc<dyn MembershipStore> = Arc::new(InMemoryMembershipStore::new());
     let config = test_config(&mock_url, PACKAGE_ID);
-    let mut service = MembershipSyncService::new(&config, store.clone());
+    let mut service = MembershipSyncService::new(&config, store.clone(), Arc::new(NoOpAgentGroupStore));
 
     let result = service.run_subscription().await;
     assert!(result.is_ok());
@@ -512,7 +513,7 @@ async fn test_ignores_events_from_other_packages() {
 
     let store: Arc<dyn MembershipStore> = Arc::new(InMemoryMembershipStore::new());
     let config = test_config(&mock_url, PACKAGE_ID);
-    let mut service = MembershipSyncService::new(&config, store.clone());
+    let mut service = MembershipSyncService::new(&config, store.clone(), Arc::new(NoOpAgentGroupStore));
 
     let result = service.run_subscription().await;
     assert!(result.is_ok());
@@ -561,7 +562,7 @@ async fn test_duplicate_cursor_is_skipped() {
 
     let store: Arc<dyn MembershipStore> = Arc::new(InMemoryMembershipStore::new());
     let config = test_config(&mock_url, PACKAGE_ID);
-    let mut service = MembershipSyncService::new(&config, store.clone());
+    let mut service = MembershipSyncService::new(&config, store.clone(), Arc::new(NoOpAgentGroupStore));
 
     let result = service.run_subscription().await;
     assert!(result.is_ok());

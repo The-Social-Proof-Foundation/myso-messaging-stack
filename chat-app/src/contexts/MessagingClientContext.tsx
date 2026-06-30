@@ -56,18 +56,18 @@ export function MessagingClientProvider({
 
   const [client, setClient] = useState<MessagingClient | null>(null);
   const [clientInitError, setClientInitError] = useState<string | null>(null);
-  const [clientLoading, setClientLoading] = useState(false);
+
+  // Synchronous: true on the same render keypair appears, before useEffect runs.
+  const clientLoading = Boolean(keypair && !client && !clientInitError);
 
   useEffect(() => {
     if (!keypair) {
       setClient(null);
       setClientInitError(null);
-      setClientLoading(false);
       return;
     }
 
     let cancelled = false;
-    setClientLoading(true);
     setClientInitError(null);
 
     void createFreshMessagingClient(keypair, { bypassGenesisCache: true })
@@ -93,7 +93,6 @@ export function MessagingClientProvider({
         }
 
         setClient(resolvedClient);
-        setClientLoading(false);
       })
       .catch((e) => {
         if (!cancelled) {
@@ -102,7 +101,6 @@ export function MessagingClientProvider({
           console.error('createMySoMessagingStackClientAsync failed:', e);
           setClient(null);
           setClientInitError(message);
-          setClientLoading(false);
         }
       });
 

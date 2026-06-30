@@ -155,3 +155,55 @@ export class DefaultMyDataPolicy implements MyDataPolicy<void> {
 		});
 	}
 }
+
+export interface PrincipalOversightPolicyOptions {
+	originalPackageId: string;
+	latestPackageId: string;
+	versionId: string;
+	memoryAccountId: string;
+	agentDerivedAddress: string;
+}
+
+/**
+ * Principal MyData policy using `mydata_approve_reader_with_oversight`.
+ *
+ * Allows the human owner to decrypt agent-associated groups when they hold
+ * read-only oversight (principal has admin + agent has MessagingReader).
+ */
+export class PrincipalMyDataOversightPolicy implements MyDataPolicy<void> {
+	readonly packageId: string;
+	readonly #latestPackageId: string;
+	readonly #versionId: string;
+	readonly #memoryAccountId: string;
+	readonly #agentDerivedAddress: string;
+
+	constructor(options: PrincipalOversightPolicyOptions) {
+		this.packageId = options.originalPackageId;
+		this.#latestPackageId = options.latestPackageId;
+		this.#versionId = options.versionId;
+		this.#memoryAccountId = options.memoryAccountId;
+		this.#agentDerivedAddress = options.agentDerivedAddress;
+	}
+
+	mydataApproveThunk(
+		identityBytes: Uint8Array,
+		groupId: string,
+		encryptionHistoryId: string,
+	): (tx: Transaction) => TransactionResult {
+		const packageAddress = this.#latestPackageId;
+		return (tx: Transaction) =>
+			tx.moveCall({
+				package: packageAddress,
+				module: 'mydata_policies',
+				function: 'mydata_approve_reader_with_oversight',
+				arguments: [
+					tx.pure.vector('u8', Array.from(identityBytes)),
+					tx.object(this.#versionId),
+					tx.object(groupId),
+					tx.object(encryptionHistoryId),
+					tx.object(this.#memoryAccountId),
+					tx.pure.address(this.#agentDerivedAddress),
+				],
+			});
+	}
+}

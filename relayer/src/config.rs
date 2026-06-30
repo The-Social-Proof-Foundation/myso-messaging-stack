@@ -10,6 +10,8 @@ const DEFAULT_FILE_STORAGE_PUBLISHER_URL: &str = "https://publisher.file-storage
 const DEFAULT_FILE_STORAGE_AGGREGATOR_URL: &str = "https://aggregator.file-storage-testnet.mysocial.network";
 const GENESIS_FRAMEWORK_PACKAGE_ID: &str =
     "0x0000000000000000000000000000000000000000000000000000000000000002";
+const GENESIS_MESSAGING_PACKAGE_ID: &str =
+    "0x000000000000000000000000000000000000000000000000000000000000e110";
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -30,6 +32,15 @@ pub struct Config {
 
     /// Groups SDK package ID on MySo
     pub groups_package_id: String,
+
+    /// Messaging stack package ID (AgentGroupCreated events).
+    pub messaging_package_id: String,
+
+    /// JSON-RPC URL for optional on-chain attribution verification.
+    pub myso_json_rpc_url: Option<String>,
+
+    /// When true, verify sub_agent_id object matches sender and principal on-chain.
+    pub attribution_strict_verify: bool,
 
     /// File Storage Configuration
     /// File Storage publisher URL for storing blobs/quilts.
@@ -139,6 +150,13 @@ impl Config {
             env::var("MYSO_RPC_URL").expect("MYSO_RPC_URL environment variable is required");
         let groups_package_id = env::var("GROUPS_PACKAGE_ID")
             .unwrap_or_else(|_| GENESIS_FRAMEWORK_PACKAGE_ID.to_string());
+        let messaging_package_id = env::var("MESSAGING_PACKAGE_ID")
+            .unwrap_or_else(|_| GENESIS_MESSAGING_PACKAGE_ID.to_string());
+        let myso_json_rpc_url = env::var("MYSO_JSON_RPC_URL").ok();
+        let attribution_strict_verify = env::var("ATTRIBUTION_STRICT_VERIFY")
+            .ok()
+            .map(|v| v == "true" || v == "1")
+            .unwrap_or(false);
 
         // Publisher URL: where we send PUT requests to store blobs
         let file_storage_publisher_url = env::var("FILE_STORAGE_PUBLISHER_URL")
@@ -216,6 +234,9 @@ impl Config {
             membership_store_type,
             myso_rpc_url,
             groups_package_id,
+            messaging_package_id,
+            myso_json_rpc_url,
+            attribution_strict_verify,
             file_storage_publisher_url,
             file_storage_aggregator_url,
             file_storage_storage_epochs,
@@ -251,6 +272,9 @@ impl Default for Config {
             membership_store_type: MembershipStoreType::InMemory,
             myso_rpc_url: String::new(),
             groups_package_id: String::new(),
+            messaging_package_id: GENESIS_MESSAGING_PACKAGE_ID.to_string(),
+            myso_json_rpc_url: None,
+            attribution_strict_verify: false,
             file_storage_publisher_url: DEFAULT_FILE_STORAGE_PUBLISHER_URL.to_string(),
             file_storage_aggregator_url: DEFAULT_FILE_STORAGE_AGGREGATOR_URL.to_string(),
             file_storage_storage_epochs: 5,

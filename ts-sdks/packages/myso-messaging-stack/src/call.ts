@@ -15,6 +15,7 @@ import type {
 	ArchiveGroupCallOptions,
 	ClearGroupHandleCallOptions,
 	CreateGroupCallOptions,
+	CreateAgentGroupCallOptions,
 	GroupAndMessageLogRef,
 	InsertGroupDataCallOptions,
 	LeaveCallOptions,
@@ -40,6 +41,8 @@ export interface MySoMessagingStackCallOptions {
 	messageLogTypeName: string;
 	/** PermissionedGroups call layer (needed for removeMembersAndRotateKey). */
 	groupsCall: MySoGroupsCall;
+	/** Resolves a principal MemoryAccount id for human group creation. */
+	resolveMemoryAccountId: (owner: string) => Promise<string>;
 }
 
 /**
@@ -66,6 +69,7 @@ export class MySoMessagingStackCall {
 	#encryptionHistoryTypeName: string;
 	#messageLogTypeName: string;
 	#groupsCall: MySoGroupsCall;
+	#resolveMemoryAccountId: (owner: string) => Promise<string>;
 
 	constructor(options: MySoMessagingStackCallOptions) {
 		this.#packageConfig = options.packageConfig;
@@ -75,6 +79,23 @@ export class MySoMessagingStackCall {
 		this.#encryptionHistoryTypeName = options.encryptionHistoryTypeName;
 		this.#messageLogTypeName = options.messageLogTypeName;
 		this.#groupsCall = options.groupsCall;
+		this.#resolveMemoryAccountId = options.resolveMemoryAccountId;
+	}
+
+	async #resolveCreatorMemoryAccountId(
+		options: CreateGroupCallOptions,
+		sender: string,
+	): Promise<string> {
+		if (options.creatorMemoryAccountId) {
+			return options.creatorMemoryAccountId;
+		}
+		const resolved = await this.#resolveMemoryAccountId(sender);
+		if (!resolved) {
+			throw new MySoMessagingStackClientError(
+				`No MemoryAccount found for ${sender}. Pass creatorMemoryAccountId or create a profile with memory linked.`,
+			);
+		}
+		return resolved;
 	}
 
 	// === Group Creation Functions ===
@@ -88,11 +109,15 @@ export class MySoMessagingStackCall {
 	 *
 	 * Returns a tuple of `(PermissionedGroup<Messaging>, EncryptionHistory, MessageLog)`.
 	 */
-	createGroup(options: CreateGroupCallOptions) {
+	createGroup(options: CreateGroupCallOptions & { sender: string }) {
 		return async (tx: Transaction) => {
 			const { uuid, encryptedDek } = await this.#encryption.generateGroupDEK(options?.uuid);
 			const initialMembers = this.#buildAddressVecSet(tx, options?.initialMembers ?? []);
 			const groupManagerId = this.#derive.groupManagerId();
+			const creatorMemoryAccount = await this.#resolveCreatorMemoryAccountId(
+				options,
+				options.sender,
+			);
 
 			return tx.add(
 				messaging.createGroup({
@@ -102,6 +127,7 @@ export class MySoMessagingStackCall {
 						namespace: this.#packageConfig.namespaceId,
 						groupManager: groupManagerId,
 						blockList: this.#packageConfig.blockListRegistryId,
+						creatorMemoryAccount,
 						name: options.name,
 						uuid,
 						initialEncryptedDek: Array.from(encryptedDek),
@@ -119,10 +145,14 @@ export class MySoMessagingStackCall {
 	 * Internally generates a UUID (if not provided), derives the group ID,
 	 * and generates a MyData-encrypted DEK for the group's initial encryption key.
 	 */
-	createAndShareGroup(options: CreateGroupCallOptions) {
+	createAndShareGroup(options: CreateGroupCallOptions & { sender: string }) {
 		return async (tx: Transaction) => {
 			const { uuid, encryptedDek } = await this.#encryption.generateGroupDEK(options?.uuid);
 			const groupManagerId = this.#derive.groupManagerId();
+			const creatorMemoryAccount = await this.#resolveCreatorMemoryAccountId(
+				options,
+				options.sender,
+			);
 
 			return tx.add(
 				messaging.createAndShareGroup({
@@ -132,10 +162,44 @@ export class MySoMessagingStackCall {
 						namespace: this.#packageConfig.namespaceId,
 						groupManager: groupManagerId,
 						blockList: this.#packageConfig.blockListRegistryId,
+						creatorMemoryAccount,
 						name: options.name,
 						uuid,
 						initialEncryptedDek: Array.from(encryptedDek),
 						initialMembers: options?.initialMembers ?? [],
+					},
+				}),
+			);
+		};
+	}
+
+	/**
+	 * Creates and shares a messaging group on behalf of a sub-agent.
+	 * The transaction sender must be the agent derived address with CAP_MESSAGE_SEND.
+	 */
+	createAgentAndShareGroup(options: CreateAgentGroupCallOptions) {
+		return async (tx: Transaction) => {
+			const { uuid, encryptedDek } = await this.#encryption.generateGroupDEK(options?.uuid);
+			const groupManagerId = this.#derive.groupManagerId();
+			const groupLeaverId = this.#derive.groupLeaverId();
+
+			return tx.add(
+				messaging.createAgentAndShareGroup({
+					package: this.#packageConfig.latestPackageId,
+					arguments: {
+						version: this.#packageConfig.versionId,
+						namespace: this.#packageConfig.namespaceId,
+						groupManager: groupManagerId,
+						groupLeaver: groupLeaverId,
+						blockList: this.#packageConfig.blockListRegistryId,
+						platform: options.platformId,
+						creatorMemoryAccount: options.creatorMemoryAccountId,
+						crossPrincipalPeerMemoryAccount: options.crossPrincipalPeerMemoryAccountId,
+						name: options.name,
+						uuid,
+						initialEncryptedDek: Array.from(encryptedDek),
+						initialMembers: options?.initialMembers ?? [],
+						clock: '0x6',
 					},
 				}),
 			);
@@ -394,6 +458,43 @@ export class MySoMessagingStackCall {
 						socialGraph: this.#packageConfig.socialGraphId,
 						blockList: this.#packageConfig.blockListRegistryId,
 						groupManager: this.#derive.groupManagerId(),
+						recipient: options.recipient,
+						payment: options.payment,
+						escrowAmount: options.escrowAmount,
+						dedupeKey: this.#byteVec(options.dedupeKey),
+						nonce: options.nonce,
+					},
+				}),
+			);
+		};
+	}
+
+	sendAgentPaidMessageDigest(
+		options: GroupAndMessageLogRef & {
+			platformId: string;
+			memoryAccountId: string;
+			recipient: string;
+			payment: string;
+			escrowAmount: number | bigint;
+			dedupeKey: Uint8Array | number[];
+			nonce: number | bigint;
+		},
+	) {
+		return (tx: Transaction) => {
+			const { groupId, messageLogId } = this.#resolveGroupAndLog(options);
+			return tx.add(
+				messaging.sendAgentPaidMessageDigest({
+					package: this.#packageConfig.latestPackageId,
+					arguments: {
+						version: this.#packageConfig.versionId,
+						group: groupId,
+						log: messageLogId,
+						paidRegistry: this.#derive.paidMessagingRegistryId(),
+						socialGraph: this.#packageConfig.socialGraphId,
+						blockList: this.#packageConfig.blockListRegistryId,
+						groupManager: this.#derive.groupManagerId(),
+						platform: options.platformId,
+						memoryAccount: options.memoryAccountId,
 						recipient: options.recipient,
 						payment: options.payment,
 						escrowAmount: options.escrowAmount,
