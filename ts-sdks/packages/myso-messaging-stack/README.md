@@ -3,8 +3,7 @@
 > [!NOTE] The MySocial Messaging Stack tooling is currently in Beta.
 >
 > The tooling is production-capable for many use cases, but developers should evaluate their own
-> security, reliability, and operational requirements before deploying to production.
->.
+> security, reliability, and operational requirements before deploying to production. .
 
 TypeScript SDK for encrypted group messaging on MySocial, powered by
 [MyData](https://github.com/the-social-proof-foundation/myso-mydata) for end-to-end encryption.

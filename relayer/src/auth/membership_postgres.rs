@@ -307,4 +307,20 @@ impl MembershipStore for PostgresMembershipStore {
             Ok(())
         });
     }
+
+    fn clear_all(&self) {
+        self.inner.clear();
+        let pool = self.pool.clone();
+        self.run_db(async move {
+            sqlx::query("TRUNCATE membership_permissions")
+                .execute(&pool)
+                .await?;
+            sqlx::query(
+                "UPDATE membership_sync_state SET last_cursor = NULL, updated_at = NOW() WHERE id = 1",
+            )
+            .execute(&pool)
+            .await?;
+            Ok(())
+        });
+    }
 }

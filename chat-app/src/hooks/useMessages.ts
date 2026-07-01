@@ -7,9 +7,16 @@
  * - Deduplicates incoming messages by messageId
  */
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { BlockedMessagingError } from '@socialproof/myso-messaging-stack';
+import {
+  BlockedMessagingError,
+  RelayerTransportError,
+} from '@socialproof/myso-messaging-stack';
 import { useRequiredMessagingClient } from '../contexts/MessagingClientContext';
 import type { AttachmentFile, AttachmentHandle } from '@socialproof/myso-messaging-stack';
+import {
+  formatRelayerError,
+  isNotGroupMemberError,
+} from '../lib/format-relayer-error';
 
 export interface Message {
   messageId: string;
@@ -47,22 +54,26 @@ interface SDKGetMessagesResult {
   hasNext: boolean;
 }
 
+/** Stable ascending sort by order, then createdAt, then messageId. */
+function sortMessagesByOrder(msgs: Message[]): Message[] {
+  return [...msgs].sort((a, b) => {
+    if (a.order !== b.order) return a.order - b.order;
+    if (a.createdAt !== b.createdAt) return a.createdAt - b.createdAt;
+    return a.messageId.localeCompare(b.messageId);
+  });
+}
+
+/** Merge two lists, dedupe by messageId, return sorted ascending. */
+function mergeMessages(prev: Message[], incoming: Message[]): Message[] {
+  const byId = new Map<string, Message>();
+  for (const m of prev) byId.set(m.messageId, m);
+  for (const m of incoming) byId.set(m.messageId, m);
+  return sortMessagesByOrder([...byId.values()]);
+}
+
 /** Deduplicate and merge a new message into the list (sorted by order). */
 function mergeMessage(prev: Message[], incoming: Message): Message[] {
-  // Check for existing message (deduplicate)
-  const existingIdx = prev.findIndex(
-    (m) => m.messageId === incoming.messageId,
-  );
-
-  if (existingIdx !== -1) {
-    // Update in-place (handles edits/deletes/sync status changes)
-    const updated = [...prev];
-    updated[existingIdx] = incoming;
-    return updated;
-  }
-
-  // Append and keep sorted by order
-  return [...prev, incoming].sort((a, b) => a.order - b.order);
+  return mergeMessages(prev, [incoming]);
 }
 
 export function useMessages(uuid: string, groupId: string): UseMessagesResult {
@@ -109,7 +120,7 @@ export function useMessages(uuid: string, groupId: string): UseMessagesResult {
 
         if (cancelled || uuidRef.current !== uuid) return;
 
-        setMessages(result.messages);
+        setMessages(sortMessagesByOrder(result.messages));
         setHasMore(result.hasNext);
       } catch (err) {
         if (cancelled || uuidRef.current !== uuid) return;
@@ -205,7 +216,7 @@ export function useMessages(uuid: string, groupId: string): UseMessagesResult {
 
       if (uuidRef.current !== uuid) return;
 
-      setMessages((prev) => [...result.messages, ...prev]);
+      setMessages((prev) => mergeMessages(prev, result.messages));
       setHasMore(result.hasNext);
     } catch (err) {
       console.error('Failed to load more messages:', err);
@@ -224,14 +235,39 @@ export function useMessages(uuid: string, groupId: string): UseMessagesResult {
       setSending(true);
       setError(null);
 
+      const sendPayload = {
+        signer,
+        groupRef: { uuid: uuidRef.current },
+        text: trimmed || undefined,
+        files: hasFiles ? files : undefined,
+        mydataApproveContext: undefined as undefined,
+      };
+
+      const maxAttempts = 5;
+      let lastErr: unknown;
+
       try {
-        const {messageId} = await client.messaging.sendMessage({
-          signer,
-          groupRef: {uuid: uuidRef.current},
-          text: trimmed || undefined,
-          files: hasFiles ? files : undefined,
-          mydataApproveContext: undefined
-        });
+        let messageId: string | undefined;
+
+        for (let attempt = 0; attempt < maxAttempts; attempt++) {
+          try {
+            ({ messageId } = await client.messaging.sendMessage(sendPayload));
+            break;
+          } catch (err) {
+            lastErr = err;
+            if (isNotGroupMemberError(err) && attempt < maxAttempts - 1) {
+              await new Promise((resolve) =>
+                setTimeout(resolve, 500 * (attempt + 1)),
+              );
+              continue;
+            }
+            throw err;
+          }
+        }
+
+        if (!messageId) {
+          throw lastErr ?? new Error('Failed to send message.');
+        }
 
         // Optimistic local append — the subscription will replace this with
         // the real message when it arrives from the relayer.
@@ -255,6 +291,11 @@ export function useMessages(uuid: string, groupId: string): UseMessagesResult {
         console.error('Failed to send message:', err);
         if (err instanceof BlockedMessagingError) {
           setError('You cannot message this user.');
+        } else if (
+          err instanceof RelayerTransportError ||
+          isNotGroupMemberError(err)
+        ) {
+          setError(formatRelayerError(err));
         } else {
           setError(
             err instanceof Error ? err.message : 'Failed to send message.',

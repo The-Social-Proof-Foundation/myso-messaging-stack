@@ -122,3 +122,103 @@ export function mydataApproveReader(options: MydataApproveReaderOptions) {
 			arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
 		});
 }
+export interface MydataApproveReaderWithOversightArguments {
+	id: RawTransactionArgument<number[]>;
+	version: RawTransactionArgument<string>;
+	group: RawTransactionArgument<string>;
+	encryptionHistory: RawTransactionArgument<string>;
+	memoryAccount: RawTransactionArgument<string>;
+	agentDerivedAddress: RawTransactionArgument<string>;
+}
+export interface MydataApproveReaderWithOversightOptions {
+	package?: string;
+	arguments:
+		| MydataApproveReaderWithOversightArguments
+		| [
+				id: RawTransactionArgument<number[]>,
+				version: RawTransactionArgument<string>,
+				group: RawTransactionArgument<string>,
+				encryptionHistory: RawTransactionArgument<string>,
+				memoryAccount: RawTransactionArgument<string>,
+				agentDerivedAddress: RawTransactionArgument<string>,
+		  ];
+}
+/**
+ * Principal oversight fallback: allows the human owner to decrypt when they hold
+ * no direct `MessagingReader` but a registered sub-agent on the same
+ * [`MemoryAccount`] does.
+ */
+export function mydataApproveReaderWithOversight(options: MydataApproveReaderWithOversightOptions) {
+	const packageAddress = options.package ?? '@local-pkg/messaging';
+	const argumentsTypes = ['vector<u8>', null, null, null, null, 'address'] satisfies (
+		| string
+		| null
+	)[];
+	const parameterNames = [
+		'id',
+		'version',
+		'group',
+		'encryptionHistory',
+		'memoryAccount',
+		'agentDerivedAddress',
+	];
+	return (tx: Transaction) =>
+		tx.moveCall({
+			package: packageAddress,
+			module: 'mydata_policies',
+			function: 'mydata_approve_reader_with_oversight',
+			arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
+		});
+}
+export interface MydataApproveAgentReaderArguments {
+	id: RawTransactionArgument<number[]>;
+	version: RawTransactionArgument<string>;
+	group: RawTransactionArgument<string>;
+	encryptionHistory: RawTransactionArgument<string>;
+	platform: RawTransactionArgument<string>;
+	memoryAccount: RawTransactionArgument<string>;
+}
+export interface MydataApproveAgentReaderOptions {
+	package?: string;
+	arguments:
+		| MydataApproveAgentReaderArguments
+		| [
+				id: RawTransactionArgument<number[]>,
+				version: RawTransactionArgument<string>,
+				group: RawTransactionArgument<string>,
+				encryptionHistory: RawTransactionArgument<string>,
+				platform: RawTransactionArgument<string>,
+				memoryAccount: RawTransactionArgument<string>,
+		  ];
+}
+/**
+ * Sub-agent MyData reader approval via `CAP_MESSAGE_READ` on the
+ * [`MemoryAccount`].
+ */
+export function mydataApproveAgentReader(options: MydataApproveAgentReaderOptions) {
+	const packageAddress = options.package ?? '@local-pkg/messaging';
+	const argumentsTypes = [
+		'vector<u8>',
+		null,
+		null,
+		null,
+		null,
+		null,
+		'0x2::clock::Clock',
+	] satisfies (string | null)[];
+	const parameterNames = [
+		'id',
+		'version',
+		'group',
+		'encryptionHistory',
+		'platform',
+		'memoryAccount',
+	];
+	return (tx: Transaction) =>
+		tx.moveCall({
+			package: packageAddress,
+			module: 'mydata_policies',
+			function: 'mydata_approve_agent_reader',
+			arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
+		});
+}

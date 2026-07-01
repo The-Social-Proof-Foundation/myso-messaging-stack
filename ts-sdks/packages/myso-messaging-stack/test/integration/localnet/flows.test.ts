@@ -90,6 +90,30 @@ describe('Full Flows', () => {
 			expect(createdIds).toContain(encryptionHistoryId);
 		});
 
+		it('should create and share a group without a MemoryAccount (wallet-only path)', async () => {
+			const walletAccount = await createFundedAccount({ faucetUrl });
+			const walletClient = createMySoMessagingStackClient({
+				url: clientConfig.mysoClientUrl,
+				network: 'localnet',
+				packageConfig: clientConfig.packageConfig,
+				keypair: walletAccount.keypair,
+			});
+
+			const memoryAccountId = await walletClient.messaging.view.memoryAccountIdForOwner({
+				owner: walletAccount.address,
+			});
+			expect(memoryAccountId).toBeNull();
+
+			const uuid = crypto.randomUUID();
+			const { digest } = await walletClient.messaging.createAndShareGroup({
+				signer: walletAccount.keypair,
+				uuid,
+				name: 'Wallet-only Group',
+			});
+
+			expect(digest).toBeDefined();
+		});
+
 		it('should store a valid EncryptedObject DEK on group creation', async () => {
 			const uuid = crypto.randomUUID();
 

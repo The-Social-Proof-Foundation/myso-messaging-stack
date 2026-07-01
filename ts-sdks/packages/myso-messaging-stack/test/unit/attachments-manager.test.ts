@@ -20,12 +20,13 @@ import type {
 import { MySoMessagingStackDerive } from '../../src/derive.js';
 import type { MySoMessagingStackView } from '../../src/view.js';
 import { createMockMyDataClient } from './helpers/mock-mydata-client.js';
+import {
+	MOCK_PACKAGE_CONFIG,
+	MOCK_PACKAGE_ID,
+	MOCK_VERSION_ID,
+} from './helpers/mock-package-config.js';
 
 // === Constants ===
-
-const MOCK_PACKAGE_ID = '0x' + 'ab'.repeat(32);
-const MOCK_NAMESPACE_ID = '0x' + '99'.repeat(32);
-const MOCK_VERSION_ID = '0x' + '11'.repeat(32);
 
 const mockMyDataMySoClient = {} as MyDataCompatibleClient;
 
@@ -52,14 +53,7 @@ function createEnvelopeEncryption(): EnvelopeEncryption {
 		mysoClient: { cache: new ClientCache() } as unknown as ClientWithCoreApi,
 		view: { getCurrentKeyVersion: async () => 0n } as unknown as MySoMessagingStackView,
 		derive: new MySoMessagingStackDerive({
-			packageConfig: {
-				originalPackageId: MOCK_PACKAGE_ID,
-				latestPackageId: MOCK_PACKAGE_ID,
-				namespaceId: MOCK_NAMESPACE_ID,
-				versionId: MOCK_VERSION_ID,
-				blockListRegistryId: '0x' + '22'.repeat(32),
-				socialGraphId: '0x' + '33'.repeat(32),
-			},
+			packageConfig: MOCK_PACKAGE_CONFIG,
 		}),
 		originalPackageId: MOCK_PACKAGE_ID,
 		latestPackageId: MOCK_PACKAGE_ID,
@@ -418,14 +412,7 @@ describe('AttachmentsManager', () => {
 			const encryption = createEnvelopeEncryption();
 			const { uuid } = await encryption.generateGroupDEK();
 			const derive = new MySoMessagingStackDerive({
-				packageConfig: {
-					originalPackageId: MOCK_PACKAGE_ID,
-					latestPackageId: MOCK_PACKAGE_ID,
-					namespaceId: MOCK_NAMESPACE_ID,
-					versionId: MOCK_VERSION_ID,
-					blockListRegistryId: '0x' + '22'.repeat(32),
-					socialGraphId: '0x' + '33'.repeat(32),
-				},
+				packageConfig: MOCK_PACKAGE_CONFIG,
 			});
 			const groupId = derive.groupId({ uuid });
 			const encryptionHistoryId = derive.encryptionHistoryId({ uuid });

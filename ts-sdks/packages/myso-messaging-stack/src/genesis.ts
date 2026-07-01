@@ -323,52 +323,52 @@ export async function resolveGenesisMessagingConfig(
 
 	const [namespaceId, versionId, blockListRegistryId, socialGraphId, memoryRegistryId] =
 		await Promise.all([
-		findSharedObjectByType(
-			client,
-			graphqlUrl,
-			rpcUrl,
-			GENESIS_PACKAGE_IDS.messaging,
-			messagingStructType('messaging', 'MessagingNamespace'),
-			'MessagingNamespace',
-			options.signal,
-		),
-		findSharedObjectByType(
-			client,
-			graphqlUrl,
-			rpcUrl,
-			GENESIS_PACKAGE_IDS.messaging,
-			messagingStructType('version', 'Version'),
-			'Version',
-			options.signal,
-		),
-		findSharedObjectByType(
-			client,
-			graphqlUrl,
-			rpcUrl,
-			GENESIS_PACKAGE_IDS.social,
-			socialStructType('block_list', 'BlockListRegistry'),
-			'BlockListRegistry',
-			options.signal,
-		),
-		findSharedObjectByType(
-			client,
-			graphqlUrl,
-			rpcUrl,
-			GENESIS_PACKAGE_IDS.social,
-			socialStructType('social_graph', 'SocialGraph'),
-			'SocialGraph',
-			options.signal,
-		),
-		findSharedObjectByType(
-			client,
-			graphqlUrl,
-			rpcUrl,
-			GENESIS_PACKAGE_IDS.social,
-			socialStructType('memory', 'MemoryRegistry'),
-			'MemoryRegistry',
-			options.signal,
-		),
-	]);
+			findSharedObjectByType(
+				client,
+				graphqlUrl,
+				rpcUrl,
+				GENESIS_PACKAGE_IDS.messaging,
+				messagingStructType('messaging', 'MessagingNamespace'),
+				'MessagingNamespace',
+				options.signal,
+			),
+			findSharedObjectByType(
+				client,
+				graphqlUrl,
+				rpcUrl,
+				GENESIS_PACKAGE_IDS.messaging,
+				messagingStructType('version', 'Version'),
+				'Version',
+				options.signal,
+			),
+			findSharedObjectByType(
+				client,
+				graphqlUrl,
+				rpcUrl,
+				GENESIS_PACKAGE_IDS.social,
+				socialStructType('block_list', 'BlockListRegistry'),
+				'BlockListRegistry',
+				options.signal,
+			),
+			findSharedObjectByType(
+				client,
+				graphqlUrl,
+				rpcUrl,
+				GENESIS_PACKAGE_IDS.social,
+				socialStructType('social_graph', 'SocialGraph'),
+				'SocialGraph',
+				options.signal,
+			),
+			findSharedObjectByType(
+				client,
+				graphqlUrl,
+				rpcUrl,
+				GENESIS_PACKAGE_IDS.social,
+				socialStructType('memory', 'MemoryRegistry'),
+				'MemoryRegistry',
+				options.signal,
+			),
+		]);
 
 	const resolved: ResolvedGenesisMessagingConfig = {
 		messaging: {

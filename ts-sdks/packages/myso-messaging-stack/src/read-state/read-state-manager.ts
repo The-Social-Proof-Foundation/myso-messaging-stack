@@ -56,10 +56,7 @@ export class ReadStateManager {
 
 		const finalState = remote ? mergeReadState(merged, remote) : merged;
 		finalState.groups[options.groupId] = {
-			readUpto: Math.max(
-				finalState.groups[options.groupId]?.readUpto ?? 0,
-				options.readUpto,
-			),
+			readUpto: Math.max(finalState.groups[options.groupId]?.readUpto ?? 0, options.readUpto),
 			muted: finalState.groups[options.groupId]?.muted,
 		};
 		finalState.updatedAt = Date.now();

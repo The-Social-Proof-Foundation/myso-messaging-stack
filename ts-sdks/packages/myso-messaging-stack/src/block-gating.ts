@@ -36,11 +36,7 @@ export class BlockGatingClient {
 		return false;
 	}
 
-	async assertEitherNotBlocked(
-		a: string,
-		b: string,
-		options?: BlockCheckOptions,
-	): Promise<void> {
+	async assertEitherNotBlocked(a: string, b: string, options?: BlockCheckOptions): Promise<void> {
 		const blocked = await this.checkEitherBlocked(a, b, options);
 		if (blocked) {
 			throw new BlockedMessagingError();

@@ -11,7 +11,7 @@ const config: MySoCodegenConfig = {
 	packages: [
 		{
 			package: '@local-pkg/messaging',
-			path: '../../../move/packages/messaging',
+			path: '../../../../myso-core/crates/myso-framework/packages/messaging',
 			packageName: 'messaging',
 		},
 	],

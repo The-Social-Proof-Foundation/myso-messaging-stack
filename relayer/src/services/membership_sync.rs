@@ -45,6 +45,13 @@ impl MembershipSyncService {
         agent_group_store: Arc<dyn AgentGroupStore>,
     ) -> Self {
         let last_cursor = membership_store.get_last_checkpoint_cursor();
+        info!(
+            "MembershipSyncService init: last_cursor={:?}, groups_package_id={}, messaging_package_id={}, myso_rpc_url={}",
+            last_cursor,
+            config.groups_package_id,
+            config.messaging_package_id,
+            config.myso_rpc_url,
+        );
         Self {
             myso_rpc_url: config.myso_rpc_url.clone(),
             groups_package_id: config.groups_package_id.clone(),
@@ -101,7 +108,14 @@ impl MembershipSyncService {
 
             // Skip if we've already processed this checkpoint (shouldn't happen)
             if let Some(last) = self.last_cursor {
-                if cursor <= last {
+                if cursor < last {
+                    warn!(
+                        "Checkpoint cursor rewound from {} to {} (chain regenesis?) — clearing membership cache",
+                        last, cursor
+                    );
+                    self.membership_store.clear_all();
+                    self.last_cursor = None;
+                } else if cursor <= last {
                     continue;
                 }
             }
@@ -224,18 +238,22 @@ impl MembershipSyncService {
                 member,
                 permissions,
             } => {
+                if permissions.is_empty() {
+                    warn!(
+                        "PermissionsGranted with no recognized messaging permissions: {} -> {} (check GROUPS_PACKAGE_ID / event type names)",
+                        member, group_id
+                    );
+                    return;
+                }
                 info!(
                     "PermissionsGranted: {} -> {} permissions: {:?}",
                     member, group_id, permissions
                 );
-                if let Err(e) =
-                    self.membership_store
-                        .grant_permissions(group_id, member, permissions.clone())
+                if let Err(e) = self
+                    .membership_store
+                    .grant_permissions(group_id, member, permissions.clone())
                 {
-                    warn!(
-                        "Failed to grant permissions: {} - possible missed MemberAdded event",
-                        e
-                    );
+                    warn!("Failed to grant permissions: {}", e);
                 }
             }
 

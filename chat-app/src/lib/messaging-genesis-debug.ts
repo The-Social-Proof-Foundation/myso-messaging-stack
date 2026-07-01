@@ -149,15 +149,52 @@ export function logResolvedGenesisConfig(
   if (!import.meta.env.DEV) return;
 
   const expected = expectedCreateGroupObjectIds(resolved);
+  const { memoryRegistryId } = resolved.messaging;
 
   console.group(`[chat-app] messaging genesis — ${label}`);
-  console.table(expected);
+  console.table({
+    ...expected,
+    memoryRegistryId: memoryRegistryId || '(missing)',
+  });
+
+  if (!memoryRegistryId) {
+    console.error(
+      '[chat-app] memoryRegistryId is missing from resolved genesis config. ' +
+        'memoryAccountIdForOwner cannot route wallet vs profile group creation until genesis ' +
+        'includes MemoryRegistry (resolve genesis config / regenesis).',
+    );
+  }
 
   for (const [name, id] of Object.entries(expected)) {
     warnIfStale(name, id);
   }
 
   console.groupEnd();
+}
+
+/** Dev-only: warn when MemoryRegistry id is absent (blocks wallet/profile routing). */
+export function assertMemoryRegistryConfigured(
+  label: string,
+  resolved: ResolvedGenesisMessagingConfig,
+): void {
+  if (!import.meta.env.DEV) return;
+
+  const { memoryRegistryId } = resolved.messaging;
+  if (memoryRegistryId) return;
+
+  console.warn(
+    `[chat-app] ${label}: memoryRegistryId is empty — Create Group may fail before ` +
+      'wallet routing (memoryAccountIdForOwner requires MemoryRegistry in packageConfig).',
+  );
+}
+
+function extractMoveCallFunction(tx: Transaction): string | undefined {
+  const json = tx.getData() as {
+    commands: Array<{ MoveCall?: { function?: string; module?: string } }>;
+  };
+  const moveCall = json.commands.find((cmd) => cmd.MoveCall)?.MoveCall;
+  if (!moveCall?.function) return undefined;
+  return moveCall.module ? `${moveCall.module}::${moveCall.function}` : moveCall.function;
 }
 
 export async function fetchAndLogGenesisConfig(
@@ -279,12 +316,28 @@ export async function logCreateGroupTxInputs(
   tx: Transaction,
   client: ClientWithCoreApi,
   expected?: CreateGroupObjectIds,
+  options?: {
+    resolvedMemoryAccountId?: string | null;
+  },
 ): Promise<void> {
   if (!import.meta.env.DEV) return;
 
   console.group(`[chat-app] create-group tx inputs — ${label}`);
   try {
     await (tx as TransactionWithPrepare).prepareForSerialization({ client });
+
+    const moveFunction = extractMoveCallFunction(tx);
+    if (moveFunction) {
+      console.log('[chat-app] create-group Move entry point:', moveFunction);
+    }
+
+    if (options && 'resolvedMemoryAccountId' in options) {
+      const id = options.resolvedMemoryAccountId;
+      console.log(
+        '[chat-app] create-group resolved MemoryAccount:',
+        id ?? '(none — wallet path)',
+      );
+    }
 
     const inputs = tx.getData().inputs;
     const objectIds = inputs

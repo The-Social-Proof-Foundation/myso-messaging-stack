@@ -13,10 +13,11 @@ import { MySoMessagingStackDerive } from '../../src/derive.js';
 import { EnvelopeEncryption } from '../../src/encryption/envelope-encryption.js';
 import { NONCE_LENGTH } from '../../src/encryption/dek-manager.js';
 import { createMockMyDataClient } from './helpers/mock-mydata-client.js';
-
-const MOCK_PACKAGE_ID = '0x' + 'ab'.repeat(32);
-const MOCK_NAMESPACE_ID = '0x' + '99'.repeat(32);
-const MOCK_VERSION_ID = '0x' + '11'.repeat(32);
+import {
+	MOCK_PACKAGE_CONFIG,
+	MOCK_PACKAGE_ID,
+	MOCK_VERSION_ID,
+} from './helpers/mock-package-config.js';
 
 const mockMyDataMySoClient = {} as MyDataCompatibleClient;
 
@@ -48,14 +49,7 @@ function createMockView(currentKeyVersion = 0n): MySoMessagingStackView {
 
 function createMockDerive(): MySoMessagingStackDerive {
 	return new MySoMessagingStackDerive({
-		packageConfig: {
-			originalPackageId: MOCK_PACKAGE_ID,
-			latestPackageId: MOCK_PACKAGE_ID,
-			namespaceId: MOCK_NAMESPACE_ID,
-			versionId: MOCK_VERSION_ID,
-			blockListRegistryId: '0x' + '22'.repeat(32),
-			socialGraphId: '0x' + '33'.repeat(32),
-		},
+		packageConfig: MOCK_PACKAGE_CONFIG,
 	});
 }
 

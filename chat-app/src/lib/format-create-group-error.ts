@@ -109,5 +109,16 @@ export function formatCreateGroupError(err: unknown): string {
     );
   }
 
+  if (
+    message.includes('No MemoryAccount found for') ||
+    (message.includes('MemoryAccount') &&
+      message.includes('create a profile with memory linked'))
+  ) {
+    return (
+      'Installed SDK is outdated — upgrade to @socialproof/myso-messaging-stack@^0.0.7 ' +
+      'and reinstall dependencies.'
+    );
+  }
+
   return message;
 }

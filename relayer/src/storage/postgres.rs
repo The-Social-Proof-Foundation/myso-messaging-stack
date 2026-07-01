@@ -233,7 +233,7 @@ impl StorageAdapter for PostgresStorage {
         .map_err(|e| StorageError::OperationFailed(e.to_string()))?;
 
         let mut messages: Vec<Message> = rows.iter().map(row_to_message).collect();
-        if before_order.is_some() && after_order.is_none() {
+        if after_order.is_none() {
             messages.reverse();
         }
         Ok(messages)

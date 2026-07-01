@@ -309,7 +309,7 @@ curl -H "Client-Sdk-Version: 0.0.4" \
 | `VITE_AGENT_SUB_AGENT_ID` | Sub-agent object id (dev panel) |
 | `VITE_AGENT_SECRET_KEY` | Agent Ed25519 secret key hex (dev panel) |
 | `VITE_AGENT_PLATFORM_ID` | Platform shared object id |
-| `VITE_AGENT_MEMORY_ACCOUNT_ID` | Principal MemoryAccount id |
+| `VITE_AGENT_MEMORY_ACCOUNT_ID` | Principal (human parent) MemoryAccount object id — created once per human with profile; sub-agents are registered on this account via `register_sub_agent` and do not have their own |
 
 The sidebar lists **Agent conversations** from relayer `GET /v1/agent-conversations` (wallet auth). Agent messages show an **Agent** badge when relayer attribution is present.
 

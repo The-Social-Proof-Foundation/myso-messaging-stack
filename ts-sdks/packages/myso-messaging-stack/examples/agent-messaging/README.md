@@ -4,10 +4,10 @@ Runnable reference scripts for sub-agent messaging.
 
 ## Files
 
-| File | Purpose |
-|------|---------|
-| `agent-service.ts` | Agent runtime: create group, send message with attribution |
-| `principal-dashboard.ts` | Principal: list agent conversations via relayer |
+| File                     | Purpose                                                    |
+| ------------------------ | ---------------------------------------------------------- |
+| `agent-service.ts`       | Agent runtime: create group, send message with attribution |
+| `principal-dashboard.ts` | Principal: list agent conversations via relayer            |
 
 ## Prerequisites
 

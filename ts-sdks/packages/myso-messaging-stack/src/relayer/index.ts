@@ -36,10 +36,11 @@ export { RelayerTransportError } from './types.js';
 export type { RelayerTransport } from './transport.js';
 
 export { HTTPRelayerTransport, type HTTPRelayerTransportConfig } from './http-transport.js';
+export { HybridRelayerTransport, type HybridRelayerTransportConfig } from './hybrid-transport.js';
 export {
-	HybridRelayerTransport,
-	type HybridRelayerTransportConfig,
-} from './hybrid-transport.js';
-export { WSRelayerTransport, WsConnectionError, type WSRelayerTransportConfig } from './ws-transport.js';
+	WSRelayerTransport,
+	WsConnectionError,
+	type WSRelayerTransportConfig,
+} from './ws-transport.js';
 export { fromWireMessage, toWireAttachment, type WireMessageResponse } from './wire.js';
 export { createHeaderAuth, createWsAuthQuery } from './auth-headers.js';

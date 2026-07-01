@@ -426,10 +426,10 @@ export class HTTPRelayerTransport implements RelayerTransport {
 
 	async getUserReadState(params: GetUserReadStateParams) {
 		const headers = await createWalletHeaderAuth(params.signer);
-		const wire = await this.#request<WireReadStateResponse>(
-			this.#v1Path('/users/read-state'),
-			{ method: 'GET', headers },
-		);
+		const wire = await this.#request<WireReadStateResponse>(this.#v1Path('/users/read-state'), {
+			method: 'GET',
+			headers,
+		});
 		return {
 			encryptedBlob: fromHex(wire.encrypted_blob),
 			blobVersion: wire.blob_version,
@@ -494,9 +494,7 @@ export class HTTPRelayerTransport implements RelayerTransport {
 		return wire.conversations.map(fromWireAgentConversation);
 	}
 
-	async listGroupsForAgent(
-		params: ListGroupsForAgentParams,
-	): Promise<RelayerAgentConversation[]> {
+	async listGroupsForAgent(params: ListGroupsForAgentParams): Promise<RelayerAgentConversation[]> {
 		const headers = await createWalletHeaderAuth(params.signer);
 		const limit = params.limit ?? 100;
 		const encoded = encodeURIComponent(params.derivedAddress);

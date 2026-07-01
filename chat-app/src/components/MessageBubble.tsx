@@ -222,9 +222,9 @@ export function MessageBubble({
 
   return (
     <div
-      className={`group flex ${isOwnMessage ? 'justify-end' : 'justify-start'} px-4 py-1`}
+      className={`group flex min-w-0 max-w-full px-4 py-1 ${isOwnMessage ? 'justify-end' : 'justify-start'}`}
     >
-      <div className="relative max-w-[70%]">
+      <div className="relative min-w-0 max-w-[70%] shrink">
         {/* Action buttons (visible on hover, own messages only) */}
         {isOwnMessage && !editing && (onEdit || onDelete) && (
           <div className="absolute -top-3 right-2 z-10 hidden rounded-lg border border-secondary-200 bg-white shadow-sm group-hover:flex dark:border-secondary-600 dark:bg-secondary-700">
@@ -253,7 +253,7 @@ export function MessageBubble({
         )}
 
         <div
-          className={`rounded-2xl px-4 py-2 ${
+          className={`max-w-full overflow-hidden rounded-2xl px-4 py-2 ${
             isOwnMessage
               ? 'bg-primary-500 text-white'
               : 'bg-secondary-100 text-secondary-900 dark:bg-secondary-700 dark:text-secondary-100'
@@ -293,7 +293,7 @@ export function MessageBubble({
                 onKeyDown={handleEditKeyDown}
                 rows={2}
                 disabled={saving}
-                className="w-full resize-none rounded-lg border border-primary-300 bg-white px-2 py-1 text-sm text-secondary-900 focus:outline-none focus:ring-1 focus:ring-primary-300 disabled:opacity-50"
+                className="w-full max-w-full resize-none break-all rounded-lg border border-primary-300 bg-white px-2 py-1 text-sm text-secondary-900 focus:outline-none focus:ring-1 focus:ring-primary-300 disabled:opacity-50"
               />
               <div className="flex justify-end gap-1">
                 <button
@@ -315,7 +315,7 @@ export function MessageBubble({
           ) : (
             <>
               {message.text && (
-                <p className="whitespace-pre-wrap wrap-break-word text-sm">
+                <p className="text-sm break-all whitespace-pre-wrap">
                   {message.text}
                 </p>
               )}

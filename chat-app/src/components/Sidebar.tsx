@@ -23,7 +23,7 @@ export function Sidebar({
   settingsPanel,
 }: Readonly<SidebarProps>) {
   return (
-    <aside className="flex w-72 flex-col border-r border-secondary-200 bg-white dark:border-secondary-700 dark:bg-secondary-800">
+    <aside className="flex w-72 shrink-0 flex-col border-r border-secondary-200 bg-white dark:border-secondary-700 dark:bg-secondary-800">
       {/* Header */}
       <div className="flex items-center justify-between border-b border-secondary-200 px-4 py-3 dark:border-secondary-700">
         <div className="flex items-center gap-2">

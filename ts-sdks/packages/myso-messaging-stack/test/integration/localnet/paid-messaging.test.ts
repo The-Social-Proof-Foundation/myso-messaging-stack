@@ -6,7 +6,10 @@ import { Ed25519Keypair } from '@socialproof/myso/keypairs/ed25519';
 
 import { createPaidMessagingClient } from '@socialproof/myso-messaging-stack';
 
-import { createMySoMessagingStackClient, type MySoMessagingStackTestClient } from '../../helpers/index.js';
+import {
+	createMySoMessagingStackClient,
+	type MySoMessagingStackTestClient,
+} from '../../helpers/index.js';
 
 describe('paid messaging (localnet)', () => {
 	let client: MySoMessagingStackTestClient;

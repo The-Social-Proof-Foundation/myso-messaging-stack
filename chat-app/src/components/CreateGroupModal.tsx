@@ -3,7 +3,9 @@ import { useRequiredMessagingClient } from '../contexts/MessagingClientContext';
 import { signAndExecuteTransactionAndWait } from '../lib/sign-and-wait';
 import { addStoredGroup } from '../lib/group-store';
 import { formatCreateGroupError } from '../lib/format-create-group-error';
+import { waitForGroupReady } from '../lib/wait-for-relayer-membership';
 import {
+  assertMemoryRegistryConfigured,
   expectedCreateGroupObjectIds,
   fetchAndLogGenesisConfig,
   logClientDeriveIds,
@@ -31,6 +33,7 @@ export function CreateGroupModal({
   const [name, setName] = useState('');
   const [members, setMembers] = useState('');
   const [loading, setLoading] = useState(false);
+  const [syncing, setSyncing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   if (!open) return null;
@@ -61,6 +64,7 @@ export function CreateGroupModal({
         { bypassCache: true },
       );
       const expectedObjects = expectedCreateGroupObjectIds(freshGenesis);
+      assertMemoryRegistryConfigured('create-group', freshGenesis);
 
       logClientDeriveIds('create-group (fresh client)', client.messaging.derive, uuid);
       logFullGenesisClientMismatch('create-group', freshGenesis, client);
@@ -73,10 +77,17 @@ export function CreateGroupModal({
         .map((s) => s.trim())
         .filter(Boolean);
 
+      const sender = signer.toMySoAddress();
+      let resolvedMemoryAccountId: string | null | undefined;
+      if (import.meta.env.DEV) {
+        resolvedMemoryAccountId =
+          await client.messaging.view.memoryAccountIdForOwner({ owner: sender });
+      }
+
       const tx = client.messaging.tx.createAndShareGroup({
         uuid,
         name: trimmedName,
-        sender: signer.toMySoAddress(),
+        sender,
         ...(initialMembers.length > 0 && { initialMembers }),
       });
 
@@ -85,11 +96,21 @@ export function CreateGroupModal({
         tx,
         client,
         expectedObjects,
+        { resolvedMemoryAccountId },
       );
 
       await signAndExecuteTransactionAndWait(client, signer, tx);
 
       const groupId = client.messaging.derive.groupId({ uuid });
+
+      setSyncing(true);
+      await waitForGroupReady({
+        client,
+        signer,
+        groupId,
+        uuid,
+        memberAddress: sender,
+      });
 
       addStoredGroup({
         uuid,
@@ -116,6 +137,7 @@ export function CreateGroupModal({
       setError(formatCreateGroupError(err));
     } finally {
       setLoading(false);
+      setSyncing(false);
     }
   }
 
@@ -140,7 +162,7 @@ export function CreateGroupModal({
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder="e.g. Project Alpha"
-              disabled={loading}
+              disabled={loading || syncing}
               className="w-full rounded-lg border border-secondary-300 bg-white px-3 py-2 text-sm text-secondary-900 placeholder:text-secondary-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 disabled:opacity-50 dark:border-secondary-600 dark:bg-secondary-700 dark:text-secondary-100 dark:placeholder:text-secondary-500"
             />
           </div>
@@ -161,7 +183,7 @@ export function CreateGroupModal({
               onChange={(e) => setMembers(e.target.value)}
               placeholder="Comma-separated MySo addresses&#10;0xabc..., 0xdef..."
               rows={3}
-              disabled={loading}
+              disabled={loading || syncing}
               className="w-full rounded-lg border border-secondary-300 bg-white px-3 py-2 text-sm text-secondary-900 placeholder:text-secondary-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 disabled:opacity-50 dark:border-secondary-600 dark:bg-secondary-700 dark:text-secondary-100 dark:placeholder:text-secondary-500"
             />
           </div>
@@ -174,17 +196,21 @@ export function CreateGroupModal({
             <button
               type="button"
               onClick={onClose}
-              disabled={loading}
+              disabled={loading || syncing}
               className="rounded-lg px-4 py-2 text-sm font-medium text-secondary-600 hover:bg-secondary-100 disabled:opacity-50 dark:text-secondary-400 dark:hover:bg-secondary-700"
             >
               Cancel
             </button>
             <button
               type="submit"
-              disabled={loading}
+              disabled={loading || syncing}
               className="rounded-lg bg-primary-500 px-4 py-2 text-sm font-medium text-white hover:bg-primary-600 disabled:opacity-50"
             >
-              {loading ? 'Creating...' : 'Create Group'}
+              {syncing
+                ? 'Syncing membership…'
+                : loading
+                  ? 'Creating...'
+                  : 'Create Group'}
             </button>
           </div>
         </form>

@@ -239,13 +239,7 @@ export class MySoMessagingStackClient<TApproveContext = void> {
 			messageLogTypeName: `${this.#packageConfig.originalPackageId}::message_log::MessageLog`,
 			groupsCall: groupsExt.call,
 			resolveMemoryAccountId: async (owner) => {
-				const id = await this.view.memoryAccountIdForOwner({ owner });
-				if (!id) {
-					throw new MySoMessagingStackClientError(
-						`No MemoryAccount found for ${owner}. Pass creatorMemoryAccountId or create a profile with memory linked.`,
-					);
-				}
-				return id;
+				return this.view.memoryAccountIdForOwner({ owner });
 			},
 		});
 		this.tx = new MySoMessagingStackTransactions({

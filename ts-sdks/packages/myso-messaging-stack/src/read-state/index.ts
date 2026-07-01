@@ -3,8 +3,4 @@
 
 export { ReadStateManager } from './read-state-manager.js';
 export { encryptReadState, decryptReadState } from './read-state-crypto.js';
-export {
-	createEmptyReadState,
-	mergeReadState,
-	type UserReadState,
-} from './types.js';
+export { createEmptyReadState, mergeReadState, type UserReadState } from './types.js';

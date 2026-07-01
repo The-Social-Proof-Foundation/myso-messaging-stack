@@ -148,8 +148,15 @@ impl StorageAdapter for InMemoryStorage {
         // Sort by order ascending
         filtered.sort_by_key(|m| m.order.unwrap_or(0));
 
-        // Apply limit
-        filtered.truncate(limit);
+        // Newest window when scrolling up or on initial load; oldest-first when after_order set
+        if after_order.is_none() {
+            if filtered.len() > limit {
+                let start = filtered.len() - limit;
+                filtered = filtered.split_off(start);
+            }
+        } else if filtered.len() > limit {
+            filtered.truncate(limit);
+        }
 
         Ok(filtered)
     }

@@ -80,6 +80,20 @@ export const MessagingNamespace = new MoveStruct({
 		id: bcs.Address,
 	},
 });
+export const AgentGroupCreated = new MoveStruct({
+	name: `${$moduleName}::AgentGroupCreated`,
+	fields: {
+		group_id: bcs.Address,
+		creator_actor: bcs.Address,
+		creator_principal: bcs.Address,
+		creator_sub_agent_id: bcs.option(bcs.Address),
+		creator_identity_class: bcs.u64(),
+		organization_id: bcs.option(bcs.Address),
+		group_name: bcs.string(),
+		group_uuid: bcs.string(),
+		created_at: bcs.u64(),
+	},
+});
 export interface CreateGroupArguments {
 	version: RawTransactionArgument<string>;
 	namespace: RawTransactionArgument<string>;
@@ -248,6 +262,209 @@ export function createAndShareGroup(options: CreateAndShareGroupOptions) {
 			arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
 		});
 }
+export interface CreateWalletGroupArguments {
+	version: RawTransactionArgument<string>;
+	namespace: RawTransactionArgument<string>;
+	groupManager: RawTransactionArgument<string>;
+	blockList: RawTransactionArgument<string>;
+	name: RawTransactionArgument<string>;
+	uuid: RawTransactionArgument<string>;
+	initialEncryptedDek: RawTransactionArgument<number[]>;
+	initialMembers: RawTransactionArgument<string>;
+}
+export interface CreateWalletGroupOptions {
+	package?: string;
+	arguments:
+		| CreateWalletGroupArguments
+		| [
+				version: RawTransactionArgument<string>,
+				namespace: RawTransactionArgument<string>,
+				groupManager: RawTransactionArgument<string>,
+				blockList: RawTransactionArgument<string>,
+				name: RawTransactionArgument<string>,
+				uuid: RawTransactionArgument<string>,
+				initialEncryptedDek: RawTransactionArgument<number[]>,
+				initialMembers: RawTransactionArgument<string>,
+		  ];
+}
+/**
+ * Wallet-only group creation. Creator is `ctx.sender()`; no [`MemoryAccount`]
+ * required.
+ *
+ * Use when the sender has no linked profile/memory account. For profile owners
+ * with a [`MemoryAccount`], prefer [`create_group`] which enforces human-only
+ * creation.
+ */
+export function createWalletGroup(options: CreateWalletGroupOptions) {
+	const packageAddress = options.package ?? '@local-pkg/messaging';
+	const argumentsTypes = [
+		null,
+		null,
+		null,
+		null,
+		'0x1::string::String',
+		'0x1::string::String',
+		'vector<u8>',
+		null,
+	] satisfies (string | null)[];
+	const parameterNames = [
+		'version',
+		'namespace',
+		'groupManager',
+		'blockList',
+		'name',
+		'uuid',
+		'initialEncryptedDek',
+		'initialMembers',
+	];
+	return (tx: Transaction) =>
+		tx.moveCall({
+			package: packageAddress,
+			module: 'messaging',
+			function: 'create_wallet_group',
+			arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
+		});
+}
+export interface CreateAndShareWalletGroupArguments {
+	version: RawTransactionArgument<string>;
+	namespace: RawTransactionArgument<string>;
+	groupManager: RawTransactionArgument<string>;
+	blockList: RawTransactionArgument<string>;
+	name: RawTransactionArgument<string>;
+	uuid: RawTransactionArgument<string>;
+	initialEncryptedDek: RawTransactionArgument<number[]>;
+	initialMembers: RawTransactionArgument<string[]>;
+}
+export interface CreateAndShareWalletGroupOptions {
+	package?: string;
+	arguments:
+		| CreateAndShareWalletGroupArguments
+		| [
+				version: RawTransactionArgument<string>,
+				namespace: RawTransactionArgument<string>,
+				groupManager: RawTransactionArgument<string>,
+				blockList: RawTransactionArgument<string>,
+				name: RawTransactionArgument<string>,
+				uuid: RawTransactionArgument<string>,
+				initialEncryptedDek: RawTransactionArgument<number[]>,
+				initialMembers: RawTransactionArgument<string[]>,
+		  ];
+}
+/** Entry point: create and share a group without a [`MemoryAccount`]. */
+export function createAndShareWalletGroup(options: CreateAndShareWalletGroupOptions) {
+	const packageAddress = options.package ?? '@local-pkg/messaging';
+	const argumentsTypes = [
+		null,
+		null,
+		null,
+		null,
+		'0x1::string::String',
+		'0x1::string::String',
+		'vector<u8>',
+		'vector<address>',
+	] satisfies (string | null)[];
+	const parameterNames = [
+		'version',
+		'namespace',
+		'groupManager',
+		'blockList',
+		'name',
+		'uuid',
+		'initialEncryptedDek',
+		'initialMembers',
+	];
+	return (tx: Transaction) =>
+		tx.moveCall({
+			package: packageAddress,
+			module: 'messaging',
+			function: 'create_and_share_wallet_group',
+			arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
+		});
+}
+export interface CreateAgentGroupArguments {
+	version: RawTransactionArgument<string>;
+	namespace: RawTransactionArgument<string>;
+	groupManager: RawTransactionArgument<string>;
+	groupLeaver: RawTransactionArgument<string>;
+	blockList: RawTransactionArgument<string>;
+	platform: RawTransactionArgument<string>;
+	creatorMemoryAccount: RawTransactionArgument<string>;
+	crossPrincipalPeerAccount: RawTransactionArgument<string>;
+	name: RawTransactionArgument<string>;
+	uuid: RawTransactionArgument<string>;
+	initialEncryptedDek: RawTransactionArgument<number[]>;
+	initialMembers: RawTransactionArgument<string>;
+}
+export interface CreateAgentGroupOptions {
+	package?: string;
+	arguments:
+		| CreateAgentGroupArguments
+		| [
+				version: RawTransactionArgument<string>,
+				namespace: RawTransactionArgument<string>,
+				groupManager: RawTransactionArgument<string>,
+				groupLeaver: RawTransactionArgument<string>,
+				blockList: RawTransactionArgument<string>,
+				platform: RawTransactionArgument<string>,
+				creatorMemoryAccount: RawTransactionArgument<string>,
+				crossPrincipalPeerAccount: RawTransactionArgument<string>,
+				name: RawTransactionArgument<string>,
+				uuid: RawTransactionArgument<string>,
+				initialEncryptedDek: RawTransactionArgument<number[]>,
+				initialMembers: RawTransactionArgument<string>,
+		  ];
+}
+/**
+ * Creates a messaging group on behalf of a sub-agent with principal oversight.
+ *
+ * The transaction sender must be the sub-agent `derived_address` with
+ * `CAP_MESSAGE_SEND`. The agent receives messaging permissions but not
+ * `PermissionsAdmin`. The human `principal_owner` receives `MessagingReader` and
+ * `PermissionsAdmin`.
+ *
+ * For cross-principal agent peers in `initial_members`, pass their
+ * [`MemoryAccount`] as `cross_principal_peer_account`. When all peers are humans
+ * or agents under the same principal, pass the creator account again.
+ */
+export function createAgentGroup(options: CreateAgentGroupOptions) {
+	const packageAddress = options.package ?? '@local-pkg/messaging';
+	const argumentsTypes = [
+		null,
+		null,
+		null,
+		null,
+		null,
+		null,
+		null,
+		null,
+		'0x1::string::String',
+		'0x1::string::String',
+		'vector<u8>',
+		null,
+		'0x2::clock::Clock',
+	] satisfies (string | null)[];
+	const parameterNames = [
+		'version',
+		'namespace',
+		'groupManager',
+		'groupLeaver',
+		'blockList',
+		'platform',
+		'creatorMemoryAccount',
+		'crossPrincipalPeerAccount',
+		'name',
+		'uuid',
+		'initialEncryptedDek',
+		'initialMembers',
+	];
+	return (tx: Transaction) =>
+		tx.moveCall({
+			package: packageAddress,
+			module: 'messaging',
+			function: 'create_agent_group',
+			arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
+		});
+}
 export interface CreateAgentAndShareGroupArguments {
 	version: RawTransactionArgument<string>;
 	namespace: RawTransactionArgument<string>;
@@ -256,7 +473,7 @@ export interface CreateAgentAndShareGroupArguments {
 	blockList: RawTransactionArgument<string>;
 	platform: RawTransactionArgument<string>;
 	creatorMemoryAccount: RawTransactionArgument<string>;
-	crossPrincipalPeerMemoryAccount: RawTransactionArgument<string>;
+	crossPrincipalPeerAccount: RawTransactionArgument<string>;
 	name: RawTransactionArgument<string>;
 	uuid: RawTransactionArgument<string>;
 	initialEncryptedDek: RawTransactionArgument<number[]>;
@@ -275,7 +492,7 @@ export interface CreateAgentAndShareGroupOptions {
 				blockList: RawTransactionArgument<string>,
 				platform: RawTransactionArgument<string>,
 				creatorMemoryAccount: RawTransactionArgument<string>,
-				crossPrincipalPeerMemoryAccount: RawTransactionArgument<string>,
+				crossPrincipalPeerAccount: RawTransactionArgument<string>,
 				name: RawTransactionArgument<string>,
 				uuid: RawTransactionArgument<string>,
 				initialEncryptedDek: RawTransactionArgument<number[]>,
@@ -283,6 +500,7 @@ export interface CreateAgentAndShareGroupOptions {
 				clock: RawTransactionArgument<string>,
 		  ];
 }
+/** Entry point: create and share an agent-associated messaging group. */
 export function createAgentAndShareGroup(options: CreateAgentAndShareGroupOptions) {
 	const packageAddress = options.package ?? '@local-pkg/messaging';
 	const argumentsTypes = [
@@ -298,7 +516,7 @@ export function createAgentAndShareGroup(options: CreateAgentAndShareGroupOption
 		'0x1::string::String',
 		'vector<u8>',
 		'vector<address>',
-		null,
+		'0x2::clock::Clock',
 	] satisfies (string | null)[];
 	const parameterNames = [
 		'version',
@@ -308,12 +526,11 @@ export function createAgentAndShareGroup(options: CreateAgentAndShareGroupOption
 		'blockList',
 		'platform',
 		'creatorMemoryAccount',
-		'crossPrincipalPeerMemoryAccount',
+		'crossPrincipalPeerAccount',
 		'name',
 		'uuid',
 		'initialEncryptedDek',
 		'initialMembers',
-		'clock',
 	];
 	return (tx: Transaction) =>
 		tx.moveCall({
@@ -801,7 +1018,6 @@ export interface SendAgentPaidMessageDigestOptions {
 export function sendAgentPaidMessageDigest(options: SendAgentPaidMessageDigestOptions) {
 	const packageAddress = options.package ?? '@local-pkg/messaging';
 	const argumentsTypes = [
-		null,
 		null,
 		null,
 		null,

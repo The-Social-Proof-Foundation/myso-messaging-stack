@@ -9,7 +9,10 @@ import {
 	createPrincipalOversightPolicy,
 } from '@socialproof/myso-messaging-stack';
 
-import { createMySoMessagingStackClient, type MySoMessagingStackTestClient } from '../../helpers/index.js';
+import {
+	createMySoMessagingStackClient,
+	type MySoMessagingStackTestClient,
+} from '../../helpers/index.js';
 
 describe('agent messaging helpers (localnet)', () => {
 	let client: MySoMessagingStackTestClient;

@@ -274,9 +274,7 @@ export class MySoMessagingStackView {
 			signal: options.signal,
 		});
 		if (inspected.error) {
-			throw new MySoMessagingStackClientError(
-				`memoryAccountIdForOwner failed: ${inspected.error}`,
-			);
+			throw new MySoMessagingStackClientError(`memoryAccountIdForOwner failed: ${inspected.error}`);
 		}
 		const ret = inspected.results?.[0]?.returnValues?.[0];
 		if (!ret) {
@@ -434,7 +432,9 @@ function parseOptionU64Bcs(bytes: Uint8Array): bigint | null {
 	const tag = bytes[0];
 	if (tag === 0) return null;
 	if (tag !== 1 || bytes.length < 9) {
-		throw new MySoMessagingStackClientError(`Unexpected Option<u64> BCS payload (${bytes.length} bytes)`);
+		throw new MySoMessagingStackClientError(
+			`Unexpected Option<u64> BCS payload (${bytes.length} bytes)`,
+		);
 	}
 	let value = 0n;
 	for (let i = 0; i < 8; i += 1) {

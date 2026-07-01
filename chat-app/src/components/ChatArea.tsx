@@ -24,7 +24,7 @@ export function ChatArea({
 }: Readonly<ChatAreaProps>) {
   if (!selectedGroup) {
     return (
-      <div className="flex flex-1 items-center justify-center">
+      <div className="flex min-w-0 flex-1 items-center justify-center">
         <p className="text-secondary-400 dark:text-secondary-500">
           Select a group to start chatting
         </p>
@@ -210,8 +210,8 @@ function ChatView({
   }, []);
 
   return (
-    <div className="flex flex-1">
-      <div className="flex flex-1 flex-col">
+    <div className="flex min-w-0 flex-1 overflow-hidden">
+      <div className="flex min-w-0 flex-1 flex-col">
       <ChatHeader
         name={group.name}
         onLeaveClick={() => setShowLeaveConfirm(true)}
@@ -224,7 +224,7 @@ function ChatView({
       <div
         ref={scrollRef}
         onScroll={handleScroll}
-        className="relative flex flex-1 flex-col overflow-y-auto"
+        className="relative flex min-w-0 flex-1 flex-col overflow-x-hidden overflow-y-auto"
       >
         {/* Load more */}
         {hasMore && !loading && (
@@ -296,7 +296,11 @@ function ChatView({
       {/* Error banner */}
       {error && (
         <div className="border-t border-danger-400 bg-danger-400/10 px-4 py-2 text-sm text-danger-500">
-          {error}
+          {permissions.canSend &&
+          (error.includes('relayer has not synced') ||
+            error.includes('waiting for relayer sync'))
+            ? 'On-chain permissions OK — waiting for relayer sync. Try again in a few seconds.'
+            : error}
         </div>
       )}
 

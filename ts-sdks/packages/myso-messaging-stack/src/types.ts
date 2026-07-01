@@ -162,6 +162,7 @@ export interface CreateGroupCallOptions {
 	/**
 	 * Creator MemoryAccount shared object id. When omitted, resolved from the
 	 * transaction sender via {@link MySoMessagingStackView.memoryAccountIdForOwner}.
+	 * When no MemoryAccount exists, group creation uses the wallet-only on-chain path.
 	 */
 	creatorMemoryAccountId?: string;
 	/** Human-readable group name. */

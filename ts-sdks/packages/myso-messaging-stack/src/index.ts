@@ -92,7 +92,10 @@ export {
 	type AgentConversation,
 	type AgentDiscoveryClientOptions,
 } from './agent-discovery.js';
-export { revokeAgentFromAllGroups, type RevokeAgentFromAllGroupsOptions } from './agent-lifecycle.js';
+export {
+	revokeAgentFromAllGroups,
+	type RevokeAgentFromAllGroupsOptions,
+} from './agent-lifecycle.js';
 export {
 	createPaidMessagingClient,
 	createPaidMessagingClientWithGating,

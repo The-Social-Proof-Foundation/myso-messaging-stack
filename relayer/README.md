@@ -408,6 +408,24 @@ Set `STORAGE_TYPE=postgres` and `DATABASE_URL` for durable storage. The Postgres
 
 **Membership cache** is separate from `StorageAdapter`. Set `MEMBERSHIP_STORE_TYPE=postgres` (same `DATABASE_URL`) to persist group permissions across restarts. First deploy with an empty DB still requires live on-chain membership events before auth succeeds (persist-only strategy).
 
+**Local development:** point `MYSO_RPC_URL` at your local node (e.g. `http://127.0.0.1:9001`) and use a local Postgres database:
+
+```env
+DATABASE_URL=postgresql://localhost:5432/messaging_db
+MEMBERSHIP_STORE_TYPE=postgres
+```
+
+Create the database with `createdb messaging_db` (or equivalent). Migrations run automatically on relayer startup.
+
+After **`myso start --force-regenesis`**, reset membership sync so the relayer re-processes checkpoint events (the service also auto-clears cache when the checkpoint cursor rewinds):
+
+```sql
+TRUNCATE membership_permissions;
+UPDATE membership_sync_state SET last_cursor = NULL WHERE id = 1;
+```
+
+Then restart the relayer. For quick experiments without Postgres, set `MEMBERSHIP_STORE_TYPE=memory` (cache is lost on restart).
+
 Schema is applied via versioned SQL migrations in `relayer/migrations/` at connect time.
 
 ### APNs push delivery

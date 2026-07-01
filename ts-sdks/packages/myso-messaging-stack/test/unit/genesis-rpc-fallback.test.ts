@@ -68,22 +68,11 @@ function createMockClient(options?: {
 	const versionInPublishTx = options?.versionInPublishTx ?? true;
 	const getTransactionThrows = options?.getTransactionThrows ?? false;
 
-	const sharedObjectIds = [
-		MOCK_NAMESPACE_ID,
-		...(versionInPublishTx ? [MOCK_VERSION_ID] : []),
-		MOCK_BLOCK_LIST_ID,
-		MOCK_SOCIAL_GRAPH_ID,
-		MOCK_MEMORY_REGISTRY_ID,
-	];
-
 	return {
 		network: 'localnet',
 		core: {
 			getObject: vi.fn(async ({ objectId }: { objectId: string }) => {
-				if (
-					objectId === GENESIS_PACKAGE_IDS.messaging ||
-					objectId === GENESIS_PACKAGE_IDS.social
-				) {
+				if (objectId === GENESIS_PACKAGE_IDS.messaging || objectId === GENESIS_PACKAGE_IDS.social) {
 					return {
 						object: { previousTransaction: PUBLISH_DIGEST },
 					};
@@ -195,9 +184,7 @@ describe('resolveGenesisMessagingConfig RPC fallback', () => {
 		});
 
 		expect(resolved.messaging.versionId).toBe(MOCK_VERSION_ID);
-		expect(warnSpy).toHaveBeenCalledWith(
-			expect.stringContaining('GraphQL missed shared Version'),
-		);
+		expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('GraphQL missed shared Version'));
 	});
 
 	it('resolves Version via raw RPC effects scan when SDK getTransaction fails', async () => {
@@ -214,9 +201,7 @@ describe('resolveGenesisMessagingConfig RPC fallback', () => {
 		);
 
 		expect(resolved.messaging.versionId).toBe(MOCK_VERSION_ID);
-		expect(warnSpy).toHaveBeenCalledWith(
-			expect.stringContaining('GraphQL missed shared Version'),
-		);
+		expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('GraphQL missed shared Version'));
 	});
 
 	it('throws when GraphQL and RPC both miss Version', async () => {

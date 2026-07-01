@@ -19,7 +19,10 @@ const DEPENDENCY_MVR_MAPPINGS = {
 };
 
 const PACKAGE_SUMMARIES = [
-	path.join(__dirname, '../../../../move/packages/messaging/package_summaries'),
+	path.join(
+		__dirname,
+		'../../../../../myso-core/crates/myso-framework/packages/messaging/package_summaries',
+	),
 ];
 
 function patchAddressMapping(summaryDir) {

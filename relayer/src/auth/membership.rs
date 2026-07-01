@@ -57,8 +57,7 @@ pub trait MembershipStore: Send + Sync {
     /// Gets all permissions for a member in a group.
     fn get_permissions(&self, group_id: &str, address: &str) -> Vec<MessagingPermission>;
 
-    /// Grants permissions to a member.
-    /// Returns an error if the member does not exist (possible missed MemberAdded event).
+    /// Grants permissions to a member, creating the group/member entry if absent (upsert).
     fn grant_permissions(
         &self,
         group_id: &str,
@@ -103,6 +102,9 @@ pub trait MembershipStore: Send + Sync {
 
     /// Persist last processed checkpoint cursor.
     fn set_last_checkpoint_cursor(&self, _cursor: u64) {}
+
+    /// Clears all membership data (used after chain regenesis when checkpoint cursor rewinds).
+    fn clear_all(&self) {}
 }
 
 /// Creates a membership store based on the configured store type (in-memory only).
@@ -142,6 +144,10 @@ impl InMemoryMembershipStore {
         Self {
             members: RwLock::new(HashMap::new()),
         }
+    }
+
+    pub fn clear(&self) {
+        self.members.write().unwrap().clear();
     }
 }
 
@@ -210,25 +216,13 @@ impl MembershipStore for InMemoryMembershipStore {
         address: &str,
         permissions: Vec<MessagingPermission>,
     ) -> Result<(), MembershipError> {
+        if permissions.is_empty() {
+            return Ok(());
+        }
+
         let mut members = self.members.write().unwrap();
-
-        // Get the group, return error if group doesn't exist
-        let group_members =
-            members
-                .get_mut(group_id)
-                .ok_or_else(|| MembershipError::MemberNotFound {
-                    group_id: group_id.to_string(),
-                    address: address.to_string(),
-                })?;
-
-        // Get the member, return error if member doesn't exist
-        let member_perms =
-            group_members
-                .get_mut(address)
-                .ok_or_else(|| MembershipError::MemberNotFound {
-                    group_id: group_id.to_string(),
-                    address: address.to_string(),
-                })?;
+        let group_members = members.entry(group_id.to_string()).or_default();
+        let member_perms = group_members.entry(address.to_string()).or_default();
 
         for perm in permissions {
             member_perms.insert(perm);
@@ -279,9 +273,11 @@ impl MembershipStore for InMemoryMembershipStore {
         let mut members = self.members.write().unwrap();
 
         let group_members = members.entry(group_id.to_string()).or_default();
+        let member_perms = group_members.entry(address.to_string()).or_default();
 
-        let perm_set: HashSet<MessagingPermission> = initial_permissions.into_iter().collect();
-        group_members.insert(address.to_string(), perm_set);
+        for perm in initial_permissions {
+            member_perms.insert(perm);
+        }
     }
 
     fn remove_member(&self, group_id: &str, address: &str) {
@@ -318,6 +314,10 @@ impl MembershipStore for InMemoryMembershipStore {
             })
             .unwrap_or_default()
     }
+
+    fn clear_all(&self) {
+        self.clear();
+    }
 }
 
 #[cfg(test)]
@@ -347,18 +347,39 @@ mod tests {
     }
 
     #[test]
-    fn test_grant_permissions_fails_if_member_not_found() {
+    fn test_grant_permissions_upserts_missing_member() {
         let store = InMemoryMembershipStore::new();
         let group_id = "group-123";
         let address = "0xaabbccddeeff1122";
 
-        // Granting permissions without adding member should fail
-        let result = store.grant_permissions(
-            group_id,
-            address,
-            vec![MessagingPermission::MessagingSender],
-        );
-        assert!(result.is_err());
+        store
+            .grant_permissions(
+                group_id,
+                address,
+                vec![MessagingPermission::MessagingSender],
+            )
+            .unwrap();
+
+        assert!(store.has_permission(group_id, address, MessagingPermission::MessagingSender));
+        assert!(store.is_member(group_id, address));
+    }
+
+    #[test]
+    fn test_member_added_does_not_wipe_existing_permissions() {
+        let store = InMemoryMembershipStore::new();
+        let group_id = "group-123";
+        let address = "0xaabbccddeeff1122";
+
+        store
+            .grant_permissions(
+                group_id,
+                address,
+                vec![MessagingPermission::MessagingSender],
+            )
+            .unwrap();
+        store.add_member(group_id, address, vec![]);
+
+        assert!(store.has_permission(group_id, address, MessagingPermission::MessagingSender));
     }
 
     #[test]

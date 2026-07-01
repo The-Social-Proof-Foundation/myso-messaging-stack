@@ -93,9 +93,7 @@ export class PaidMessagingClient {
 	}
 
 	/** On-chain policy via `requires_payment_from` dev-inspect. */
-	async getOnChainPolicy(
-		recipient: string,
-	): Promise<{ enabled: boolean; minCost: bigint | null }> {
+	async getOnChainPolicy(recipient: string): Promise<{ enabled: boolean; minCost: bigint | null }> {
 		return this.#messaging.view.requiresPaymentFromRecipient(recipient);
 	}
 
@@ -185,9 +183,7 @@ export class PaidMessagingClient {
 		return { digest, groupId, uuid, messageLogId };
 	}
 
-	async replyAndClaimSettled(
-		options: ReplyAndClaimSettledOptions,
-	): Promise<{ digest: string }> {
+	async replyAndClaimSettled(options: ReplyAndClaimSettledOptions): Promise<{ digest: string }> {
 		const tx = new Transaction();
 		tx.add(
 			this.#messaging.call.replyToPaidMessageClaimSettled({

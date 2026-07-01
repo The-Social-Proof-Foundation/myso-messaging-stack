@@ -572,3 +572,143 @@ async fn test_duplicate_cursor_is_skipped() {
     // Second member was not added (duplicate cursor 1 was skipped)
     assert!(!store.is_member(&to_hex_address(&group_id), &to_hex_address(&member_b)));
 }
+
+#[tokio::test]
+async fn test_permissions_granted_before_member_added_in_same_checkpoint() {
+    let group_id = [0x11u8; 32];
+    let member = [0x22u8; 32];
+
+    let checkpoints = vec![make_checkpoint_response(
+        1,
+        vec![
+            make_permissions_granted_event(
+                PACKAGE_ID,
+                &group_id,
+                &member,
+                vec![format!("{}::messaging::MessagingSender", PACKAGE_ID)],
+            ),
+            make_member_added_event(PACKAGE_ID, &group_id, &member),
+        ],
+    )];
+
+    let addr = start_mock_server(checkpoints).await;
+    let mock_url = format!("http://{}", addr);
+
+    let store: Arc<dyn MembershipStore> = Arc::new(InMemoryMembershipStore::new());
+    let config = test_config(&mock_url, PACKAGE_ID);
+    let mut service = MembershipSyncService::new(&config, store.clone(), Arc::new(NoOpAgentGroupStore));
+
+    let result = service.run_subscription().await;
+    assert!(result.is_ok());
+
+    let group_hex = to_hex_address(&group_id);
+    let member_hex = to_hex_address(&member);
+    assert!(store.has_permission(
+        &group_hex,
+        &member_hex,
+        MessagingPermission::MessagingSender
+    ));
+}
+
+#[tokio::test]
+async fn test_group_create_permission_burst_in_one_checkpoint() {
+    let group_id = [0x11u8; 32];
+    let member = [0x22u8; 32];
+
+    let checkpoints = vec![make_checkpoint_response(
+        1,
+        vec![
+            make_member_added_event(PACKAGE_ID, &group_id, &member),
+            make_permissions_granted_event(
+                PACKAGE_ID,
+                &group_id,
+                &member,
+                vec![format!("{}::messaging::MessagingSender", PACKAGE_ID)],
+            ),
+            make_permissions_granted_event(
+                PACKAGE_ID,
+                &group_id,
+                &member,
+                vec![format!("{}::messaging::MessagingReader", PACKAGE_ID)],
+            ),
+        ],
+    )];
+
+    let addr = start_mock_server(checkpoints).await;
+    let mock_url = format!("http://{}", addr);
+
+    let store: Arc<dyn MembershipStore> = Arc::new(InMemoryMembershipStore::new());
+    let config = test_config(&mock_url, PACKAGE_ID);
+    let mut service = MembershipSyncService::new(&config, store.clone(), Arc::new(NoOpAgentGroupStore));
+
+    let result = service.run_subscription().await;
+    assert!(result.is_ok());
+
+    let group_hex = to_hex_address(&group_id);
+    let member_hex = to_hex_address(&member);
+    assert!(store.has_permission(
+        &group_hex,
+        &member_hex,
+        MessagingPermission::MessagingSender
+    ));
+    assert!(store.has_permission(
+        &group_hex,
+        &member_hex,
+        MessagingPermission::MessagingReader
+    ));
+}
+
+#[tokio::test]
+async fn test_checkpoint_cursor_rewind_clears_cache_and_reprocesses() {
+    let group_id = [0x11u8; 32];
+    let member_old = [0x22u8; 32];
+    let member_new = [0x33u8; 32];
+
+    let checkpoints = vec![
+        make_checkpoint_response(
+            100,
+            vec![
+                make_member_added_event(PACKAGE_ID, &group_id, &member_old),
+                make_permissions_granted_event(
+                    PACKAGE_ID,
+                    &group_id,
+                    &member_old,
+                    vec![format!("{}::messaging::MessagingSender", PACKAGE_ID)],
+                ),
+            ],
+        ),
+        make_checkpoint_response(
+            5,
+            vec![
+                make_member_added_event(PACKAGE_ID, &group_id, &member_new),
+                make_permissions_granted_event(
+                    PACKAGE_ID,
+                    &group_id,
+                    &member_new,
+                    vec![format!("{}::messaging::MessagingSender", PACKAGE_ID)],
+                ),
+            ],
+        ),
+    ];
+
+    let addr = start_mock_server(checkpoints).await;
+    let mock_url = format!("http://{}", addr);
+
+    let store: Arc<dyn MembershipStore> = Arc::new(InMemoryMembershipStore::new());
+    let config = test_config(&mock_url, PACKAGE_ID);
+    let mut service = MembershipSyncService::new(&config, store.clone(), Arc::new(NoOpAgentGroupStore));
+
+    let result = service.run_subscription().await;
+    assert!(result.is_ok());
+
+    let group_hex = to_hex_address(&group_id);
+    assert!(!store.is_member(
+        &group_hex,
+        &to_hex_address(&member_old)
+    ));
+    assert!(store.has_permission(
+        &group_hex,
+        &to_hex_address(&member_new),
+        MessagingPermission::MessagingSender
+    ));
+}

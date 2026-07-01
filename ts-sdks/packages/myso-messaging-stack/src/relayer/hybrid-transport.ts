@@ -1,10 +1,7 @@
 // Copyright (c) The Social Proof Foundation, LLC.
 // SPDX-License-Identifier: Apache-2.0
 
-import {
-	HTTPRelayerTransport,
-	type HTTPRelayerTransportConfig,
-} from './http-transport.js';
+import { HTTPRelayerTransport, type HTTPRelayerTransportConfig } from './http-transport.js';
 import type { RelayerTransport } from './transport.js';
 import type {
 	DeleteMessageParams,

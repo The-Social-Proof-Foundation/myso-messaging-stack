@@ -4,10 +4,7 @@
 import type { Signer } from '@socialproof/myso/cryptography';
 import type { Transaction } from '@socialproof/myso/transactions';
 
-import {
-	fromRelayerConversation,
-	type AgentConversation,
-} from './agent-discovery.js';
+import { fromRelayerConversation, type AgentConversation } from './agent-discovery.js';
 import { messagingPermissionTypes } from './constants.js';
 import { MySoMessagingStackClientError } from './error.js';
 import type { MySoMessagingStackClient } from './client.js';
@@ -81,9 +78,7 @@ export interface AgentMessagingClient<TApproveContext = void> {
 	createAgentGroupAndWait(
 		options: CreateAgentGroupAndWaitOptions,
 	): Promise<{ digest: string; groupId: string; encryptionHistoryId: string; uuid: string }>;
-	sendMessage(
-		options: AgentSendMessageOptions<TApproveContext>,
-	): Promise<{ messageId: string }>;
+	sendMessage(options: AgentSendMessageOptions<TApproveContext>): Promise<{ messageId: string }>;
 	waitForMembership(
 		options: Omit<WaitForMembershipOptions, 'messaging' | 'memberAddress'>,
 	): Promise<void>;
@@ -118,7 +113,10 @@ export interface CreatePrincipalMessagingClientOptions<TApproveContext = void> {
 	 * When set, use {@link createPrincipalOversightPolicy} on the base messaging client
 	 * before constructing the principal client so the human can decrypt agent groups.
 	 */
-	oversight?: Omit<PrincipalOversightPolicyOptions, 'originalPackageId' | 'latestPackageId' | 'versionId'>;
+	oversight?: Omit<
+		PrincipalOversightPolicyOptions,
+		'originalPackageId' | 'latestPackageId' | 'versionId'
+	>;
 }
 
 /** Poll on-chain permission grants until present or timeout. */
@@ -132,8 +130,9 @@ export async function waitForMembership(options: WaitForMembershipOptions): Prom
 		timeoutMs = 30_000,
 		signal,
 	} = options;
-	const permissionType =
-		messagingPermissionTypes(messaging.packageConfig.originalPackageId)[permission];
+	const permissionType = messagingPermissionTypes(messaging.packageConfig.originalPackageId)[
+		permission
+	];
 	const deadline = Date.now() + timeoutMs;
 
 	while (Date.now() < deadline) {
@@ -187,11 +186,9 @@ export function createAgentMessagingClient<TApproveContext = void>(
 				...callOptions,
 				uuid,
 				platformId: callOptions.platformId ?? agent.platformId,
-				creatorMemoryAccountId:
-					callOptions.creatorMemoryAccountId ?? agent.memoryAccountId,
+				creatorMemoryAccountId: callOptions.creatorMemoryAccountId ?? agent.memoryAccountId,
 				crossPrincipalPeerMemoryAccountId:
-					callOptions.crossPrincipalPeerMemoryAccountId ??
-					crossPrincipalPeerMemoryAccountId,
+					callOptions.crossPrincipalPeerMemoryAccountId ?? crossPrincipalPeerMemoryAccountId,
 			});
 			const groupId = messaging.derive.groupId({ uuid });
 			const encryptionHistoryId = messaging.derive.encryptionHistoryId({ uuid });
@@ -199,11 +196,7 @@ export function createAgentMessagingClient<TApproveContext = void>(
 		},
 
 		async createAgentGroupAndWait(callOptions) {
-			const {
-				waitForAgentSender = true,
-				waitForPrincipalReader = true,
-				...rest
-			} = callOptions;
+			const { waitForAgentSender = true, waitForPrincipalReader = true, ...rest } = callOptions;
 			const result = await this.createAndShareGroup(rest);
 			if (waitForAgentSender) {
 				await waitForMembership({
@@ -333,7 +326,10 @@ export type { AgentConversation };
 /** Build a principal oversight MyData policy for decrypting agent-associated groups. */
 export function createPrincipalOversightPolicy(
 	messaging: MySoMessagingStackClient,
-	options: Omit<PrincipalOversightPolicyOptions, 'originalPackageId' | 'latestPackageId' | 'versionId'>,
+	options: Omit<
+		PrincipalOversightPolicyOptions,
+		'originalPackageId' | 'latestPackageId' | 'versionId'
+	>,
 ): PrincipalMyDataOversightPolicy {
 	return new PrincipalMyDataOversightPolicy({
 		originalPackageId: messaging.packageConfig.originalPackageId,

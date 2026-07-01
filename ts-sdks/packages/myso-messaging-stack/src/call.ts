@@ -41,8 +41,8 @@ export interface MySoMessagingStackCallOptions {
 	messageLogTypeName: string;
 	/** PermissionedGroups call layer (needed for removeMembersAndRotateKey). */
 	groupsCall: MySoGroupsCall;
-	/** Resolves a principal MemoryAccount id for human group creation. */
-	resolveMemoryAccountId: (owner: string) => Promise<string>;
+	/** Resolves a principal MemoryAccount id for human group creation, or null when absent. */
+	resolveMemoryAccountId: (owner: string) => Promise<string | null>;
 }
 
 /**
@@ -69,7 +69,7 @@ export class MySoMessagingStackCall {
 	#encryptionHistoryTypeName: string;
 	#messageLogTypeName: string;
 	#groupsCall: MySoGroupsCall;
-	#resolveMemoryAccountId: (owner: string) => Promise<string>;
+	#resolveMemoryAccountId: (owner: string) => Promise<string | null>;
 
 	constructor(options: MySoMessagingStackCallOptions) {
 		this.#packageConfig = options.packageConfig;
@@ -85,17 +85,11 @@ export class MySoMessagingStackCall {
 	async #resolveCreatorMemoryAccountId(
 		options: CreateGroupCallOptions,
 		sender: string,
-	): Promise<string> {
+	): Promise<string | null> {
 		if (options.creatorMemoryAccountId) {
 			return options.creatorMemoryAccountId;
 		}
-		const resolved = await this.#resolveMemoryAccountId(sender);
-		if (!resolved) {
-			throw new MySoMessagingStackClientError(
-				`No MemoryAccount found for ${sender}. Pass creatorMemoryAccountId or create a profile with memory linked.`,
-			);
-		}
-		return resolved;
+		return this.#resolveMemoryAccountId(sender);
 	}
 
 	// === Group Creation Functions ===
@@ -119,18 +113,34 @@ export class MySoMessagingStackCall {
 				options.sender,
 			);
 
+			const commonArgs = {
+				version: this.#packageConfig.versionId,
+				namespace: this.#packageConfig.namespaceId,
+				groupManager: groupManagerId,
+				blockList: this.#packageConfig.blockListRegistryId,
+				name: options.name,
+				uuid,
+				initialEncryptedDek: Array.from(encryptedDek),
+			};
+
+			if (creatorMemoryAccount) {
+				return tx.add(
+					messaging.createGroup({
+						package: this.#packageConfig.latestPackageId,
+						arguments: {
+							...commonArgs,
+							creatorMemoryAccount,
+							initialMembers,
+						},
+					}),
+				);
+			}
+
 			return tx.add(
-				messaging.createGroup({
+				messaging.createWalletGroup({
 					package: this.#packageConfig.latestPackageId,
 					arguments: {
-						version: this.#packageConfig.versionId,
-						namespace: this.#packageConfig.namespaceId,
-						groupManager: groupManagerId,
-						blockList: this.#packageConfig.blockListRegistryId,
-						creatorMemoryAccount,
-						name: options.name,
-						uuid,
-						initialEncryptedDek: Array.from(encryptedDek),
+						...commonArgs,
 						initialMembers,
 					},
 				}),
@@ -154,20 +164,33 @@ export class MySoMessagingStackCall {
 				options.sender,
 			);
 
+			const commonArgs = {
+				version: this.#packageConfig.versionId,
+				namespace: this.#packageConfig.namespaceId,
+				groupManager: groupManagerId,
+				blockList: this.#packageConfig.blockListRegistryId,
+				name: options.name,
+				uuid,
+				initialEncryptedDek: Array.from(encryptedDek),
+				initialMembers: options?.initialMembers ?? [],
+			};
+
+			if (creatorMemoryAccount) {
+				return tx.add(
+					messaging.createAndShareGroup({
+						package: this.#packageConfig.latestPackageId,
+						arguments: {
+							...commonArgs,
+							creatorMemoryAccount,
+						},
+					}),
+				);
+			}
+
 			return tx.add(
-				messaging.createAndShareGroup({
+				messaging.createAndShareWalletGroup({
 					package: this.#packageConfig.latestPackageId,
-					arguments: {
-						version: this.#packageConfig.versionId,
-						namespace: this.#packageConfig.namespaceId,
-						groupManager: groupManagerId,
-						blockList: this.#packageConfig.blockListRegistryId,
-						creatorMemoryAccount,
-						name: options.name,
-						uuid,
-						initialEncryptedDek: Array.from(encryptedDek),
-						initialMembers: options?.initialMembers ?? [],
-					},
+					arguments: commonArgs,
 				}),
 			);
 		};
@@ -194,7 +217,7 @@ export class MySoMessagingStackCall {
 						blockList: this.#packageConfig.blockListRegistryId,
 						platform: options.platformId,
 						creatorMemoryAccount: options.creatorMemoryAccountId,
-						crossPrincipalPeerMemoryAccount: options.crossPrincipalPeerMemoryAccountId,
+						crossPrincipalPeerAccount: options.crossPrincipalPeerMemoryAccountId,
 						name: options.name,
 						uuid,
 						initialEncryptedDek: Array.from(encryptedDek),
