@@ -49,12 +49,12 @@ export function MemberList({
       {loading && (
         <div className="flex items-center gap-2 py-4">
           <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-primary-500 border-t-transparent" />
-          <span className="text-xs text-secondary-400">Loading...</span>
+          <span className="text-xs text-secondary-400 dark:text-secondary-500">Loading...</span>
         </div>
       )}
 
       {!loading && members.length === 0 && (
-        <p className="text-xs text-secondary-400">No members found.</p>
+        <p className="text-xs text-secondary-400 dark:text-secondary-500">No members found.</p>
       )}
 
       {!loading && members.length > 0 && (
@@ -87,7 +87,7 @@ export function MemberList({
       )}
 
       {removeError && (
-        <p className="mt-2 text-xs text-danger-500">{removeError}</p>
+        <p className="mt-2 text-xs text-danger-500 dark:text-danger-400">{removeError}</p>
       )}
     </section>
   );

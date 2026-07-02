@@ -83,7 +83,7 @@ function ChatHeader({
           <button
             onClick={onLeaveClick}
             disabled={leaving}
-            className="rounded-lg px-3 py-1 text-xs font-medium text-danger-500 hover:bg-danger-400/10 disabled:opacity-50"
+            className="rounded-lg px-3 py-1 text-xs font-medium text-danger-500 hover:bg-danger-400/10 disabled:opacity-50 dark:text-danger-400"
           >
             {leaving ? 'Leaving...' : 'Leave'}
           </button>
@@ -255,7 +255,7 @@ function ChatView({
           <div className="flex flex-1 items-center justify-center">
             <div className="flex flex-col items-center gap-2">
               <span className="inline-block h-5 w-5 animate-spin rounded-full border-2 border-primary-500 border-t-transparent" />
-              <span className="text-xs text-secondary-400">
+              <span className="text-xs text-secondary-400 dark:text-secondary-500">
                 Loading messages...
               </span>
             </div>
@@ -312,7 +312,7 @@ function ChatView({
 
       {/* Error banner */}
       {error && (
-        <div className="border-t border-danger-400 bg-danger-400/10 px-4 py-2 text-sm text-danger-500">
+        <div className="border-t border-danger-400 bg-danger-400/10 px-4 py-2 text-sm text-danger-500 dark:border-danger-500 dark:text-danger-400">
           {permissions.canSend &&
           (error.includes('relayer has not synced') ||
             error.includes('waiting for relayer sync'))
@@ -385,7 +385,7 @@ function ChatView({
             </p>
 
             {leaveError && (
-              <p className="mb-3 text-sm text-danger-500">{leaveError}</p>
+              <p className="mb-3 text-sm text-danger-500 dark:text-danger-400">{leaveError}</p>
             )}
 
             <div className="flex justify-end gap-3">

@@ -349,7 +349,7 @@ export function MessageBubble({
                 </span>
               )}
               {message.senderVerified && (
-                <span className="ml-1 text-green-500" title="Sender verified">
+                <span className="ml-1 text-green-500 dark:text-green-400" title="Sender verified">
                   ✓
                 </span>
               )}
@@ -366,7 +366,7 @@ export function MessageBubble({
                 onKeyDown={handleEditKeyDown}
                 rows={2}
                 disabled={saving}
-                className="w-full max-w-full resize-none break-all rounded-lg border border-primary-300 bg-white px-2 py-1 text-sm text-secondary-900 focus:outline-none focus:ring-1 focus:ring-primary-300 disabled:opacity-50"
+                className="w-full max-w-full resize-none break-all rounded-lg border border-primary-300 bg-white px-2 py-1 text-sm text-secondary-900 focus:outline-none focus:ring-1 focus:ring-primary-300 disabled:opacity-50 dark:bg-secondary-800 dark:text-secondary-100"
               />
               <div className="flex justify-end gap-1">
                 <button
@@ -496,7 +496,7 @@ export function MessageBubble({
               <button
                 onClick={() => setShowDeleteConfirm(false)}
                 disabled={deleting}
-                className="rounded px-2 py-0.5 text-xs text-secondary-500 hover:text-secondary-700 disabled:opacity-50"
+                className="rounded px-2 py-0.5 text-xs text-secondary-500 hover:text-secondary-700 disabled:opacity-50 dark:text-secondary-400 dark:hover:text-secondary-200"
               >
                 Cancel
               </button>

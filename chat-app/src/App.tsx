@@ -7,6 +7,7 @@ import {
   useMySocialAuth,
 } from './contexts/MySocialAuthContext';
 import { AuthenticatedApp } from './components/AuthenticatedApp';
+import { ThemeToggleButton } from './components/ThemeToggleButton';
 
 function App() {
   const {
@@ -38,6 +39,7 @@ function App() {
           MySocial Messaging
         </h1>
         <div className="flex items-center gap-3">
+          <ThemeToggleButton />
           {session && connectedAddress && (
             <span
               className="max-w-[10rem] truncate text-xs text-secondary-500 dark:text-secondary-400"
@@ -70,7 +72,7 @@ function App() {
 
       {configError && (
         <main className="flex flex-1 items-center justify-center px-8">
-          <div className="max-w-md text-center text-sm text-danger-500">
+          <div className="max-w-md text-center text-sm text-danger-500 dark:text-danger-400">
             {configError}
           </div>
         </main>
@@ -83,7 +85,7 @@ function App() {
             messaging.
           </p>
           {signInError && (
-            <p className="text-center text-sm text-danger-500">{signInError}</p>
+            <p className="text-center text-sm text-danger-500 dark:text-danger-400">{signInError}</p>
           )}
         </main>
       )}
@@ -108,7 +110,7 @@ function App() {
       {!configError && auth && session && !walletOnlyBlocked && derivingKeypair && (
         <main className="flex flex-1 flex-col items-center justify-center gap-2">
           <span className="inline-block h-6 w-6 animate-spin rounded-full border-2 border-primary-500 border-t-transparent" />
-          <p className="text-sm text-secondary-500">Preparing signing key…</p>
+          <p className="text-sm text-secondary-500 dark:text-secondary-400">Preparing signing key…</p>
         </main>
       )}
 
@@ -120,7 +122,7 @@ function App() {
         deriveKeyError &&
         !keypair && (
           <main className="flex flex-1 items-center justify-center px-8">
-            <div className="max-w-md text-center text-sm text-danger-500">
+            <div className="max-w-md text-center text-sm text-danger-500 dark:text-danger-400">
               {deriveKeyError}
             </div>
           </main>
@@ -129,13 +131,13 @@ function App() {
       {!configError && connected && messagingClientLoading && (
         <main className="flex flex-1 flex-col items-center justify-center gap-2">
           <span className="inline-block h-6 w-6 animate-spin rounded-full border-2 border-primary-500 border-t-transparent" />
-          <p className="text-sm text-secondary-500">Initializing messaging client…</p>
+          <p className="text-sm text-secondary-500 dark:text-secondary-400">Initializing messaging client…</p>
         </main>
       )}
 
       {!configError && connected && messagingClientInitError && (
         <main className="flex flex-1 flex-col items-center justify-center gap-3 overflow-auto px-8">
-          <p className="text-center text-sm font-medium text-danger-600">
+          <p className="text-center text-sm font-medium text-danger-600 dark:text-danger-400">
             Messaging client failed to initialize (this often caused a blank page
             before; the error is shown below).
           </p>

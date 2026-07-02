@@ -116,12 +116,12 @@ export function PaidMessagingSettings() {
             type="text"
             value={minCost}
             onChange={(e) => setMinCost(e.target.value)}
-            className="mt-1 w-full rounded border border-secondary-300 px-2 py-1 text-sm dark:border-secondary-600 dark:bg-secondary-900"
+            className="mt-1 w-full rounded border border-secondary-300 px-2 py-1 text-sm dark:border-secondary-600 dark:bg-secondary-900 dark:text-secondary-100"
           />
         </label>
       )}
-      {error && <p className="mt-2 text-xs text-danger-500">{error}</p>}
-      {saved && <p className="mt-2 text-xs text-success-600">Policy saved on-chain.</p>}
+      {error && <p className="mt-2 text-xs text-danger-500 dark:text-danger-400">{error}</p>}
+      {saved && <p className="mt-2 text-xs text-accent-600 dark:text-accent-400">Policy saved on-chain.</p>}
       <button
         type="button"
         disabled={loading}

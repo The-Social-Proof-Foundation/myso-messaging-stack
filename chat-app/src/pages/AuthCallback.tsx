@@ -118,14 +118,14 @@ export default function AuthCallback() {
   if (error) {
     return (
       <div className="flex min-h-screen items-center justify-center p-4">
-        <p className="text-sm text-danger-500">{error}</p>
+        <p className="text-sm text-danger-500 dark:text-danger-400">{error}</p>
       </div>
     );
   }
 
   return (
     <div className="flex min-h-screen items-center justify-center p-4">
-      <p className="text-sm text-secondary-500">Completing sign-in…</p>
+      <p className="text-sm text-secondary-500 dark:text-secondary-400">Completing sign-in…</p>
     </div>
   );
 }

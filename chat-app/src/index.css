@@ -45,6 +45,14 @@
 
 /* Base styles */
 @layer base {
+  :root {
+    color-scheme: light;
+  }
+
+  :root.dark {
+    color-scheme: dark;
+  }
+
   body {
     @apply bg-white text-secondary-900 antialiased;
     @apply dark:bg-secondary-900 dark:text-secondary-100;

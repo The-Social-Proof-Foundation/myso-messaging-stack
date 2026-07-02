@@ -8,6 +8,7 @@ import {
 } from './contexts/MySocialAuthContext';
 import { MySocialAuthBroadcastListener } from './components/MySocialAuthBroadcastListener';
 import { ErrorBoundary } from './components/ErrorBoundary';
+import { ThemeProvider } from './contexts/ThemeContext';
 import AuthCallback from './pages/AuthCallback';
 import App from './App';
 import './index.css';
@@ -31,22 +32,26 @@ const root = createRoot(document.getElementById('root')!);
 if (isAuthCallback) {
   root.render(
     <StrictMode>
-      <AuthCallback />
+      <ThemeProvider>
+        <AuthCallback />
+      </ThemeProvider>
     </StrictMode>,
   );
 } else {
   root.render(
     <StrictMode>
-      <QueryClientProvider client={queryClient}>
-        <MySocialAuthProvider>
-          <MySocialAuthBroadcastListener />
-          <MessagingClientProvider>
-            <AppErrorBoundary>
-              <App />
-            </AppErrorBoundary>
-          </MessagingClientProvider>
-        </MySocialAuthProvider>
-      </QueryClientProvider>
+      <ThemeProvider>
+        <QueryClientProvider client={queryClient}>
+          <MySocialAuthProvider>
+            <MySocialAuthBroadcastListener />
+            <MessagingClientProvider>
+              <AppErrorBoundary>
+                <App />
+              </AppErrorBoundary>
+            </MessagingClientProvider>
+          </MySocialAuthProvider>
+        </QueryClientProvider>
+      </ThemeProvider>
     </StrictMode>,
   );
 }

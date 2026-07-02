@@ -42,7 +42,7 @@ export function GroupActionsSection({
       )}
 
       {showArchiveConfirm ? (
-        <div className="rounded-lg border border-danger-300 p-3">
+        <div className="rounded-lg border border-danger-300 p-3 dark:border-danger-700">
           <p className="mb-2 text-xs text-danger-600 dark:text-danger-400">
             This action is permanent. The group will be paused and no new
             messages can be sent.
@@ -51,7 +51,7 @@ export function GroupActionsSection({
             <button
               onClick={() => setShowArchiveConfirm(false)}
               disabled={archiving}
-              className="flex-1 rounded py-1 text-xs text-secondary-500 hover:bg-secondary-100 disabled:opacity-50"
+              className="flex-1 rounded py-1 text-xs text-secondary-500 hover:bg-secondary-100 disabled:opacity-50 dark:text-secondary-400 dark:hover:bg-secondary-700"
             >
               Cancel
             </button>
@@ -67,14 +67,14 @@ export function GroupActionsSection({
       ) : (
         <button
           onClick={() => setShowArchiveConfirm(true)}
-          className="w-full rounded-lg border border-danger-300 py-1.5 text-xs font-medium text-danger-500 hover:bg-danger-400/10"
+          className="w-full rounded-lg border border-danger-300 py-1.5 text-xs font-medium text-danger-500 hover:bg-danger-400/10 dark:border-danger-700 dark:text-danger-400"
         >
           Archive Group
         </button>
       )}
 
       {actionError && (
-        <p className="mt-2 text-xs text-danger-500">{actionError}</p>
+        <p className="mt-2 text-xs text-danger-500 dark:text-danger-400">{actionError}</p>
       )}
     </section>
   );

@@ -51,7 +51,7 @@ export function GroupNameSection({
           onClick={onEditStart}
           className="text-left text-xs text-secondary-700 hover:text-primary-500 dark:text-secondary-300"
         >
-          {groupName} <span className="text-secondary-400">✎</span>
+          {groupName} <span className="text-secondary-400 dark:text-secondary-500">✎</span>
         </button>
       )}
     </section>
