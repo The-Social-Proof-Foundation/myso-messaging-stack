@@ -5,7 +5,7 @@
 import type { Signer } from '@socialproof/myso/cryptography';
 
 import type { Attachment, AttachmentFile, AttachmentHandle } from './attachments/types.js';
-import type { SyncStatus } from './relayer/types.js';
+import type { RelayerReactionEvent, SyncStatus } from './relayer/types.js';
 import type { GroupRef } from './types.js';
 
 // ── Conditional mydataApproveContext ────────────────────────────────
@@ -159,6 +159,34 @@ export type SubscribeOptions<TApproveContext = void> = WithApproveContext<
 	SubscribeOptionsBase,
 	TApproveContext
 >;
+
+/**
+ * Event yielded by {@link MySoMessagingStackClient.subscribe}: either a
+ * decrypted message or an absolute-state reaction update.
+ */
+export type MessagingEvent =
+	| { type: 'message'; message: DecryptedMessage }
+	| { type: 'reaction'; reaction: RelayerReactionEvent };
+
+// ── Reactions ────────────────────────────────────────────────────
+
+/** Options for {@link MySoMessagingStackClient.listReactions}. */
+export interface ListReactionsOptions {
+	signer: Signer;
+	groupRef: GroupRef;
+	/** When set, only reactions for the message with this relayer `order`. */
+	order?: number;
+}
+
+/** Options for {@link MySoMessagingStackClient.addReaction} / {@link MySoMessagingStackClient.removeReaction}. */
+export interface ReactionOptions {
+	signer: Signer;
+	groupRef: GroupRef;
+	/** The relayer-assigned `order` of the target message. */
+	order: number;
+	/** The reaction emoji. Canonicalized (NFC) by the client before sending. */
+	emoji: string;
+}
 
 // ── Recovery ─────────────────────────────────────────────────────
 

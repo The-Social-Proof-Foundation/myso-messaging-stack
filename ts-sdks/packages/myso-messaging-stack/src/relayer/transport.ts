@@ -22,6 +22,7 @@ import type {
 	PutUserReadStateParams,
 	RelayerMessage,
 	RelayerReactionEntry,
+	RelayerSubscriptionEvent,
 	RelayerAgentConversation,
 	SendMessageParams,
 	SendMessageResult,
@@ -43,8 +44,11 @@ export interface RelayerTransport {
 	fetchMessage(params: FetchMessageParams): Promise<RelayerMessage>;
 	updateMessage(params: UpdateMessageParams): Promise<void>;
 	deleteMessage(params: DeleteMessageParams): Promise<void>;
-	/** Subscribe to real-time messages. Use afterOrder for resumability. */
-	subscribe(params: SubscribeParams): AsyncIterable<RelayerMessage>;
+	/**
+	 * Subscribe to real-time messages and reaction updates as a single event
+	 * stream. Use afterOrder for message resumability.
+	 */
+	subscribe(params: SubscribeParams): AsyncIterable<RelayerSubscriptionEvent>;
 	/** Off-chain reaction tallies (`/v1/groups/.../reactions`). */
 	listGroupReactions(params: ListGroupReactionsParams): Promise<RelayerReactionEntry[]>;
 	postGroupReaction(params: PostGroupReactionParams): Promise<void>;

@@ -55,15 +55,19 @@ for (const msg of messages) {
 ```typescript
 const controller = new AbortController();
 
-for await (const msg of client.messaging.subscribe({
+for await (const event of client.messaging.subscribe({
   signer: keypair,
   groupRef: { uuid: 'project-chat-uuid' },
   signal: controller.signal,
 })) {
-  console.log(`[${msg.senderAddress}] ${msg.text}`);
-
-  if (msg.isEdited) {
-    console.log('(edited)');
+  if (event.type === 'message') {
+    console.log(`[${event.message.senderAddress}] ${event.message.text}`);
+    if (event.message.isEdited) {
+      console.log('(edited)');
+    }
+  } else {
+    // Absolute reaction state for one (message order, emoji) pair
+    console.log(`reaction ${event.reaction.emoji} x${event.reaction.count}`);
   }
 }
 
@@ -77,13 +81,13 @@ client.messaging.disconnect();
 Resume from a known position by passing `afterOrder`:
 
 ```typescript
-for await (const msg of client.messaging.subscribe({
+for await (const event of client.messaging.subscribe({
   signer: keypair,
   groupRef: { uuid: 'project-chat-uuid' },
   afterOrder: lastSeenOrder,
   signal: controller.signal,
 })) {
-  // Only messages after lastSeenOrder
+  // Only message events after lastSeenOrder (reaction events are not order-filtered)
 }
 ```
 

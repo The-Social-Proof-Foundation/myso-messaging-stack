@@ -181,13 +181,18 @@ pub trait StorageAdapter: Send + Sync {
 
     // === /v1 group feature mirror (off-chain; complements on-chain MessageLog) ===
 
-    async fn replace_reaction_tally(
+    /// Sets or clears `member`'s reaction on a message. Idempotent: re-adding an
+    /// existing reaction or removing an absent one returns `Ok(None)` (no change).
+    /// On change, returns the updated entry (count + reactors; count may be 0).
+    /// `emoji` is the canonical Unicode emoji string (validated by the handler).
+    async fn set_reaction(
         &self,
         group_id: &str,
         chain_seq: i64,
-        emoji_code: u32,
+        emoji: &str,
+        member: &str,
         add: bool,
-    ) -> StorageResult<()>;
+    ) -> StorageResult<Option<ReactionEntry>>;
 
     async fn list_reactions(
         &self,

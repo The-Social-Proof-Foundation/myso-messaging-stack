@@ -14,7 +14,7 @@ use futures_util::{SinkExt, StreamExt};
 use tracing::{debug, warn};
 
 use crate::auth::ws_auth::{authenticate_ws_upgrade, WsAuthQuery};
-use crate::services::realtime::MessageWireEvent;
+use crate::services::realtime::RealtimeEvent;
 use crate::state::AppState;
 
 pub async fn ws_handler(
@@ -76,16 +76,16 @@ async fn handle_socket(
         tokio::select! {
             event = hub_rx.recv() => {
                 match event {
-                    Ok(MessageWireEvent { message, .. }) => {
-                        if message.order <= after_order {
-                            continue;
+                    Ok(event) => {
+                        // Messages are deduplicated by order; reaction events carry
+                        // absolute state and are forwarded as-is.
+                        if let RealtimeEvent::MessageCreated(ref wire) = event {
+                            if wire.message.order <= after_order {
+                                continue;
+                            }
+                            after_order = wire.message.order;
                         }
-                        after_order = message.order;
-                        let frame = MessageWireEvent {
-                            event_type: "message.created",
-                            message,
-                        };
-                        match serde_json::to_string(&frame) {
+                        match serde_json::to_string(&event) {
                             Ok(json) => {
                                 if ws_tx.send(Message::Text(json.into())).await.is_err() {
                                     break;

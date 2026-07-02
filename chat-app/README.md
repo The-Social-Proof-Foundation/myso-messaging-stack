@@ -60,13 +60,14 @@ The app provides working code for common integration patterns: **MySocial OAuth 
 
 ### Messaging
 
-| Feature                | Description                                 | SDK Method                  |
-|------------------------|---------------------------------------------|-----------------------------|
-| Send text message      | Text input with Enter-to-send               | `messaging.sendMessage()`   |
-| Read message history   | Paginated message display with "load older" | `messaging.getMessages()`   |
-| Real-time subscription | Auto-poll for new messages                  | `messaging.subscribe()`     |
-| Edit message           | Inline edit on own messages                 | `messaging.editMessage()`   |
-| Delete message         | Delete with confirmation                    | `messaging.deleteMessage()` |
+| Feature                | Description                                              | SDK Method                                        |
+|------------------------|----------------------------------------------------------|---------------------------------------------------|
+| Send text message      | Text input with Enter-to-send                            | `messaging.sendMessage()`                          |
+| Read message history   | Paginated message display with "load older"              | `messaging.getMessages()`                          |
+| Real-time subscription | Live messages + reaction updates (WS, polling fallback)  | `messaging.subscribe()`                            |
+| Edit message           | Inline edit on own messages                              | `messaging.editMessage()`                          |
+| Delete message         | Delete with confirmation                                 | `messaging.deleteMessage()`                        |
+| React to message       | Left-click a bubble for the emoji picker; click chips to toggle | `messaging.addReaction()` / `removeReaction()` |
 
 ### Admin Controls
 

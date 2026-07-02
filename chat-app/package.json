@@ -16,7 +16,7 @@
     "@socialproof/mydata": "^0.0.4",
     "@socialproof/myso": "^0.0.4",
     "@socialproof/myso-groups": "^0.0.1",
-    "@socialproof/myso-messaging-stack": "0.0.7",
+    "@socialproof/myso-messaging-stack": "file:../ts-sdks/packages/myso-messaging-stack",
     "@socialproof/mysocial-auth": "^0.12.4",
     "@tailwindcss/vite": "^4.2.1",
     "@tanstack/react-query": "^5.90.21",

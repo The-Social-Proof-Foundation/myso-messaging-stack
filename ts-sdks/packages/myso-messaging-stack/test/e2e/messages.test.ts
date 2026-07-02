@@ -228,13 +228,14 @@ describe('Message CRUD Operations', () => {
 			}
 
 			const subscribePromise = (async () => {
-				for await (const msg of group.member.client.messaging.subscribe({
+				for await (const event of group.member.client.messaging.subscribe({
 					signer: group.member.keypair,
 					groupRef: { uuid: group.uuid },
 					afterOrder: lastOrder,
 					signal: controller.signal,
 				})) {
-					received.push(msg.text);
+					if (event.type !== 'message') continue;
+					received.push(event.message.text);
 					if (received.length >= 2) {
 						controller.abort();
 					}

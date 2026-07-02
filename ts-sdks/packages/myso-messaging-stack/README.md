@@ -135,26 +135,34 @@ implementation using the [Discovery Indexer](../../file-storage-discovery-indexe
 
 ### Client Methods
 
-| Method            | Description                                 |
-| ----------------- | ------------------------------------------- |
-| `sendMessage()`   | Encrypt and send a message to a group       |
-| `getMessages()`   | Fetch and decrypt messages for a group      |
-| `getMessage()`    | Fetch and decrypt a single message          |
-| `editMessage()`   | Re-encrypt and update an existing message   |
-| `deleteMessage()` | Soft-delete a message                       |
-| `subscribe()`     | Subscribe to real-time messages (decrypted) |
+| Method             | Description                                                            |
+| ------------------ | ---------------------------------------------------------------------- |
+| `sendMessage()`    | Encrypt and send a message to a group                                  |
+| `getMessages()`    | Fetch and decrypt messages for a group                                 |
+| `getMessage()`     | Fetch and decrypt a single message                                     |
+| `editMessage()`    | Re-encrypt and update an existing message                              |
+| `deleteMessage()`  | Soft-delete a message                                                  |
+| `subscribe()`      | Subscribe to real-time decrypted messages **and** reaction updates     |
+| `listReactions()`  | List reaction tallies (count + reactors) keyed by message `order`      |
+| `addReaction()`    | Add the signer's emoji reaction to a message (idempotent)              |
+| `removeReaction()` | Remove the signer's emoji reaction from a message (idempotent)         |
+
+Reactions use canonical Unicode emoji strings (`👍`, `❤️`, `👨‍👩‍👧‍👦`, ...). Use the exported
+`emojiToStorage()` helper to NFC-normalize input before comparing against stored entries.
 
 ### Transport Interface (`RelayerTransport`)
 
-| Method            | Description                              |
-| ----------------- | ---------------------------------------- |
-| `sendMessage()`   | Send an encrypted message to the backend |
-| `fetchMessages()` | Fetch paginated messages for a group     |
-| `fetchMessage()`  | Fetch a single message by ID             |
-| `updateMessage()` | Update message content                   |
-| `deleteMessage()` | Soft-delete a message                    |
-| `subscribe()`     | Stream real-time messages                |
-| `disconnect()`    | Clean up transport resources             |
+| Method                 | Description                                   |
+| ---------------------- | --------------------------------------------- |
+| `sendMessage()`        | Send an encrypted message to the backend      |
+| `fetchMessages()`      | Fetch paginated messages for a group          |
+| `fetchMessage()`       | Fetch a single message by ID                  |
+| `updateMessage()`      | Update message content                        |
+| `deleteMessage()`      | Soft-delete a message                         |
+| `subscribe()`          | Stream real-time message + reaction events    |
+| `listGroupReactions()` | List per-message reaction entries             |
+| `postGroupReaction()`  | Add/remove the signer's reaction (idempotent) |
+| `disconnect()`         | Clean up transport resources                  |
 
 ### Recovery Exports
 

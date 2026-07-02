@@ -11,11 +11,15 @@ use tracing::warn;
 use uuid::Uuid;
 
 use crate::handlers::messages::response::MessageResponse;
+use crate::models::ReactionEntry;
 use crate::storage::{StorageAdapter, StorageResult};
 
 pub use pg_listener::PgListenerService;
 
 pub const MESSAGE_EVENTS_CHANNEL: &str = "message_events";
+
+pub const MESSAGE_CREATED_EVENT_TYPE: &str = "message.created";
+pub const REACTION_UPDATED_EVENT_TYPE: &str = "reaction.updated";
 
 /// Cross-instance signal (Postgres NOTIFY metadata).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -40,6 +44,33 @@ impl MessageCreatedEvent {
     }
 }
 
+/// Cross-instance + WS payload for reaction changes. Carries absolute state
+/// (count + full reactor list) so duplicate delivery is idempotent.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ReactionUpdatedEvent {
+    #[serde(rename = "type")]
+    pub event_type: String,
+    pub group_id: String,
+    pub chain_seq: i64,
+    /// Canonical Unicode emoji string (NFC).
+    pub emoji: String,
+    pub count: i32,
+    pub reactors: Vec<String>,
+}
+
+impl ReactionUpdatedEvent {
+    pub fn new(group_id: String, entry: &ReactionEntry) -> Self {
+        Self {
+            event_type: REACTION_UPDATED_EVENT_TYPE.to_string(),
+            group_id,
+            chain_seq: entry.chain_seq,
+            emoji: entry.emoji.clone(),
+            count: entry.count,
+            reactors: entry.reactors.clone(),
+        }
+    }
+}
+
 /// WebSocket wire frame (encrypted message payload — relayer never decrypts).
 #[derive(Debug, Clone, Serialize)]
 pub struct MessageWireEvent {
@@ -48,10 +79,19 @@ pub struct MessageWireEvent {
     pub message: MessageResponse,
 }
 
+/// Events fanned out to local WebSocket connections. Each variant serializes
+/// its own `type` discriminator (`message.created` / `reaction.updated`).
+#[derive(Debug, Clone, Serialize)]
+#[serde(untagged)]
+pub enum RealtimeEvent {
+    MessageCreated(MessageWireEvent),
+    ReactionUpdated(ReactionUpdatedEvent),
+}
+
 /// Per-group broadcast fan-out to local WebSocket connections.
 #[derive(Clone, Default)]
 pub struct RealtimeHub {
-    channels: Arc<RwLock<HashMap<String, broadcast::Sender<MessageWireEvent>>>>,
+    channels: Arc<RwLock<HashMap<String, broadcast::Sender<RealtimeEvent>>>>,
 }
 
 impl RealtimeHub {
@@ -59,7 +99,7 @@ impl RealtimeHub {
         Self::default()
     }
 
-    fn sender_for_group(&self, group_id: &str) -> broadcast::Sender<MessageWireEvent> {
+    fn sender_for_group(&self, group_id: &str) -> broadcast::Sender<RealtimeEvent> {
         let mut channels = self.channels.write().expect("realtime hub lock poisoned");
         channels
             .entry(group_id.to_string())
@@ -67,19 +107,27 @@ impl RealtimeHub {
             .clone()
     }
 
-    pub fn subscribe(&self, group_id: &str) -> broadcast::Receiver<MessageWireEvent> {
+    pub fn subscribe(&self, group_id: &str) -> broadcast::Receiver<RealtimeEvent> {
         self.sender_for_group(group_id).subscribe()
     }
 
     pub fn publish_wire(&self, group_id: &str, message: MessageResponse) {
+        let event = RealtimeEvent::MessageCreated(MessageWireEvent {
+            event_type: MESSAGE_CREATED_EVENT_TYPE,
+            message,
+        });
+        self.publish_event(group_id, event);
+    }
+
+    pub fn publish_reaction(&self, group_id: &str, event: ReactionUpdatedEvent) {
+        self.publish_event(group_id, RealtimeEvent::ReactionUpdated(event));
+    }
+
+    fn publish_event(&self, group_id: &str, event: RealtimeEvent) {
         let tx = self.sender_for_group(group_id);
         if tx.receiver_count() == 0 {
             return;
         }
-        let event = MessageWireEvent {
-            event_type: "message.created",
-            message,
-        };
         if let Err(e) = tx.send(event) {
             warn!("realtime publish failed for group {}: {}", group_id, e);
         }
@@ -125,9 +173,12 @@ mod tests {
         hub.publish_wire("group-1", wire);
 
         let event = rx.recv().await.expect("event");
-        assert_eq!(event.event_type, "message.created");
-        assert_eq!(event.message.group_id, "group-1");
-        assert_eq!(event.message.encrypted_text, "deadbeef");
+        let RealtimeEvent::MessageCreated(wire) = event else {
+            panic!("expected message.created event");
+        };
+        assert_eq!(wire.event_type, MESSAGE_CREATED_EVENT_TYPE);
+        assert_eq!(wire.message.group_id, "group-1");
+        assert_eq!(wire.message.encrypted_text, "deadbeef");
     }
 
     #[tokio::test]
@@ -152,8 +203,38 @@ mod tests {
             .await
             .expect("load");
 
-        let wire = rx.recv().await.expect("wire");
+        let event = rx.recv().await.expect("wire");
+        let RealtimeEvent::MessageCreated(wire) = event else {
+            panic!("expected message.created event");
+        };
         assert_eq!(wire.message.message_id, created.id);
         assert_eq!(wire.message.encrypted_text, "deadbeef");
+    }
+
+    #[tokio::test]
+    async fn publish_reaction_delivers_idempotent_payload() {
+        let hub = RealtimeHub::new();
+        let mut rx = hub.subscribe("group-1");
+
+        let entry = ReactionEntry {
+            chain_seq: 7,
+            emoji: "👍".to_string(),
+            count: 2,
+            reactors: vec!["0xa".to_string(), "0xb".to_string()],
+        };
+        hub.publish_reaction("group-1", ReactionUpdatedEvent::new("group-1".to_string(), &entry));
+
+        let event = rx.recv().await.expect("event");
+        let RealtimeEvent::ReactionUpdated(reaction) = event else {
+            panic!("expected reaction.updated event");
+        };
+        assert_eq!(reaction.event_type, REACTION_UPDATED_EVENT_TYPE);
+        assert_eq!(reaction.chain_seq, 7);
+        assert_eq!(reaction.emoji, "👍");
+        assert_eq!(reaction.count, 2);
+        assert_eq!(reaction.reactors, vec!["0xa", "0xb"]);
+
+        let json = serde_json::to_string(&RealtimeEvent::ReactionUpdated(reaction)).unwrap();
+        assert!(json.contains(r#""type":"reaction.updated""#));
     }
 }

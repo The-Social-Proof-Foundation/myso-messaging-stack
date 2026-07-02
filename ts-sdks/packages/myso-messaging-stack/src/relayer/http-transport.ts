@@ -35,6 +35,7 @@ import type {
 	PutUserReadStateParams,
 	RelayerMessage,
 	RelayerReactionEntry,
+	RelayerSubscriptionEvent,
 	RelayerAgentConversation,
 	SendMessageParams,
 	SendMessageResult,
@@ -71,8 +72,9 @@ export interface HTTPRelayerTransportConfig extends HttpClientConfig {
 
 interface WireReactionEntry {
 	chain_seq: number;
-	emoji_code: number;
+	emoji: string;
 	count: number;
+	reactors?: string[];
 }
 
 interface WireReceiptStateResponse {
@@ -356,8 +358,9 @@ export class HTTPRelayerTransport implements RelayerTransport {
 		);
 		return rows.map((r) => ({
 			chainSeq: r.chain_seq,
-			emojiCode: r.emoji_code,
+			emoji: r.emoji,
 			count: r.count,
+			reactors: r.reactors ?? [],
 		}));
 	}
 
@@ -365,7 +368,7 @@ export class HTTPRelayerTransport implements RelayerTransport {
 		const payload: Record<string, unknown> = {
 			group_id: params.groupId,
 			chain_seq: params.chainSeq,
-			emoji_code: params.emojiCode,
+			emoji: params.emoji,
 			add: params.add ?? true,
 		};
 		const { body, headers } = await createBodyAuth(params.signer, payload);
@@ -505,8 +508,14 @@ export class HTTPRelayerTransport implements RelayerTransport {
 		return wire.conversations.map(fromWireAgentConversation);
 	}
 
-	async *subscribe(params: SubscribeParams): AsyncIterable<RelayerMessage> {
+	/**
+	 * Polling implementation of the realtime event stream: polls messages and
+	 * diffs reaction listings into synthetic `reaction.updated` events. The
+	 * first reaction snapshot is a baseline and does not emit events.
+	 */
+	async *subscribe(params: SubscribeParams): AsyncIterable<RelayerSubscriptionEvent> {
 		let lastOrder = params.afterOrder;
+		let reactionSnapshot: Map<string, RelayerReactionEntry> | undefined;
 
 		while (!this.#disconnected && !params.signal?.aborted) {
 			try {
@@ -519,13 +528,57 @@ export class HTTPRelayerTransport implements RelayerTransport {
 
 				for (const message of result.messages) {
 					if (this.#disconnected || params.signal?.aborted) return;
-					yield message;
+					yield { type: 'message.created', message };
 					lastOrder = message.order;
 				}
+				if (this.#disconnected || params.signal?.aborted) return;
 
-				if (result.messages.length === 0) {
-					await delay(this.#pollingIntervalMs, params.signal);
+				const rows = await this.listGroupReactions({
+					signer: params.signer,
+					groupId: params.groupId,
+				});
+				const next = new Map(rows.map((r) => [`${r.chainSeq}:${r.emoji}`, r]));
+
+				if (reactionSnapshot) {
+					for (const [key, entry] of next) {
+						const prev = reactionSnapshot.get(key);
+						if (
+							!prev ||
+							prev.count !== entry.count ||
+							prev.reactors.join(',') !== entry.reactors.join(',')
+						) {
+							if (this.#disconnected || params.signal?.aborted) return;
+							yield {
+								type: 'reaction.updated',
+								reaction: {
+									groupId: params.groupId,
+									chainSeq: entry.chainSeq,
+									emoji: entry.emoji,
+									count: entry.count,
+									reactors: entry.reactors,
+								},
+							};
+						}
+					}
+					for (const [key, prev] of reactionSnapshot) {
+						if (!next.has(key)) {
+							if (this.#disconnected || params.signal?.aborted) return;
+							yield {
+								type: 'reaction.updated',
+								reaction: {
+									groupId: params.groupId,
+									chainSeq: prev.chainSeq,
+									emoji: prev.emoji,
+									count: 0,
+									reactors: [],
+								},
+							};
+						}
+					}
 				}
+				reactionSnapshot = next;
+
+				await delay(this.#pollingIntervalMs, params.signal);
 			} catch (error) {
 				if (this.#disconnected || params.signal?.aborted) return;
 				// Client errors (4xx) are not retryable — throw immediately

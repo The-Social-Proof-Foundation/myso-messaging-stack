@@ -2,9 +2,10 @@
  * Hook for fetching, sending, and subscribing to messages in a group.
  *
  * - Loads initial message history via getMessages()
- * - Subscribes to real-time updates via subscribe() (polling-based)
- * - Provides a sendMessage function for composing new messages
+ * - Subscribes to real-time message + reaction events via subscribe()
+ * - Provides sendMessage / editMessage / deleteMessage / toggleReaction
  * - Deduplicates incoming messages by messageId
+ * - Tracks per-message reactions keyed by relayer `order`
  */
 import { useState, useEffect, useCallback, useRef } from 'react';
 import {
@@ -12,7 +13,12 @@ import {
   RelayerTransportError,
 } from '@socialproof/myso-messaging-stack';
 import { useRequiredMessagingClient } from '../contexts/MessagingClientContext';
-import type { AttachmentFile, AttachmentHandle } from '@socialproof/myso-messaging-stack';
+import type {
+  AttachmentFile,
+  AttachmentHandle,
+  RelayerReactionEntry,
+  RelayerReactionEvent,
+} from '@socialproof/myso-messaging-stack';
 import {
   formatRelayerError,
   isNotGroupMemberError,
@@ -36,15 +42,20 @@ export interface Message {
   subAgentId?: string;
 }
 
+/** Reaction entries per message, keyed by the message's relayer `order`. */
+export type MessageReactions = Map<number, RelayerReactionEntry[]>;
+
 export interface UseMessagesResult {
   messages: Message[];
   loading: boolean;
   sending: boolean;
   error: string | null;
   hasMore: boolean;
+  reactions: MessageReactions;
   sendMessage: (text: string, files?: AttachmentFile[]) => Promise<void>;
   editMessage: (messageId: string, text: string) => Promise<void>;
   deleteMessage: (messageId: string) => Promise<void>;
+  toggleReaction: (order: number, emoji: string) => Promise<void>;
   loadMore: () => Promise<void>;
 }
 
@@ -76,6 +87,47 @@ function mergeMessage(prev: Message[], incoming: Message): Message[] {
   return mergeMessages(prev, [incoming]);
 }
 
+/** Group flat reaction rows by message order. */
+function groupReactionsByOrder(rows: RelayerReactionEntry[]): MessageReactions {
+  const byOrder: MessageReactions = new Map();
+  for (const row of rows) {
+    const entries = byOrder.get(row.chainSeq) ?? [];
+    entries.push(row);
+    byOrder.set(row.chainSeq, entries);
+  }
+  return byOrder;
+}
+
+/**
+ * Apply an absolute-state reaction event: replace the (order, emoji) entry
+ * with the event's count/reactors, dropping it when the count reaches zero.
+ * Idempotent — re-applying the same event is a no-op.
+ */
+function applyReactionEvent(
+  prev: MessageReactions,
+  event: RelayerReactionEvent,
+): MessageReactions {
+  const next = new Map(prev);
+  const entries = (next.get(event.chainSeq) ?? []).filter(
+    (e) => e.emoji !== event.emoji,
+  );
+  if (event.count > 0) {
+    entries.push({
+      chainSeq: event.chainSeq,
+      emoji: event.emoji,
+      count: event.count,
+      reactors: event.reactors,
+    });
+  }
+  entries.sort((a, b) => a.emoji.localeCompare(b.emoji));
+  if (entries.length > 0) {
+    next.set(event.chainSeq, entries);
+  } else {
+    next.delete(event.chainSeq);
+  }
+  return next;
+}
+
 export function useMessages(uuid: string, groupId: string): UseMessagesResult {
   const { client, signer } = useRequiredMessagingClient();
 
@@ -84,11 +136,15 @@ export function useMessages(uuid: string, groupId: string): UseMessagesResult {
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [hasMore, setHasMore] = useState(false);
+  const [reactions, setReactions] = useState<MessageReactions>(new Map());
 
   // Track current uuid and latest order for subscription
   const uuidRef = useRef(uuid);
   uuidRef.current = uuid;
   const lastOrderRef = useRef<number | undefined>(undefined);
+  // Latest reactions for toggle decisions without re-creating callbacks.
+  const reactionsRef = useRef<MessageReactions>(reactions);
+  reactionsRef.current = reactions;
 
   // Update lastOrderRef whenever messages change
   useEffect(() => {
@@ -105,6 +161,7 @@ export function useMessages(uuid: string, groupId: string): UseMessagesResult {
     setLoading(true);
     setError(null);
     setHasMore(false);
+    setReactions(new Map());
     lastOrderRef.current = undefined;
 
     let cancelled = false;
@@ -122,6 +179,18 @@ export function useMessages(uuid: string, groupId: string): UseMessagesResult {
 
         setMessages(sortMessagesByOrder(result.messages));
         setHasMore(result.hasNext);
+
+        // One listing covers all messages in the group (including older pages).
+        try {
+          const rows = await client.messaging.listReactions({
+            signer,
+            groupRef: {uuid},
+          });
+          if (cancelled || uuidRef.current !== uuid) return;
+          setReactions(groupReactionsByOrder(rows));
+        } catch (err) {
+          console.warn('Failed to load reactions:', err);
+        }
       } catch (err) {
         if (cancelled || uuidRef.current !== uuid) return;
         console.error('Failed to load messages:', err);
@@ -143,7 +212,7 @@ export function useMessages(uuid: string, groupId: string): UseMessagesResult {
   }, [uuid, client, signer]);
 
   // ------------------------------------------------------------------
-  // Real-time subscription (polling-based via SDK's subscribe)
+  // Real-time subscription (messages + reaction updates)
   // ------------------------------------------------------------------
   useEffect(() => {
     // Don't subscribe while still loading initial messages
@@ -153,8 +222,7 @@ export function useMessages(uuid: string, groupId: string): UseMessagesResult {
 
     async function startSubscription() {
       try {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const stream: AsyncIterable<Message> = client.messaging.subscribe({
+        const stream = client.messaging.subscribe({
           signer,
           groupRef: {uuid},
           afterOrder: lastOrderRef.current,
@@ -162,9 +230,13 @@ export function useMessages(uuid: string, groupId: string): UseMessagesResult {
           mydataApproveContext: undefined
         });
 
-        for await (const msg of stream) {
+        for await (const event of stream) {
           if (controller.signal.aborted || uuidRef.current !== uuid) break;
-          setMessages((prev) => mergeMessage(prev, msg));
+          if (event.type === 'message') {
+            setMessages((prev) => mergeMessage(prev, event.message as Message));
+          } else {
+            setReactions((prev) => applyReactionEvent(prev, event.reaction));
+          }
         }
       } catch (err) {
         // AbortError is expected on cleanup
@@ -345,6 +417,69 @@ export function useMessages(uuid: string, groupId: string): UseMessagesResult {
   );
 
   // ------------------------------------------------------------------
+  // Toggle my reaction on a message (optimistic, reverted on error)
+  // ------------------------------------------------------------------
+  const toggleReaction = useCallback(
+    async (order: number, emoji: string) => {
+      const myAddress = signer.toMySoAddress();
+      const entries = reactionsRef.current.get(order) ?? [];
+      const entry = entries.find((e) => e.emoji === emoji);
+      const hasReacted = entry?.reactors.includes(myAddress) ?? false;
+
+      // Optimistic absolute-state update, shaped like a relayer event so the
+      // eventual reaction.updated broadcast converges to the same state.
+      const optimistic: RelayerReactionEvent = hasReacted
+        ? {
+            groupId,
+            chainSeq: order,
+            emoji,
+            count: Math.max((entry?.count ?? 1) - 1, 0),
+            reactors: (entry?.reactors ?? []).filter((a) => a !== myAddress),
+          }
+        : {
+            groupId,
+            chainSeq: order,
+            emoji,
+            count: (entry?.count ?? 0) + 1,
+            reactors: [...(entry?.reactors ?? []), myAddress],
+          };
+
+      const snapshot = reactionsRef.current;
+      setReactions((prev) => applyReactionEvent(prev, optimistic));
+
+      try {
+        if (hasReacted) {
+          await client.messaging.removeReaction({
+            signer,
+            groupRef: {uuid: uuidRef.current},
+            order,
+            emoji,
+          });
+        } else {
+          await client.messaging.addReaction({
+            signer,
+            groupRef: {uuid: uuidRef.current},
+            order,
+            emoji,
+          });
+        }
+      } catch (err) {
+        console.error('Failed to toggle reaction:', err);
+        setReactions(snapshot);
+        setError(
+          err instanceof RelayerTransportError
+            ? formatRelayerError(err)
+            : err instanceof Error
+              ? err.message
+              : 'Failed to update reaction.',
+        );
+        throw err;
+      }
+    },
+    [client, signer, groupId],
+  );
+
+  // ------------------------------------------------------------------
   // Delete a message
   // ------------------------------------------------------------------
   const deleteMessageFn = useCallback(
@@ -381,11 +516,17 @@ export function useMessages(uuid: string, groupId: string): UseMessagesResult {
     sending,
     error,
     hasMore,
+    reactions,
     sendMessage,
     editMessage,
     deleteMessage: deleteMessageFn,
+    toggleReaction,
     loadMore,
   };
 }
 
-export {type AttachmentFile, type AttachmentHandle} from '@socialproof/myso-messaging-stack';
+export {
+  type AttachmentFile,
+  type AttachmentHandle,
+  type RelayerReactionEntry,
+} from '@socialproof/myso-messaging-stack';

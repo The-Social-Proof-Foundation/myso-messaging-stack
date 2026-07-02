@@ -6,7 +6,10 @@ use std::time::Duration;
 use sqlx::postgres::PgListener;
 use tracing::{info, warn};
 
-use super::{MessageCreatedEvent, RealtimeHub, MESSAGE_EVENTS_CHANNEL};
+use super::{
+    MessageCreatedEvent, ReactionUpdatedEvent, RealtimeHub, MESSAGE_CREATED_EVENT_TYPE,
+    MESSAGE_EVENTS_CHANNEL, REACTION_UPDATED_EVENT_TYPE,
+};
 use crate::storage::StorageAdapter;
 
 pub struct PgListenerService {
@@ -52,18 +55,42 @@ impl PgListenerService {
         loop {
             let notification = listener.recv().await.map_err(|e| e.to_string())?;
             let payload = notification.payload();
-            let event: MessageCreatedEvent = match serde_json::from_str(payload) {
-                Ok(event) => event,
-                Err(err) => {
-                    warn!("invalid NOTIFY payload on {MESSAGE_EVENTS_CHANNEL}: {err}");
-                    continue;
-                }
-            };
+            let event_type = serde_json::from_str::<serde_json::Value>(payload)
+                .ok()
+                .and_then(|v| v.get("type").and_then(|t| t.as_str()).map(str::to_string));
 
-            if let Err(err) =
-                RealtimeHub::load_and_publish(&self.hub, &self.storage, event).await
-            {
-                warn!("failed to load message for realtime fan-out: {err}");
+            match event_type.as_deref() {
+                Some(MESSAGE_CREATED_EVENT_TYPE) => {
+                    let event: MessageCreatedEvent = match serde_json::from_str(payload) {
+                        Ok(event) => event,
+                        Err(err) => {
+                            warn!("invalid NOTIFY payload on {MESSAGE_EVENTS_CHANNEL}: {err}");
+                            continue;
+                        }
+                    };
+                    if let Err(err) =
+                        RealtimeHub::load_and_publish(&self.hub, &self.storage, event).await
+                    {
+                        warn!("failed to load message for realtime fan-out: {err}");
+                    }
+                }
+                Some(REACTION_UPDATED_EVENT_TYPE) => {
+                    // Self-contained payload — publish directly, no storage reload.
+                    let event: ReactionUpdatedEvent = match serde_json::from_str(payload) {
+                        Ok(event) => event,
+                        Err(err) => {
+                            warn!("invalid NOTIFY payload on {MESSAGE_EVENTS_CHANNEL}: {err}");
+                            continue;
+                        }
+                    };
+                    self.hub.publish_reaction(&event.group_id.clone(), event);
+                }
+                other => {
+                    warn!(
+                        "unknown NOTIFY event type {:?} on {MESSAGE_EVENTS_CHANNEL}",
+                        other
+                    );
+                }
             }
         }
     }

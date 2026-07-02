@@ -84,16 +84,16 @@ describe('WSRelayerTransport', () => {
 
 		const controller = new AbortController();
 		const subscribePromise = (async () => {
-			const messages = [];
-			for await (const message of transport.subscribe({
+			const events = [];
+			for await (const event of transport.subscribe({
 				signer: keypair,
 				groupId: GROUP_ID,
 				signal: controller.signal,
 			})) {
-				messages.push(message);
+				events.push(event);
 				controller.abort();
 			}
-			return messages;
+			return events;
 		})();
 
 		await vi.waitFor(() => {
@@ -111,9 +111,69 @@ describe('WSRelayerTransport', () => {
 			}),
 		);
 
-		const messages = await subscribePromise;
-		expect(messages).toHaveLength(1);
-		expect(messages[0]?.messageId).toBe(WIRE_MESSAGE.message_id);
-		expect(messages[0]?.encryptedText).toEqual(new Uint8Array([1, 2, 3]));
+		const events = await subscribePromise;
+		expect(events).toHaveLength(1);
+		const event = events[0]!;
+		if (event.type !== 'message.created') throw new Error('expected message event');
+		expect(event.message.messageId).toBe(WIRE_MESSAGE.message_id);
+		expect(event.message.encryptedText).toEqual(new Uint8Array([1, 2, 3]));
+	});
+
+	it('yields both message.created and reaction.updated frames', async () => {
+		const keypair = Ed25519Keypair.generate();
+		const transport = new WSRelayerTransport({
+			relayerUrl: MOCK_RELAYER_URL,
+			apiPrefix: '/v1',
+			WebSocket: MockWebSocket as unknown as typeof WebSocket,
+			maxReconnectAttempts: 0,
+		});
+
+		const controller = new AbortController();
+		const subscribePromise = (async () => {
+			const events = [];
+			for await (const event of transport.subscribe({
+				signer: keypair,
+				groupId: GROUP_ID,
+				signal: controller.signal,
+			})) {
+				events.push(event);
+				if (events.length === 2) controller.abort();
+			}
+			return events;
+		})();
+
+		await vi.waitFor(() => {
+			expect(MockWebSocket.instances.length).toBe(1);
+		});
+
+		const socket = MockWebSocket.instances[0]!;
+		socket.emitMessage(JSON.stringify({ type: 'message.created', message: WIRE_MESSAGE }));
+		socket.emitMessage(
+			JSON.stringify({
+				type: 'reaction.updated',
+				group_id: GROUP_ID,
+				chain_seq: 1,
+				emoji: '👨‍👩‍👧‍👦',
+				count: 2,
+				reactors: ['0xa', '0xb'],
+			}),
+		);
+
+		const events = await subscribePromise;
+		expect(events).toHaveLength(2);
+		expect(events[0]).toMatchObject({
+			type: 'message.created',
+			message: { messageId: WIRE_MESSAGE.message_id },
+		});
+		expect(events[1]).toEqual({
+			type: 'reaction.updated',
+			reaction: {
+				groupId: GROUP_ID,
+				chainSeq: 1,
+				emoji: '👨‍👩‍👧‍👦',
+				count: 2,
+				reactors: ['0xa', '0xb'],
+			},
+		});
 	});
 });

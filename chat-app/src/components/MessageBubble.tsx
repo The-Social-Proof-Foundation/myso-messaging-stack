@@ -1,11 +1,31 @@
-import { useState, useRef, useEffect, useCallback, type KeyboardEvent } from 'react';
-import type { Message, AttachmentHandle } from '../hooks/useMessages';
+import {
+  useState,
+  useRef,
+  useEffect,
+  useCallback,
+  type KeyboardEvent,
+  type MouseEvent,
+} from 'react';
+import type {
+  Message,
+  AttachmentHandle,
+  RelayerReactionEntry,
+} from '../hooks/useMessages';
+
+/** Basic reaction palette shown in the left-click picker. */
+const REACTION_EMOJIS = ['👍', '❤️', '😂', '😮', '😢', '🙏'];
 
 interface MessageBubbleProps {
   message: Message;
   isOwnMessage: boolean;
   onEdit?: (messageId: string, text: string) => Promise<void>;
   onDelete?: (messageId: string) => Promise<void>;
+  /** Reaction entries for this message (keyed by relayer order upstream). */
+  reactions?: RelayerReactionEntry[];
+  /** When provided, left-clicking the bubble opens the reaction picker. */
+  onToggleReaction?: (order: number, emoji: string) => Promise<void>;
+  /** Used to highlight reactions the current user has set. */
+  myAddress?: string;
 }
 
 /** Format Unix timestamp (seconds) to a short relative/absolute time string. */
@@ -146,13 +166,19 @@ export function MessageBubble({
   isOwnMessage,
   onEdit,
   onDelete,
+  reactions,
+  onToggleReaction,
+  myAddress,
 }: Readonly<MessageBubbleProps>) {
   const [editing, setEditing] = useState(false);
   const [editText, setEditText] = useState(message.text);
   const [saving, setSaving] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [showReactionPicker, setShowReactionPicker] = useState(false);
   const editRef = useRef<HTMLTextAreaElement>(null);
+  // Wraps bubble + picker so bubble clicks toggle without racing outside-close.
+  const bubbleWrapperRef = useRef<HTMLDivElement>(null);
 
   // Focus textarea when entering edit mode
   useEffect(() => {
@@ -161,6 +187,50 @@ export function MessageBubble({
       editRef.current.setSelectionRange(editText.length, editText.length);
     }
   }, [editing, editText.length]);
+
+  // Close the reaction picker on outside click or Escape
+  useEffect(() => {
+    if (!showReactionPicker) return;
+
+    function handleMouseDown(e: globalThis.MouseEvent) {
+      if (
+        bubbleWrapperRef.current &&
+        !bubbleWrapperRef.current.contains(e.target as Node)
+      ) {
+        setShowReactionPicker(false);
+      }
+    }
+    function handleKeyDown(e: globalThis.KeyboardEvent) {
+      if (e.key === 'Escape') setShowReactionPicker(false);
+    }
+
+    document.addEventListener('mousedown', handleMouseDown);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', handleMouseDown);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [showReactionPicker]);
+
+  const handleBubbleClick = useCallback(
+    (e: MouseEvent<HTMLDivElement>) => {
+      if (!onToggleReaction || editing) return;
+      // Ignore clicks on interactive elements (attachment buttons, links, ...).
+      const target = e.target as HTMLElement;
+      if (target.closest('button, a, textarea, input, img')) return;
+      setShowReactionPicker((open) => !open);
+    },
+    [onToggleReaction, editing],
+  );
+
+  const handlePickEmoji = useCallback(
+    (emoji: string) => {
+      setShowReactionPicker(false);
+      // Errors surface via the hook's error banner; state reverts there.
+      onToggleReaction?.(message.order, emoji).catch(() => {});
+    },
+    [onToggleReaction, message.order],
+  );
 
   if (message.isDeleted) {
     return (
@@ -224,7 +294,7 @@ export function MessageBubble({
     <div
       className={`group flex min-w-0 max-w-full px-4 py-1 ${isOwnMessage ? 'justify-end' : 'justify-start'}`}
     >
-      <div className="relative min-w-0 max-w-[70%] shrink">
+      <div ref={bubbleWrapperRef} className="relative min-w-0 max-w-[70%] shrink">
         {/* Action buttons (visible on hover, own messages only) */}
         {isOwnMessage && !editing && (onEdit || onDelete) && (
           <div className="absolute -top-3 right-2 z-10 hidden rounded-lg border border-secondary-200 bg-white shadow-sm group-hover:flex dark:border-secondary-600 dark:bg-secondary-700">
@@ -253,7 +323,10 @@ export function MessageBubble({
         )}
 
         <div
+          onClick={handleBubbleClick}
           className={`max-w-full overflow-hidden rounded-2xl px-4 py-2 ${
+            onToggleReaction && !editing ? 'cursor-pointer' : ''
+          } ${
             isOwnMessage
               ? 'bg-primary-500 text-white'
               : 'bg-secondary-100 text-secondary-900 dark:bg-secondary-700 dark:text-secondary-100'
@@ -357,6 +430,61 @@ export function MessageBubble({
             )}
           </div>
         </div>
+
+        {/* Reaction chips */}
+        {reactions && reactions.length > 0 && (
+          <div
+            className={`mt-1 flex flex-wrap gap-1 ${
+              isOwnMessage ? 'justify-end' : 'justify-start'
+            }`}
+          >
+            {reactions.map((entry) => {
+              const mine = myAddress
+                ? entry.reactors.includes(myAddress)
+                : false;
+              return (
+                <button
+                  key={entry.emoji}
+                  onClick={() => handlePickEmoji(entry.emoji)}
+                  disabled={!onToggleReaction}
+                  title={
+                    mine
+                      ? 'You reacted — click to remove'
+                      : 'Click to react'
+                  }
+                  className={`flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs transition-colors ${
+                    mine
+                      ? 'border-primary-400 bg-primary-100 text-primary-700 dark:border-primary-500 dark:bg-primary-900/40 dark:text-primary-300'
+                      : 'border-secondary-200 bg-white text-secondary-600 hover:bg-secondary-100 dark:border-secondary-600 dark:bg-secondary-700 dark:text-secondary-300 dark:hover:bg-secondary-600'
+                  } ${onToggleReaction ? '' : 'cursor-default'}`}
+                >
+                  <span>{entry.emoji}</span>
+                  <span className="font-medium">{entry.count}</span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Reaction picker popover (left-click on bubble) */}
+        {showReactionPicker && onToggleReaction && (
+          <div
+            className={`absolute -top-11 z-20 flex gap-0.5 rounded-full border border-secondary-200 bg-white px-2 py-1 shadow-lg dark:border-secondary-600 dark:bg-secondary-700 ${
+              isOwnMessage ? 'right-0' : 'left-0'
+            }`}
+          >
+            {REACTION_EMOJIS.map((emoji) => (
+              <button
+                key={emoji}
+                onClick={() => handlePickEmoji(emoji)}
+                title={`React with ${emoji}`}
+                className="rounded-full px-1.5 py-0.5 text-base transition-transform hover:scale-125 hover:bg-secondary-100 dark:hover:bg-secondary-600"
+              >
+                {emoji}
+              </button>
+            ))}
+          </div>
+        )}
 
         {/* Delete confirmation popover */}
         {showDeleteConfirm && (

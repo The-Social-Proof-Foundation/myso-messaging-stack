@@ -73,32 +73,32 @@ describe('HybridRelayerTransport', () => {
 			wsMaxReconnectAttempts: 0,
 		});
 
-		mockFetch.mockResolvedValueOnce(
-			new Response(
-				JSON.stringify({
-					messages: [WIRE_MESSAGE],
-					hasNext: false,
-				}),
-				{ status: 200 },
-			),
-		);
-
-		mockFetch.mockResolvedValue(
-			new Response(JSON.stringify({ messages: [], hasNext: false }), { status: 200 }),
-		);
+		mockFetch.mockImplementation(async (input) => {
+			const url = String(input);
+			if (url.includes('/reactions')) {
+				return new Response(JSON.stringify([]), { status: 200 });
+			}
+			return new Response(JSON.stringify({ messages: [WIRE_MESSAGE], hasNext: false }), {
+				status: 200,
+			});
+		});
 
 		const controller = new AbortController();
-		const messages = [];
-		for await (const message of transport.subscribe({
+		const events = [];
+		for await (const event of transport.subscribe({
 			signer: keypair,
 			groupId: GROUP_ID,
 			signal: controller.signal,
 		})) {
-			messages.push(message.messageId);
+			events.push(event);
 			controller.abort();
 		}
 
-		expect(messages).toEqual([WIRE_MESSAGE.message_id]);
+		expect(events).toHaveLength(1);
+		expect(events[0]).toMatchObject({
+			type: 'message.created',
+			message: { messageId: WIRE_MESSAGE.message_id },
+		});
 		expect(mockFetch).toHaveBeenCalled();
 		const [url] = mockFetch.mock.calls[0]!;
 		expect(String(url)).toContain('/v1/messages');

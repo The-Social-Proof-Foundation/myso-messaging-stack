@@ -12,7 +12,9 @@ use crate::models::{
     Attachment, EncryptedBlobRecord, Message, MessageAttribution, PushTokenRecord,
     ReactionEntry, ReceiptStateResponse, SyncStatus,
 };
-use crate::services::realtime::{MessageCreatedEvent, MESSAGE_EVENTS_CHANNEL};
+use crate::services::realtime::{
+    MessageCreatedEvent, ReactionUpdatedEvent, MESSAGE_EVENTS_CHANNEL,
+};
 
 use super::adapter::{StorageAdapter, StorageError, StorageResult};
 use super::memory::InMemoryStorage;
@@ -315,48 +317,90 @@ impl StorageAdapter for PostgresStorage {
         Ok(rows.iter().map(row_to_message).collect())
     }
 
-    async fn replace_reaction_tally(
+    async fn set_reaction(
         &self,
         group_id: &str,
         chain_seq: i64,
-        emoji_code: u32,
+        emoji: &str,
+        member: &str,
         add: bool,
-    ) -> StorageResult<()> {
-        if add {
+    ) -> StorageResult<Option<ReactionEntry>> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| StorageError::OperationFailed(e.to_string()))?;
+
+        let changed = if add {
             sqlx::query(
-                r#"INSERT INTO reaction_tallies (group_id, chain_seq, emoji_code, count)
-                   VALUES ($1, $2, $3, 1)
-                   ON CONFLICT (group_id, chain_seq, emoji_code)
-                   DO UPDATE SET count = reaction_tallies.count + 1"#,
+                r#"INSERT INTO message_reactions (group_id, chain_seq, emoji, member_address)
+                   VALUES ($1, $2, $3, $4)
+                   ON CONFLICT DO NOTHING"#,
             )
             .bind(group_id)
             .bind(chain_seq)
-            .bind(emoji_code as i32)
-            .execute(&self.pool)
+            .bind(emoji)
+            .bind(member)
+            .execute(&mut *tx)
             .await
-            .map_err(|e| StorageError::OperationFailed(e.to_string()))?;
+            .map_err(|e| StorageError::OperationFailed(e.to_string()))?
+            .rows_affected()
+                > 0
         } else {
             sqlx::query(
-                r#"UPDATE reaction_tallies SET count = GREATEST(count - 1, 0)
-                   WHERE group_id = $1 AND chain_seq = $2 AND emoji_code = $3"#,
+                "DELETE FROM message_reactions WHERE group_id = $1 AND chain_seq = $2 AND emoji = $3 AND member_address = $4",
             )
             .bind(group_id)
             .bind(chain_seq)
-            .bind(emoji_code as i32)
-            .execute(&self.pool)
+            .bind(emoji)
+            .bind(member)
+            .execute(&mut *tx)
             .await
-            .map_err(|e| StorageError::OperationFailed(e.to_string()))?;
-            sqlx::query(
-                "DELETE FROM reaction_tallies WHERE group_id = $1 AND chain_seq = $2 AND emoji_code = $3 AND count = 0",
-            )
-            .bind(group_id)
-            .bind(chain_seq)
-            .bind(emoji_code as i32)
-            .execute(&self.pool)
-            .await
-            .map_err(|e| StorageError::OperationFailed(e.to_string()))?;
+            .map_err(|e| StorageError::OperationFailed(e.to_string()))?
+            .rows_affected()
+                > 0
+        };
+
+        if !changed {
+            tx.commit()
+                .await
+                .map_err(|e| StorageError::OperationFailed(e.to_string()))?;
+            return Ok(None);
         }
-        Ok(())
+
+        let reactors: Vec<String> = sqlx::query_scalar(
+            "SELECT member_address FROM message_reactions WHERE group_id = $1 AND chain_seq = $2 AND emoji = $3 ORDER BY member_address",
+        )
+        .bind(group_id)
+        .bind(chain_seq)
+        .bind(emoji)
+        .fetch_all(&mut *tx)
+        .await
+        .map_err(|e| StorageError::OperationFailed(e.to_string()))?;
+
+        let entry = ReactionEntry {
+            chain_seq,
+            emoji: emoji.to_string(),
+            count: reactors.len() as i32,
+            reactors,
+        };
+
+        // Cross-instance realtime fan-out (self-contained payload — no reload needed).
+        let notify = ReactionUpdatedEvent::new(group_id.to_string(), &entry);
+        let notify_json = serde_json::to_string(&notify)
+            .map_err(|e| StorageError::OperationFailed(e.to_string()))?;
+        sqlx::query("SELECT pg_notify($1, $2)")
+            .bind(MESSAGE_EVENTS_CHANNEL)
+            .bind(notify_json)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| StorageError::OperationFailed(e.to_string()))?;
+
+        tx.commit()
+            .await
+            .map_err(|e| StorageError::OperationFailed(e.to_string()))?;
+
+        Ok(Some(entry))
     }
 
     async fn list_reactions(
@@ -366,7 +410,12 @@ impl StorageAdapter for PostgresStorage {
     ) -> StorageResult<Vec<ReactionEntry>> {
         let rows = if let Some(seq) = chain_seq {
             sqlx::query(
-                "SELECT chain_seq, emoji_code, count FROM reaction_tallies WHERE group_id = $1 AND chain_seq = $2 AND count > 0 ORDER BY chain_seq, emoji_code",
+                r#"SELECT chain_seq, emoji, COUNT(*)::INT AS count,
+                          ARRAY_AGG(member_address ORDER BY member_address) AS reactors
+                   FROM message_reactions
+                   WHERE group_id = $1 AND chain_seq = $2
+                   GROUP BY chain_seq, emoji
+                   ORDER BY chain_seq, emoji"#,
             )
             .bind(group_id)
             .bind(seq)
@@ -374,7 +423,12 @@ impl StorageAdapter for PostgresStorage {
             .await
         } else {
             sqlx::query(
-                "SELECT chain_seq, emoji_code, count FROM reaction_tallies WHERE group_id = $1 AND count > 0 ORDER BY chain_seq, emoji_code",
+                r#"SELECT chain_seq, emoji, COUNT(*)::INT AS count,
+                          ARRAY_AGG(member_address ORDER BY member_address) AS reactors
+                   FROM message_reactions
+                   WHERE group_id = $1
+                   GROUP BY chain_seq, emoji
+                   ORDER BY chain_seq, emoji"#,
             )
             .bind(group_id)
             .fetch_all(&self.pool)
@@ -386,8 +440,9 @@ impl StorageAdapter for PostgresStorage {
             .iter()
             .map(|r| ReactionEntry {
                 chain_seq: r.get("chain_seq"),
-                emoji_code: r.get::<i32, _>("emoji_code") as u32,
+                emoji: r.get("emoji"),
                 count: r.get("count"),
+                reactors: r.get("reactors"),
             })
             .collect())
     }

@@ -9,6 +9,7 @@ import type { ClientWithCoreApi } from '@socialproof/myso/client';
 import type { Transaction } from '@socialproof/myso/transactions';
 
 import { BlockedMessagingError, BlockGatingClient } from './block-gating.js';
+import { emojiToStorage } from './emoji.js';
 import { MySoMessagingStackClientError } from './error.js';
 import { ReadStateManager } from './read-state/read-state-manager.js';
 import type { UserReadState } from './read-state/types.js';
@@ -19,7 +20,12 @@ import type { EncryptOptions, DecryptOptions } from './encryption/envelope-encry
 import { HTTPRelayerTransport } from './relayer/http-transport.js';
 import { HybridRelayerTransport } from './relayer/hybrid-transport.js';
 import type { RelayerTransport } from './relayer/transport.js';
-import type { RelayerConfig, RelayerHTTPConfig, RelayerMessage } from './relayer/types.js';
+import type {
+	RelayerConfig,
+	RelayerHTTPConfig,
+	RelayerMessage,
+	RelayerReactionEntry,
+} from './relayer/types.js';
 import {
 	signMessageContent,
 	verifyMessageSender,
@@ -32,6 +38,9 @@ import type {
 	GetMessageOptions,
 	GetMessagesOptions,
 	GetMessagesResult,
+	ListReactionsOptions,
+	MessagingEvent,
+	ReactionOptions,
 	RecoverMessagesOptions,
 	SendMessageOptions,
 	SubscribeOptions,
@@ -145,13 +154,13 @@ export function mysoMessagingStack<
  *   text: 'Hello!',
  * });
  *
- * // Subscribe to new messages
- * for await (const msg of client.messaging.subscribe({
+ * // Subscribe to new messages and reaction updates
+ * for await (const event of client.messaging.subscribe({
  *   signer: keypair,
  *   groupRef: { uuid: 'my-group' },
  *   signal: controller.signal,
  * })) {
- *   console.log(msg.text, msg.attachments);
+ *   if (event.type === 'message') console.log(event.message.text);
  * }
  *
  * // For fine-grained permissions, use the groups extension:
@@ -503,42 +512,102 @@ export class MySoMessagingStackClient<TApproveContext = void> {
 	}
 
 	/**
-	 * Subscribe to real-time messages for a group.
+	 * Subscribe to real-time messages and reaction updates for a group as a
+	 * single event stream.
 	 *
-	 * Wraps the transport's subscribe stream and decrypts each message.
-	 * The iterable completes when the AbortSignal fires or {@link disconnect}
-	 * is called.
+	 * Message events are decrypted before yielding; reaction events are passed
+	 * through as absolute state (count + reactor list), keyed by the target
+	 * message's relayer `order` (`chainSeq`). The iterable completes when the
+	 * AbortSignal fires or {@link disconnect} is called.
 	 *
 	 * @example
 	 * ```ts
 	 * const controller = new AbortController();
-	 * for await (const msg of client.messaging.subscribe({
+	 * for await (const event of client.messaging.subscribe({
 	 *   signer: keypair,
 	 *   groupRef: { uuid: '...' },
 	 *   signal: controller.signal,
 	 * })) {
-	 *   console.log(msg.text, msg.attachments);
+	 *   if (event.type === 'message') {
+	 *     console.log(event.message.text, event.message.attachments);
+	 *   } else {
+	 *     console.log(event.reaction.emoji, event.reaction.count);
+	 *   }
 	 * }
 	 * ```
 	 *
-	 * @yields Decrypted messages as they arrive from the transport.
+	 * @yields {@link MessagingEvent} items as they arrive from the transport.
 	 */
-	async *subscribe(options: SubscribeOptions<TApproveContext>): AsyncIterable<DecryptedMessage> {
+	async *subscribe(options: SubscribeOptions<TApproveContext>): AsyncIterable<MessagingEvent> {
 		const { groupId, encryptionHistoryId } = this.derive.resolveGroupRef(options.groupRef);
 		const approveContext = this.#approveContextSpread(options);
 
-		for await (const raw of this.transport.subscribe({
+		for await (const event of this.transport.subscribe({
 			signer: options.signer,
 			groupId,
 			afterOrder: options.afterOrder,
 			signal: options.signal,
 		})) {
-			try {
-				yield this.#decryptMessage(raw, { groupId, encryptionHistoryId }, approveContext);
-			} catch {
-				// Skip messages that fail decryption (e.g. key not available yet).
+			if (event.type === 'message.created') {
+				try {
+					const message = await this.#decryptMessage(
+						event.message,
+						{ groupId, encryptionHistoryId },
+						approveContext,
+					);
+					yield { type: 'message', message };
+				} catch {
+					// Skip messages that fail decryption (e.g. key not available yet).
+				}
+			} else {
+				yield { type: 'reaction', reaction: event.reaction };
 			}
 		}
+	}
+
+	// === Reactions ===
+
+	/**
+	 * List reaction tallies for a group (optionally a single message).
+	 * Entries are keyed by the message's relayer `order` (`chainSeq`).
+	 */
+	async listReactions(options: ListReactionsOptions): Promise<RelayerReactionEntry[]> {
+		const { groupId } = this.derive.resolveGroupRef(options.groupRef);
+		return this.transport.listGroupReactions({
+			signer: options.signer,
+			groupId,
+			chainSeq: options.order,
+		});
+	}
+
+	/**
+	 * Add the signer's reaction to a message. Idempotent — re-adding an
+	 * existing reaction is a no-op on the relayer.
+	 */
+	async addReaction(options: ReactionOptions): Promise<void> {
+		const { groupId } = this.derive.resolveGroupRef(options.groupRef);
+		await this.transport.postGroupReaction({
+			signer: options.signer,
+			groupId,
+			chainSeq: options.order,
+			emoji: emojiToStorage(options.emoji),
+			add: true,
+		});
+	}
+
+	/**
+	 * Remove the signer's reaction from a message. Idempotent — removing an
+	 * absent reaction is a no-op on the relayer.
+	 */
+	async removeReaction(options: ReactionOptions): Promise<void> {
+		const { groupId } = this.derive.resolveGroupRef(options.groupRef);
+		await this.transport.postGroupReaction({
+			signer: options.signer,
+			groupId,
+			chainSeq: options.order,
+			emoji: emojiToStorage(options.emoji),
+			add: false,
+		});
 	}
 
 	/** Fetch and decrypt the wallet-scoped read-state document from the relayer. */

@@ -246,10 +246,14 @@ interface RelayerTransport {
   fetchMessage(params: FetchMessageParams): Promise<RelayerMessage>;
   updateMessage(params: UpdateMessageParams): Promise<void>;
   deleteMessage(params: DeleteMessageParams): Promise<void>;
-  subscribe(params: SubscribeParams): AsyncIterable<RelayerMessage>;
+  subscribe(params: SubscribeParams): AsyncIterable<RelayerSubscriptionEvent>;
+  listGroupReactions(params: ListGroupReactionsParams): Promise<RelayerReactionEntry[]>;
+  postGroupReaction(params: PostGroupReactionParams): Promise<void>;
   disconnect(): void;
 }
 ```
+
+`subscribe()` yields `{ type: 'message.created', message }` and `{ type: 'reaction.updated', reaction }` events.
 
 Provide your implementation via config:
 

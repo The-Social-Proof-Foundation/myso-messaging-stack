@@ -123,9 +123,11 @@ function ChatView({
     sending,
     error,
     hasMore,
+    reactions,
     sendMessage,
     editMessage,
     deleteMessage,
+    toggleReaction,
     loadMore,
   } = useMessages(group.uuid, group.groupId);
 
@@ -271,6 +273,11 @@ function ChatView({
                   isOwnMessage={isOwn}
                   onEdit={isOwn && permissions.canEdit ? editMessage : undefined}
                   onDelete={isOwn && permissions.canDelete ? deleteMessage : undefined}
+                  reactions={reactions.get(msg.order)}
+                  onToggleReaction={
+                    permissions.canSend ? toggleReaction : undefined
+                  }
+                  myAddress={myAddress ?? undefined}
                 />
               );
             })}

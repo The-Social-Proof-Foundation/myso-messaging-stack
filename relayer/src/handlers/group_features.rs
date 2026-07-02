@@ -8,6 +8,7 @@ use serde::Deserialize;
 use crate::auth::AuthContext;
 use crate::handlers::messages::error::ApiError;
 use crate::models::{ReactionEntry, ReceiptStateResponse};
+use crate::services::realtime::ReactionUpdatedEvent;
 use crate::state::AppState;
 
 #[derive(Debug, Deserialize)]
@@ -18,9 +19,33 @@ pub struct ReactionsQuery {
 #[derive(Debug, Deserialize)]
 pub struct PostReactionBody {
     pub chain_seq: i64,
-    pub emoji_code: u32,
+    /// Canonical Unicode emoji string (NFC). Supports skin tones, ZWJ
+    /// sequences, and variation selectors.
+    pub emoji: String,
     #[serde(default = "default_true")]
     pub add: bool,
+}
+
+/// Generous cap: the longest RGI emoji ZWJ sequences are ~35 bytes of UTF-8.
+const MAX_REACTION_EMOJI_BYTES: usize = 64;
+
+/// Boundary validation for reaction emoji. Clients canonicalize (NFC) before
+/// sending; the relayer only rejects clearly invalid payloads.
+fn validate_reaction_emoji(emoji: &str) -> Result<(), ApiError> {
+    if emoji.is_empty() {
+        return Err(ApiError::BadRequest("emoji must not be empty".to_string()));
+    }
+    if emoji.len() > MAX_REACTION_EMOJI_BYTES {
+        return Err(ApiError::BadRequest(format!(
+            "emoji must be at most {MAX_REACTION_EMOJI_BYTES} bytes"
+        )));
+    }
+    if emoji.chars().any(|c| c.is_control() || c.is_whitespace()) {
+        return Err(ApiError::BadRequest(
+            "emoji must not contain control or whitespace characters".to_string(),
+        ));
+    }
+    Ok(())
 }
 
 fn default_true() -> bool {
@@ -58,12 +83,29 @@ pub async fn post_reaction(
     Json(body): Json<PostReactionBody>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     ensure_group(&auth, &group_id)?;
-    state
+    validate_reaction_emoji(&body.emoji)?;
+    let updated = state
         .storage
-        .replace_reaction_tally(&group_id, body.chain_seq, body.emoji_code, body.add)
+        .set_reaction(
+            &group_id,
+            body.chain_seq,
+            &body.emoji,
+            auth.sender_address.as_str(),
+            body.add,
+        )
         .await
         .map_err(ApiError::from)?;
-    Ok(Json(serde_json::json!({ "ok": true })))
+
+    // Postgres storage fans out via pg_notify; inline publish covers in-memory.
+    if let Some(entry) = &updated {
+        if state.realtime_enabled && state.inline_realtime_publish {
+            state
+                .realtime_hub
+                .publish_reaction(&group_id, ReactionUpdatedEvent::new(group_id.clone(), entry));
+        }
+    }
+
+    Ok(Json(serde_json::json!({ "ok": true, "changed": updated.is_some() })))
 }
 
 pub async fn list_reactions(

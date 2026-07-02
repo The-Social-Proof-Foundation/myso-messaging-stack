@@ -14,6 +14,8 @@ export type {
 	DeleteMessageParams,
 	SubscribeParams,
 	RelayerReactionEntry,
+	RelayerReactionEvent,
+	RelayerSubscriptionEvent,
 	ListGroupReactionsParams,
 	PostGroupReactionParams,
 	ListGroupPinsParams,

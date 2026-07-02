@@ -327,8 +327,20 @@ describe('HTTPRelayerTransport', () => {
 
 	// subscribe
 
+	/** Routes fetchMessages polls through `onMessagesPoll`; reactions listings return []. */
+	function mockPolling(onMessagesPoll: (poll: number) => Response) {
+		let poll = 0;
+		mockFetch.mockImplementation(async (input) => {
+			if (String(input).includes('/reactions')) {
+				return new Response(JSON.stringify([]), { status: 200 });
+			}
+			poll += 1;
+			return onMessagesPoll(poll);
+		});
+	}
+
 	describe('subscribe', () => {
-		it('yields messages from polling and stops on abort', async () => {
+		it('yields message events from polling and stops on abort', async () => {
 			const transport = new HTTPRelayerTransport({
 				relayerUrl: MOCK_RELAYER_URL,
 				pollingIntervalMs: 10,
@@ -337,43 +349,39 @@ describe('HTTPRelayerTransport', () => {
 
 			const controller = new AbortController();
 
-			// First poll: return 2 messages
-			mockFetch.mockResolvedValueOnce(
-				new Response(
-					JSON.stringify({
-						messages: [
-							{ ...WIRE_MESSAGE, order: 1 },
-							{ ...WIRE_MESSAGE, order: 2, message_id: 'msg-2' },
-						],
-						hasNext: false,
-					}),
-					{ status: 200 },
-				),
-			);
-
-			// Second poll: return 1 message, then abort
-			mockFetch.mockResolvedValueOnce(
-				new Response(
-					JSON.stringify({
-						messages: [{ ...WIRE_MESSAGE, order: 3, message_id: 'msg-3' }],
-						hasNext: false,
-					}),
-					{ status: 200 },
-				),
-			);
-
-			// Third poll: empty (triggers delay, during which we abort)
-			mockFetch.mockResolvedValueOnce(
-				new Response(JSON.stringify({ messages: [], hasNext: false }), { status: 200 }),
-			);
+			mockPolling((poll) => {
+				if (poll === 1) {
+					return new Response(
+						JSON.stringify({
+							messages: [
+								{ ...WIRE_MESSAGE, order: 1 },
+								{ ...WIRE_MESSAGE, order: 2, message_id: 'msg-2' },
+							],
+							hasNext: false,
+						}),
+						{ status: 200 },
+					);
+				}
+				if (poll === 2) {
+					return new Response(
+						JSON.stringify({
+							messages: [{ ...WIRE_MESSAGE, order: 3, message_id: 'msg-3' }],
+							hasNext: false,
+						}),
+						{ status: 200 },
+					);
+				}
+				return new Response(JSON.stringify({ messages: [], hasNext: false }), { status: 200 });
+			});
 
 			const received: string[] = [];
-			for await (const message of transport.subscribe({
+			for await (const event of transport.subscribe({
 				signer: defaultKeypair,
 				groupId: WIRE_MESSAGE.group_id,
 				signal: controller.signal,
 			})) {
-				received.push(message.messageId);
+				if (event.type !== 'message.created') continue;
+				received.push(event.message.messageId);
 				if (received.length === 3) {
 					controller.abort();
 				}
@@ -397,11 +405,13 @@ describe('HTTPRelayerTransport', () => {
 
 			const received: string[] = [];
 			await expect(async () => {
-				for await (const message of transport.subscribe({
+				for await (const event of transport.subscribe({
 					signer: defaultKeypair,
 					groupId: WIRE_MESSAGE.group_id,
 				})) {
-					received.push(message.messageId);
+					if (event.type === 'message.created') {
+						received.push(event.message.messageId);
+					}
 				}
 			}).rejects.toThrow(RelayerTransportError);
 
@@ -417,39 +427,36 @@ describe('HTTPRelayerTransport', () => {
 
 			const controller = new AbortController();
 
-			// First poll: 500 server error (should retry)
-			mockFetch.mockResolvedValueOnce(
-				new Response(JSON.stringify({ error: 'Internal server error' }), { status: 500 }),
-			);
-
-			// Second poll: success with a message, then abort
-			mockFetch.mockResolvedValueOnce(
-				new Response(
-					JSON.stringify({
-						messages: [{ ...WIRE_MESSAGE, order: 1 }],
-						hasNext: false,
-					}),
-					{ status: 200 },
-				),
-			);
-
-			// Third poll: empty (triggers delay, abort during it)
-			mockFetch.mockResolvedValueOnce(
-				new Response(JSON.stringify({ messages: [], hasNext: false }), { status: 200 }),
-			);
+			mockPolling((poll) => {
+				// First poll: 500 server error (should retry)
+				if (poll === 1) {
+					return new Response(JSON.stringify({ error: 'Internal server error' }), {
+						status: 500,
+					});
+				}
+				// Second poll: success with a message, then abort
+				if (poll === 2) {
+					return new Response(
+						JSON.stringify({ messages: [{ ...WIRE_MESSAGE, order: 1 }], hasNext: false }),
+						{ status: 200 },
+					);
+				}
+				return new Response(JSON.stringify({ messages: [], hasNext: false }), { status: 200 });
+			});
 
 			const received: string[] = [];
-			for await (const message of transport.subscribe({
+			for await (const event of transport.subscribe({
 				signer: defaultKeypair,
 				groupId: WIRE_MESSAGE.group_id,
 				signal: controller.signal,
 			})) {
-				received.push(message.messageId);
+				if (event.type !== 'message.created') continue;
+				received.push(event.message.messageId);
 				controller.abort();
 			}
 
 			expect(received).toEqual([WIRE_MESSAGE.message_id]);
-			// Should have retried after the 500
+			// Should have retried after the 500 (message polls only; abort precedes reactions)
 			expect(mockFetch).toHaveBeenCalledTimes(2);
 		});
 
@@ -460,18 +467,21 @@ describe('HTTPRelayerTransport', () => {
 				fetch: mockFetch,
 			});
 
-			mockFetch.mockResolvedValue(
-				new Response(JSON.stringify({ messages: [], hasNext: false }), { status: 200 }),
+			mockPolling(
+				() =>
+					new Response(JSON.stringify({ messages: [], hasNext: false }), { status: 200 }),
 			);
 
 			setTimeout(() => transport.disconnect(), 50);
 
 			const received: string[] = [];
-			for await (const message of transport.subscribe({
+			for await (const event of transport.subscribe({
 				signer: defaultKeypair,
 				groupId: WIRE_MESSAGE.group_id,
 			})) {
-				received.push(message.messageId);
+				if (event.type === 'message.created') {
+					received.push(event.message.messageId);
+				}
 			}
 
 			expect(received).toEqual([]);
@@ -543,7 +553,10 @@ describe('HTTPRelayerTransport', () => {
 			const keypair = Ed25519Keypair.generate();
 			const groupId = '0x' + 'ab'.repeat(32);
 			mockFetch.mockResolvedValueOnce(
-				new Response(JSON.stringify([{ chain_seq: 1, emoji_code: 42, count: 3 }]), { status: 200 }),
+				new Response(
+					JSON.stringify([{ chain_seq: 1, emoji: '👍', count: 3, reactors: ['0xa', '0xb'] }]),
+					{ status: 200 },
+				),
 			);
 
 			const rows = await transport.listGroupReactions({
@@ -552,9 +565,86 @@ describe('HTTPRelayerTransport', () => {
 				chainSeq: 1,
 			});
 
-			expect(rows).toEqual([{ chainSeq: 1, emojiCode: 42, count: 3 }]);
+			expect(rows).toEqual([{ chainSeq: 1, emoji: '👍', count: 3, reactors: ['0xa', '0xb'] }]);
 			const url = mockFetch.mock.calls[0][0] as string;
 			expect(url).toBe(`${MOCK_RELAYER_URL}/v1/groups/${groupId}/reactions?chain_seq=1`);
+		});
+
+		it('subscribe polls messages and diffs reaction snapshots into events', async () => {
+			const transport = new HTTPRelayerTransport({
+				relayerUrl: MOCK_RELAYER_URL,
+				apiPrefix: '/v1',
+				pollingIntervalMs: 1,
+				fetch: mockFetch,
+			});
+			const controller = new AbortController();
+
+			let messagesCall = 0;
+			let reactionsCall = 0;
+			mockFetch.mockImplementation(async (input) => {
+				const url = String(input);
+				if (url.includes('/reactions')) {
+					reactionsCall += 1;
+					// Poll 1: baseline (no events). Poll 2: reaction added. Poll 3: removed.
+					if (reactionsCall === 1) {
+						return new Response(JSON.stringify([]), { status: 200 });
+					}
+					if (reactionsCall === 2) {
+						return new Response(
+							JSON.stringify([{ chain_seq: 1, emoji: '👍', count: 1, reactors: ['0xa'] }]),
+							{ status: 200 },
+						);
+					}
+					return new Response(JSON.stringify([]), { status: 200 });
+				}
+				messagesCall += 1;
+				if (messagesCall === 1) {
+					return new Response(JSON.stringify({ messages: [WIRE_MESSAGE], hasNext: false }), {
+						status: 200,
+					});
+				}
+				return new Response(JSON.stringify({ messages: [], hasNext: false }), { status: 200 });
+			});
+
+			const events: string[] = [];
+			for await (const event of transport.subscribe({
+				signer: defaultKeypair,
+				groupId: WIRE_MESSAGE.group_id,
+				signal: controller.signal,
+			})) {
+				if (event.type === 'message.created') {
+					events.push(`message:${event.message.messageId}`);
+				} else {
+					events.push(
+						`reaction:${event.reaction.chainSeq}:${event.reaction.emoji}:${event.reaction.count}:${event.reaction.reactors.join('|')}`,
+					);
+				}
+				if (events.length === 3) controller.abort();
+			}
+
+			expect(events).toEqual([
+				`message:${WIRE_MESSAGE.message_id}`,
+				'reaction:1:👍:1:0xa',
+				'reaction:1:👍:0:',
+			]);
+		});
+
+		it('defaults reactors to an empty array for legacy responses', async () => {
+			const transport = new HTTPRelayerTransport({
+				relayerUrl: MOCK_RELAYER_URL,
+				apiPrefix: '/v1',
+				fetch: mockFetch,
+			});
+			mockFetch.mockResolvedValueOnce(
+				new Response(JSON.stringify([{ chain_seq: 1, emoji: '👍', count: 3 }]), { status: 200 }),
+			);
+
+			const rows = await transport.listGroupReactions({
+				signer: defaultKeypair,
+				groupId: '0x' + 'ab'.repeat(32),
+			});
+
+			expect(rows).toEqual([{ chainSeq: 1, emoji: '👍', count: 3, reactors: [] }]);
 		});
 
 		it('POST /v1/groups/:id/reactions with body auth', async () => {
@@ -569,7 +659,7 @@ describe('HTTPRelayerTransport', () => {
 				signer: defaultKeypair,
 				groupId: '0x' + 'ab'.repeat(32),
 				chainSeq: 2,
-				emojiCode: 128077,
+				emoji: '👍',
 				add: false,
 			});
 
@@ -578,7 +668,7 @@ describe('HTTPRelayerTransport', () => {
 			expect(init?.method).toBe('POST');
 			const body = JSON.parse(init?.body as string);
 			expect(body.chain_seq).toBe(2);
-			expect(body.emoji_code).toBe(128077);
+			expect(body.emoji).toBe('👍');
 			expect(body.add).toBe(false);
 			expect(body.group_id).toBe('0x' + 'ab'.repeat(32));
 		});

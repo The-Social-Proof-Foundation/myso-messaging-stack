@@ -23,6 +23,7 @@ import type {
 	PutUserReadStateParams,
 	RelayerMessage,
 	RelayerReactionEntry,
+	RelayerSubscriptionEvent,
 	RelayerAgentConversation,
 	SendMessageParams,
 	SendMessageResult,
@@ -97,7 +98,7 @@ export class HybridRelayerTransport implements RelayerTransport {
 		return this.#http.deleteMessage(params);
 	}
 
-	async *subscribe(params: SubscribeParams): AsyncIterable<RelayerMessage> {
+	async *subscribe(params: SubscribeParams): AsyncIterable<RelayerSubscriptionEvent> {
 		if (!this.#preferWebSocket) {
 			yield* this.#http.subscribe(params);
 			return;

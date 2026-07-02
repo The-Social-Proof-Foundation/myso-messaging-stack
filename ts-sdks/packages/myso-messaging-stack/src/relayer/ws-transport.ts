@@ -4,8 +4,13 @@
 import { createWsAuthQuery } from './auth-headers.js';
 import type { SubscribeParams } from './types.js';
 import { RelayerTransportError } from './types.js';
-import type { RelayerMessage } from './types.js';
-import { fromWireMessage, type WireMessageCreatedEvent } from './wire.js';
+import type { RelayerSubscriptionEvent } from './types.js';
+import {
+	fromWireMessage,
+	fromWireReactionEvent,
+	type WireMessageCreatedEvent,
+	type WireReactionUpdatedEvent,
+} from './wire.js';
 
 /** Thrown when a WebSocket connection cannot be established or is lost. */
 export class WsConnectionError extends Error {
@@ -71,8 +76,9 @@ function delay(ms: number, signal?: AbortSignal): Promise<void> {
 /**
  * WebSocket transport for realtime `subscribe()` only.
  *
- * Parses `{ type: "message.created", message: WireMessageResponse }` frames and
- * yields {@link RelayerMessage} directly — no HTTP refetch after delivery.
+ * Parses `{ type: "message.created", message: WireMessageResponse }` and
+ * `{ type: "reaction.updated", ... }` frames and yields domain events
+ * directly — no HTTP refetch after delivery.
  */
 export class WSRelayerTransport {
 	readonly #relayerUrl: string;
@@ -97,16 +103,18 @@ export class WSRelayerTransport {
 		this.#WebSocket = config.WebSocket ?? globalThis.WebSocket;
 	}
 
-	async *subscribe(params: SubscribeParams): AsyncIterable<RelayerMessage> {
+	async *subscribe(params: SubscribeParams): AsyncIterable<RelayerSubscriptionEvent> {
 		let lastOrder = params.afterOrder;
 		let reconnectAttempt = 0;
 
 		while (!this.#disconnected && !params.signal?.aborted) {
 			try {
-				for await (const message of this.#connectAndStream(params, lastOrder)) {
+				for await (const event of this.#connectAndStream(params, lastOrder)) {
 					if (this.#disconnected || params.signal?.aborted) return;
-					yield message;
-					lastOrder = message.order;
+					yield event;
+					if (event.type === 'message.created') {
+						lastOrder = event.message.order;
+					}
 					reconnectAttempt = 0;
 				}
 				return;
@@ -141,22 +149,22 @@ export class WSRelayerTransport {
 	async *#connectAndStream(
 		params: SubscribeParams,
 		afterOrder: number | undefined,
-	): AsyncIterable<RelayerMessage> {
+	): AsyncIterable<RelayerSubscriptionEvent> {
 		const query = await createWsAuthQuery(params.signer, params.groupId, afterOrder);
 		const wsUrl = `${relayerUrlToWsBase(this.#relayerUrl)}${this.#wsPath}?${query}`;
 
 		const socket = new this.#WebSocket(wsUrl);
-		const messageQueue: RelayerMessage[] = [];
-		let resolveNext: ((value: RelayerMessage | typeof STREAM_END) => void) | undefined;
+		const messageQueue: RelayerSubscriptionEvent[] = [];
+		let resolveNext: ((value: RelayerSubscriptionEvent | typeof STREAM_END) => void) | undefined;
 		let streamEnded = false;
 		const STREAM_END = Symbol('stream_end');
 
-		const pushMessage = (message: RelayerMessage) => {
+		const pushEvent = (event: RelayerSubscriptionEvent) => {
 			if (resolveNext) {
-				resolveNext(message);
+				resolveNext(event);
 				resolveNext = undefined;
 			} else {
-				messageQueue.push(message);
+				messageQueue.push(event);
 			}
 		};
 
@@ -188,15 +196,19 @@ export class WSRelayerTransport {
 		socket.onmessage = (event) => {
 			try {
 				const data = typeof event.data === 'string' ? event.data : String(event.data);
-				const frame = JSON.parse(data) as WireMessageCreatedEvent | { type?: string };
-				if (frame.type !== 'message.created' || !('message' in frame)) {
-					return;
+				const frame = JSON.parse(data) as
+					| WireMessageCreatedEvent
+					| WireReactionUpdatedEvent
+					| { type?: string };
+				if (frame.type === 'message.created' && 'message' in frame) {
+					const message = fromWireMessage(frame.message);
+					if (afterOrder !== undefined && message.order <= afterOrder) {
+						return;
+					}
+					pushEvent({ type: 'message.created', message });
+				} else if (frame.type === 'reaction.updated' && 'chain_seq' in frame) {
+					pushEvent({ type: 'reaction.updated', reaction: fromWireReactionEvent(frame) });
 				}
-				const message = fromWireMessage(frame.message);
-				if (afterOrder !== undefined && message.order <= afterOrder) {
-					return;
-				}
-				pushMessage(message);
 			} catch {
 				// Ignore malformed frames; server should only send valid JSON events.
 			}
@@ -221,7 +233,7 @@ export class WSRelayerTransport {
 					continue;
 				}
 
-				const next = await new Promise<RelayerMessage | typeof STREAM_END>((resolve) => {
+				const next = await new Promise<RelayerSubscriptionEvent | typeof STREAM_END>((resolve) => {
 					if (messageQueue.length > 0) {
 						resolve(messageQueue.shift()!);
 						return;

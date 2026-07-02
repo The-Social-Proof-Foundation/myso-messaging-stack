@@ -39,10 +39,14 @@ interface RelayerTransport {
   fetchMessage(params: FetchMessageParams): Promise<RelayerMessage>;
   updateMessage(params: UpdateMessageParams): Promise<void>;
   deleteMessage(params: DeleteMessageParams): Promise<void>;
-  subscribe(params: SubscribeParams): AsyncIterable<RelayerMessage>;
+  subscribe(params: SubscribeParams): AsyncIterable<RelayerSubscriptionEvent>;
+  listGroupReactions(params: ListGroupReactionsParams): Promise<RelayerReactionEntry[]>;
+  postGroupReaction(params: PostGroupReactionParams): Promise<void>;
   disconnect(): void;
 }
 ```
+
+`subscribe()` yields a union of `{ type: 'message.created', message }` and `{ type: 'reaction.updated', reaction }` events.
 
 The built-in `HTTPRelayerTransport` connects to the reference relayer via HTTP polling. You can implement a custom transport for WebSocket, SSE, or any other delivery backend. See [Extending](./Extending.md) for details.
 

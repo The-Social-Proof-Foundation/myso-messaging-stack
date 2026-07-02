@@ -142,12 +142,16 @@ await client.messaging.sendMessage({
   text: 'Hello, world!',
 });
 
-// Subscribe to messages
-for await (const msg of client.messaging.subscribe({
+// Subscribe to messages and reaction updates
+for await (const event of client.messaging.subscribe({
   signer: keypair,
   groupRef: { uuid: 'my-group-uuid' },
   signal: new AbortController().signal,
 })) {
-  console.log(msg.text, msg.senderVerified);
+  if (event.type === 'message') {
+    console.log(event.message.text, event.message.senderVerified);
+  } else {
+    console.log(event.reaction.emoji, event.reaction.count);
+  }
 }
 ```

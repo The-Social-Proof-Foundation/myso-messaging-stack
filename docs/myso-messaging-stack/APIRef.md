@@ -41,7 +41,7 @@ type GroupRef =
 
 ### `DecryptedMessage`
 
-Returned by `getMessage`, `getMessages`, and `subscribe`:
+Returned by `getMessage` and `getMessages`, and carried inside `subscribe` message events:
 
 ```typescript
 interface DecryptedMessage {
@@ -210,28 +210,38 @@ Soft-delete a message. Only the original sender can delete.
 
 ### `subscribe(options)`
 
-Subscribe to real-time messages for a group. Returns an `AsyncIterable` that yields decrypted messages as they arrive.
+Subscribe to real-time messages and reaction updates for a group. Returns an `AsyncIterable` that yields events as they arrive: message events carry a decrypted message; reaction events carry absolute state (count + reactor list) for one `(message order, emoji)` pair.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `signer` | `Signer` | Yes | Authenticates with the relayer |
 | `groupRef` | `GroupRef` | Yes | Target group |
-| `afterOrder` | `number` | No | Resume from this order (exclusive) |
+| `afterOrder` | `number` | No | Resume message delivery from this order (exclusive) |
 | `signal` | `AbortSignal` | No | Cancel the subscription |
 
-**Returns:** `AsyncIterable<DecryptedMessage>`
+**Returns:** `AsyncIterable<MessagingEvent>` where
+
+```typescript
+type MessagingEvent =
+  | { type: 'message'; message: DecryptedMessage }
+  | { type: 'reaction'; reaction: RelayerReactionEvent };
+```
 
 Messages that fail decryption are silently skipped.
 
 ```typescript
 const controller = new AbortController();
 
-for await (const msg of client.messaging.subscribe({
+for await (const event of client.messaging.subscribe({
   signer: keypair,
   groupRef: { uuid: 'my-group' },
   signal: controller.signal,
 })) {
-  console.log(msg.text, msg.senderVerified);
+  if (event.type === 'message') {
+    console.log(event.message.text, event.message.senderVerified);
+  } else {
+    console.log(event.reaction.emoji, event.reaction.count, event.reaction.reactors);
+  }
 }
 ```
 

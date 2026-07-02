@@ -27,7 +27,8 @@ The relayer is an indexer — it only reflects what is on-chain. It never makes 
 - **DM block enforcement** — optional `SOCIAL_SERVER_URL` + `BlockCheckService` returns `403` code `BLOCKED` for 1:1 DMs
 - **Encrypted read-state** — opaque `GET/PUT /v1/users/read-state` per wallet (see `docs/myso-messaging-stack/ReadState.md`)
 - **Optional push** — `POST /v1/devices/push-tokens`, `POST /v1/devices/presence`, env-gated APNs delivery on new messages (see `docs/myso-messaging-stack/ClientSide-iOS.md`)
-- **WebSocket realtime** — `GET /v1/ws` pushes full encrypted `MessageResponse` JSON; Postgres `LISTEN/NOTIFY` coordinates cross-instance delivery (metadata only on NOTIFY)
+- **WebSocket realtime** — `GET /v1/ws` pushes full encrypted `MessageResponse` JSON plus `reaction.updated` events; Postgres `LISTEN/NOTIFY` coordinates cross-instance delivery (metadata only on NOTIFY for messages)
+- **Message reactions** — per-user emoji reactions via `GET/POST /v1/groups/:id/reactions` (canonical Unicode emoji strings, idempotent add/remove, live `reaction.updated` broadcast)
 
 **Deprecated:** plaintext `GET/POST /v1/groups/:id/receipts` — use encrypted read-state instead.
 
@@ -282,13 +283,45 @@ Soft-deletes a message. Only the original sender can delete their own message (o
 
 ---
 
+### `GET /v1/groups/:group_id/reactions` / `POST /v1/groups/:group_id/reactions`
+
+Per-user emoji reactions on messages, keyed by the message's relayer-assigned `order` (`chain_seq`). Reactions are stored as the canonical Unicode emoji string (NFC), so skin tones, ZWJ sequences, and variation selectors are supported.
+
+**Required permission:** `MessagingReader` (GET) / `MessagingSender` (POST)
+
+**POST request body:**
+```json
+{
+  "group_id": "0xabc123...",
+  "sender_address": "0xdef456...",
+  "timestamp": 1700000000,
+  "chain_seq": 11,
+  "emoji": "👍",
+  "add": true
+}
+```
+
+- The reacting member is taken from the authenticated sender — one reaction per `(message, emoji, member)`.
+- Add/remove are **idempotent**: re-adding an existing reaction or removing an absent one is a no-op.
+- **Response (200):** `{ "ok": true, "changed": true }` — `changed` is `false` for no-op requests.
+- On change, a `reaction.updated` event is broadcast to WebSocket subscribers (see below).
+
+**GET response (200)** (optional `?chain_seq=` filter):
+```json
+[
+  { "chain_seq": 11, "emoji": "👍", "count": 2, "reactors": ["0xabc...", "0xdef..."] }
+]
+```
+
+---
+
 ### `GET /v1/ws` (WebSocket)
 
-Live message subscription for group members. The relayer **never decrypts** message content — WebSocket frames carry the same encrypted wire JSON as `GET /messages`.
+Live message + reaction subscription for group members. The relayer **never decrypts** message content — WebSocket frames carry the same encrypted wire JSON as `GET /messages`.
 
 **Auth:** Same canonical string as GET messages: `"timestamp:sender_address:group_id"`. Browsers cannot set custom headers on WebSocket upgrade, so pass auth as query parameters: `group_id`, `sender_address`, `timestamp`, `signature`, `public_key`. Optional `after_order` filters events server-side.
 
-**Wire frame (server → client):**
+**Wire frames (server → client):**
 
 ```json
 {
@@ -305,7 +338,20 @@ Live message subscription for group members. The relayer **never decrypts** mess
 }
 ```
 
-**Postgres cross-instance signal:** On `STORAGE_TYPE=postgres`, each `INSERT` atomically emits `pg_notify('message_events', metadata_json)` where the payload contains only `message_id`, `group_id`, `order`, and `sender` — **not** ciphertext. Each relayer instance listens, loads the encrypted row from storage, and fans out the full wire frame to local WebSocket subscribers.
+```json
+{
+  "type": "reaction.updated",
+  "group_id": "...",
+  "chain_seq": 11,
+  "emoji": "👍",
+  "count": 2,
+  "reactors": ["0xabc...", "0xdef..."]
+}
+```
+
+`reaction.updated` carries **absolute state** (full count + reactor list), so duplicate delivery is harmless — clients apply it idempotently.
+
+**Postgres cross-instance signal:** On `STORAGE_TYPE=postgres`, each message `INSERT` atomically emits `pg_notify('message_events', metadata_json)` where the payload contains only `message_id`, `group_id`, `order`, and `sender` — **not** ciphertext. Each relayer instance listens, loads the encrypted row from storage, and fans out the full wire frame to local WebSocket subscribers. Reaction changes NOTIFY on the same channel with the full (non-sensitive) `reaction.updated` payload, which is fanned out directly without a storage reload.
 
 **In-memory dev:** The create-message handler publishes directly to the in-process `RealtimeHub` (no NOTIFY).
 
@@ -396,7 +442,7 @@ Set `STORAGE_TYPE=postgres` and `DATABASE_URL` for durable storage. The Postgres
 | Encrypted read-state | `user_read_states` | Opaque blobs per wallet |
 | Push tokens | `push_tokens` | iOS/APNs registration |
 | Presence | `presence` | Last-seen for push gating |
-| Reaction tallies | `reaction_tallies` | Off-chain mirror |
+| Message reactions | `message_reactions` | Per-user rows `(group_id, chain_seq, emoji, member_address)`; replaces the old aggregate `reaction_tallies` |
 | Group pins | `group_pins` | Off-chain mirror |
 
 **Still in-memory (by design):**

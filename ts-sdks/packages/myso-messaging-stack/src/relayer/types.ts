@@ -115,9 +115,30 @@ export interface FetchMessagesResult {
 /** One row from `GET /v1/groups/:group_id/reactions`. */
 export interface RelayerReactionEntry {
 	chainSeq: number;
-	emojiCode: number;
+	/** Canonical Unicode emoji string (NFC), e.g. `👍`, `❤️`, `👨‍👩‍👧‍👦`. */
+	emoji: string;
 	count: number;
+	/** Wallet addresses of members who currently have this reaction set. */
+	reactors: string[];
 }
+
+/**
+ * Absolute-state reaction change (`reaction.updated` realtime event).
+ * Carries the full count + reactor list so duplicate delivery is idempotent.
+ */
+export interface RelayerReactionEvent {
+	groupId: string;
+	chainSeq: number;
+	/** Canonical Unicode emoji string (NFC). */
+	emoji: string;
+	count: number;
+	reactors: string[];
+}
+
+/** Union of realtime events yielded by `subscribe()`. */
+export type RelayerSubscriptionEvent =
+	| { type: 'message.created'; message: RelayerMessage }
+	| { type: 'reaction.updated'; reaction: RelayerReactionEvent };
 
 export interface ListGroupReactionsParams {
 	signer: Signer;
@@ -130,8 +151,9 @@ export interface PostGroupReactionParams {
 	signer: Signer;
 	groupId: string;
 	chainSeq: number;
-	emojiCode: number;
-	/** When false, decrements tally (never below zero on server). */
+	/** Canonical Unicode emoji string (NFC) — see `emojiToStorage()`. */
+	emoji: string;
+	/** When false, removes the signer's reaction (idempotent on server). */
 	add?: boolean;
 }
 

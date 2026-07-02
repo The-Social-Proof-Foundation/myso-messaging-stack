@@ -33,16 +33,57 @@ async fn postgres_reactions_and_pins_survive_reconnect() {
     let group_id = "test-group-pg-storage";
 
     let storage = create_postgres_storage(&database_url).await.unwrap();
-    storage
-        .replace_reaction_tally(group_id, 1, 0x1f600, true)
+    let first = storage
+        .set_reaction(group_id, 1, "😀", "0xalice", true)
         .await
         .unwrap();
+    assert!(first.is_some());
+
+    // Idempotent re-add: no change.
+    let dup = storage
+        .set_reaction(group_id, 1, "😀", "0xalice", true)
+        .await
+        .unwrap();
+    assert!(dup.is_none());
+
+    let second = storage
+        .set_reaction(group_id, 1, "😀", "0xbob", true)
+        .await
+        .unwrap()
+        .expect("second reactor changes state");
+    assert_eq!(second.count, 2);
+    assert_eq!(second.reactors, vec!["0xalice", "0xbob"]);
+
+    // Multi-code-point emoji (ZWJ sequence) round-trips through TEXT storage.
+    let family = storage
+        .set_reaction(group_id, 1, "👨‍👩‍👧‍👦", "0xalice", true)
+        .await
+        .unwrap()
+        .expect("zwj emoji add changes state");
+    assert_eq!(family.emoji, "👨‍👩‍👧‍👦");
+
     storage.set_pin_for_seq(group_id, 5, true).await.unwrap();
 
     let storage2 = create_postgres_storage(&database_url).await.unwrap();
     let reactions = storage2.list_reactions(group_id, None).await.unwrap();
-    assert_eq!(reactions.len(), 1);
-    assert_eq!(reactions[0].count, 1);
+    assert_eq!(reactions.len(), 2);
+    let smiley = reactions.iter().find(|r| r.emoji == "😀").unwrap();
+    assert_eq!(smiley.count, 2);
+    assert_eq!(smiley.reactors, vec!["0xalice", "0xbob"]);
+
+    // Removal is per-user and idempotent.
+    let removed = storage2
+        .set_reaction(group_id, 1, "😀", "0xalice", false)
+        .await
+        .unwrap()
+        .expect("removal changes state");
+    assert_eq!(removed.count, 1);
+    assert_eq!(removed.reactors, vec!["0xbob"]);
+    let absent = storage2
+        .set_reaction(group_id, 1, "😀", "0xalice", false)
+        .await
+        .unwrap();
+    assert!(absent.is_none());
 
     let pins = storage2.list_pins(group_id).await.unwrap();
     assert_eq!(pins, vec![5]);
