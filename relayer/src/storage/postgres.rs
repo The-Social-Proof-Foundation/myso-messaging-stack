@@ -9,8 +9,8 @@ use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
 use crate::models::{
-    Attachment, EncryptedBlobRecord, Message, MessageAttribution, PushTokenRecord,
-    ReactionEntry, ReceiptStateResponse, SyncStatus,
+    Attachment, EncryptedBlobRecord, Message, MessageAttribution, PaidEscrowRecord,
+    PushTokenRecord, ReactionEntry, ReceiptStateResponse, SyncStatus,
 };
 use crate::services::realtime::{
     MessageCreatedEvent, ReactionUpdatedEvent, MESSAGE_EVENTS_CHANNEL,
@@ -315,6 +315,84 @@ impl StorageAdapter for PostgresStorage {
             .await
             .map_err(|e| StorageError::OperationFailed(e.to_string()))?;
         Ok(rows.iter().map(row_to_message).collect())
+    }
+
+    async fn record_paid_escrow(&self, escrow: PaidEscrowRecord) -> StorageResult<()> {
+        sqlx::query(
+            r#"INSERT INTO paid_message_escrows (group_id, seq, payer, recipient, amount, created_at_ms)
+               VALUES ($1,$2,$3,$4,$5,$6)
+               ON CONFLICT (group_id, seq) DO UPDATE SET
+                 payer = EXCLUDED.payer,
+                 recipient = EXCLUDED.recipient,
+                 amount = EXCLUDED.amount,
+                 created_at_ms = EXCLUDED.created_at_ms"#,
+        )
+        .bind(&escrow.group_id)
+        .bind(escrow.seq)
+        .bind(&escrow.payer)
+        .bind(&escrow.recipient)
+        .bind(escrow.amount)
+        .bind(escrow.created_at_ms)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| StorageError::OperationFailed(e.to_string()))?;
+        Ok(())
+    }
+
+    async fn has_paid_escrow(
+        &self,
+        group_id: &str,
+        payer: &str,
+        recipient: &str,
+        min_amount: i64,
+    ) -> StorageResult<bool> {
+        let exists: bool = sqlx::query_scalar(
+            r#"SELECT EXISTS(
+                 SELECT 1 FROM paid_message_escrows
+                 WHERE group_id = $1 AND payer = $2 AND recipient = $3 AND amount >= $4
+               )"#,
+        )
+        .bind(group_id)
+        .bind(payer)
+        .bind(recipient)
+        .bind(min_amount)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|e| StorageError::OperationFailed(e.to_string()))?;
+        Ok(exists)
+    }
+
+    async fn latest_paid_escrow_amount(
+        &self,
+        group_id: &str,
+        payer: &str,
+        recipient: &str,
+    ) -> StorageResult<Option<i64>> {
+        let amount: Option<i64> = sqlx::query_scalar(
+            r#"SELECT amount FROM paid_message_escrows
+               WHERE group_id = $1 AND payer = $2 AND recipient = $3
+               ORDER BY seq DESC
+               LIMIT 1"#,
+        )
+        .bind(group_id)
+        .bind(payer)
+        .bind(recipient)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| StorageError::OperationFailed(e.to_string()))?;
+        Ok(amount)
+    }
+
+    async fn has_message_from(&self, group_id: &str, sender: &str) -> StorageResult<bool> {
+        let exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM messages WHERE group_id = $1 AND sender_wallet_addr = $2)",
+        )
+        .bind(group_id)
+        .bind(sender)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|e| StorageError::OperationFailed(e.to_string()))?;
+        Ok(exists)
     }
 
     async fn set_reaction(

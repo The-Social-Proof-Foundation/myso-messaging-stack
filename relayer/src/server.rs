@@ -16,6 +16,7 @@ use crate::auth::{
 use crate::config::Config;
 use crate::file_storage::FileStorageClient;
 use crate::handlers::agent_groups;
+use crate::handlers::dm_gate;
 use crate::handlers::group_features;
 use crate::handlers::health::health_check;
 use crate::handlers::messages::{create_message, delete_message, get_messages, update_message};
@@ -25,7 +26,7 @@ use crate::handlers::user_read_state::{get_read_state, put_read_state};
 use crate::handlers::ws::ws_handler;
 use crate::services::{
     AttributionVerifyService, BlockCheckService, FileStorageSyncService, MembershipSyncService,
-    PgListenerService, PushService, RealtimeHub,
+    MessageGateService, PgListenerService, PushService, RealtimeHub,
 };
 use crate::state::AppState;
 use crate::storage::{create_agent_group_store_async, create_storage_async};
@@ -56,6 +57,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     )
     .await;
     let block_check = BlockCheckService::from_config(&config);
+    let message_gate = MessageGateService::from_config(&config);
     let push_service = PushService::from_config(&config);
     let realtime_hub = Arc::new(RealtimeHub::new());
 
@@ -66,6 +68,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         agent_group_store.clone(),
         AttributionVerifyService::from_config(&config),
         block_check,
+        message_gate.clone(),
         push_service,
         realtime_hub.clone(),
         config.realtime_enabled,
@@ -83,8 +86,13 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         }
     }
 
-    let mut sync_service =
-        MembershipSyncService::new(&config, membership_store.clone(), agent_group_store.clone());
+    let mut sync_service = MembershipSyncService::new(
+        &config,
+        membership_store.clone(),
+        agent_group_store.clone(),
+        storage.clone(),
+        message_gate,
+    );
     tokio::spawn(async move {
         sync_service.run().await;
     });
@@ -126,6 +134,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .route("/devices/push-tokens", post(post_push_token))
         .route("/devices/push-tokens/:token", delete(delete_push_token))
         .route("/devices/presence", post(post_presence))
+        .route("/messaging/dm-gate", get(dm_gate::get_dm_gate))
         .route(
             "/agent-conversations",
             get(agent_groups::list_agent_conversations),

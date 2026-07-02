@@ -1,4 +1,5 @@
 import { type SyntheticEvent, useState } from 'react';
+import { createPaidMessagingClient } from '@socialproof/myso-messaging-stack';
 import { useRequiredMessagingClient } from '../contexts/MessagingClientContext';
 import { signAndExecuteTransactionAndWait } from '../lib/sign-and-wait';
 import { addStoredGroup } from '../lib/group-store';
@@ -16,11 +17,19 @@ import {
   STALE_GHOST_OBJECT_ID,
   verifyCreateGroupObjectsOnRpc,
 } from '../lib/messaging-genesis-debug';
+import { PaymentConfirmDialog } from './PaymentConfirmDialog';
 
 interface CreateGroupModalProps {
   open: boolean;
   onClose: () => void;
   onGroupCreated: (uuid: string) => void;
+}
+
+/** New 1:1 DM waiting on the user to confirm the paid-messaging escrow. */
+interface PendingPaidDm {
+  recipient: string;
+  minCost: bigint;
+  name: string;
 }
 
 export function CreateGroupModal({
@@ -35,6 +44,11 @@ export function CreateGroupModal({
   const [loading, setLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Paid-DM gate for new 1:1 conversations.
+  const [pendingPaidDm, setPendingPaidDm] = useState<PendingPaidDm | null>(null);
+  const [payingDm, setPayingDm] = useState(false);
+  const [payError, setPayError] = useState<string | null>(null);
 
   if (!open) return null;
 
@@ -78,6 +92,38 @@ export function CreateGroupModal({
         .filter(Boolean);
 
       const sender = signer.toMySoAddress();
+
+      // New 1:1 DM: advisory paid-DM gate pre-check. The relayer enforces
+      // authoritatively on first send (402), this just avoids a doomed create.
+      if (initialMembers.length === 1) {
+        const recipient = initialMembers[0]!;
+        try {
+          const gate = await client.messaging.checkDmGate({
+            signer,
+            recipient,
+          });
+          if (gate.blocked) {
+            setError('You cannot message this user.');
+            return;
+          }
+          if (gate.reason === 'PAYMENT_REQUIRED' && gate.minCost !== null) {
+            // Never reached for followed recipients — the gate reports
+            // following: true and allows the DM without payment.
+            setPayError(null);
+            setPendingPaidDm({
+              recipient,
+              minCost: gate.minCost,
+              name: trimmedName,
+            });
+            return;
+          }
+        } catch (gateErr) {
+          // Advisory only — fall through to the normal create path and let
+          // the relayer enforce at first send.
+          console.warn('[chat-app] dm-gate pre-check unavailable:', gateErr);
+        }
+      }
+
       let resolvedMemoryAccountId: string | null | undefined;
       if (import.meta.env.DEV) {
         resolvedMemoryAccountId =
@@ -137,6 +183,63 @@ export function CreateGroupModal({
       setError(formatCreateGroupError(err));
     } finally {
       setLoading(false);
+      setSyncing(false);
+    }
+  }
+
+  /**
+   * Confirmed paid DM: one signed transaction creates the group and escrows
+   * the payment (`openPaidDm` → create_and_share_group + send_paid_message_digest).
+   * The escrow is funded by splitting from gas; the contract re-validates the
+   * recipient's minimum on-chain.
+   */
+  async function handleConfirmPaidDm() {
+    if (!pendingPaidDm) return;
+
+    setPayingDm(true);
+    setPayError(null);
+
+    try {
+      const client = await createFreshMessagingClient({
+        bypassGenesisCache: true,
+      });
+      const paid = createPaidMessagingClient({ messaging: client.messaging });
+
+      const uuid = crypto.randomUUID();
+      const { groupId } = await paid.openPaidDm({
+        signer,
+        recipient: pendingPaidDm.recipient,
+        escrowAmount: pendingPaidDm.minCost,
+        name: pendingPaidDm.name,
+        uuid,
+      });
+
+      setSyncing(true);
+      await waitForGroupReady({
+        client,
+        signer,
+        groupId,
+        uuid,
+        memberAddress: signer.toMySoAddress(),
+      });
+
+      addStoredGroup({
+        uuid,
+        name: pendingPaidDm.name,
+        groupId,
+        createdAt: Date.now(),
+      });
+
+      setName('');
+      setMembers('');
+      setPendingPaidDm(null);
+      onGroupCreated(uuid);
+      onClose();
+    } catch (err) {
+      console.error('Failed to open paid DM:', err);
+      setPayError(formatCreateGroupError(err));
+    } finally {
+      setPayingDm(false);
       setSyncing(false);
     }
   }
@@ -215,6 +318,20 @@ export function CreateGroupModal({
           </div>
         </form>
       </div>
+
+      {/* Paid-DM gate: recipient requires an escrow before a first message */}
+      <PaymentConfirmDialog
+        open={pendingPaidDm !== null}
+        recipient={pendingPaidDm?.recipient ?? null}
+        minCost={pendingPaidDm?.minCost ?? null}
+        busy={payingDm || syncing}
+        error={payError}
+        onConfirm={() => void handleConfirmPaidDm()}
+        onCancel={() => {
+          setPendingPaidDm(null);
+          setPayError(null);
+        }}
+      />
     </div>
   );
 }

@@ -19,22 +19,30 @@ use tracing::{debug, error, info, warn};
 
 use crate::auth::MembershipStore;
 use crate::config::Config;
-use crate::storage::AgentGroupStore;
+use crate::models::PaidEscrowRecord;
+use crate::storage::{AgentGroupStore, StorageAdapter};
 
 use super::agent_group_detector::{
     agent_group_from_created_event, detect_agent_groups_in_transaction,
 };
 use super::event_parser::{
-    parse_agent_detection_event, parse_agent_group_created_event, parse_myso_event,
+    parse_agent_detection_event, parse_agent_group_created_event, parse_follow_changed_event,
+    parse_myso_event, parse_paid_message_sent_event, parse_paid_policy_updated_event,
     AgentDetectionEvent, GroupsEvent,
 };
+use super::message_gate::MessageGateService;
 
 pub struct MembershipSyncService {
     myso_rpc_url: String,
     groups_package_id: String,
     messaging_package_id: String,
+    social_package_id: String,
     membership_store: Arc<dyn MembershipStore>,
     agent_group_store: Arc<dyn AgentGroupStore>,
+    /// Paid DM escrow index (PaidMessageSent events) lives in message storage.
+    storage: Arc<dyn StorageAdapter>,
+    /// Shared with HTTP handlers — checkpoint events refresh its follow/policy caches.
+    message_gate: MessageGateService,
     last_cursor: Option<u64>,
 }
 
@@ -43,21 +51,27 @@ impl MembershipSyncService {
         config: &Config,
         membership_store: Arc<dyn MembershipStore>,
         agent_group_store: Arc<dyn AgentGroupStore>,
+        storage: Arc<dyn StorageAdapter>,
+        message_gate: MessageGateService,
     ) -> Self {
         let last_cursor = membership_store.get_last_checkpoint_cursor();
         info!(
-            "MembershipSyncService init: last_cursor={:?}, groups_package_id={}, messaging_package_id={}, myso_rpc_url={}",
+            "MembershipSyncService init: last_cursor={:?}, groups_package_id={}, messaging_package_id={}, social_package_id={}, myso_rpc_url={}",
             last_cursor,
             config.groups_package_id,
             config.messaging_package_id,
+            config.social_package_id,
             config.myso_rpc_url,
         );
         Self {
             myso_rpc_url: config.myso_rpc_url.clone(),
             groups_package_id: config.groups_package_id.clone(),
             messaging_package_id: config.messaging_package_id.clone(),
+            social_package_id: config.social_package_id.clone(),
             membership_store,
             agent_group_store,
+            storage,
+            message_gate,
             last_cursor,
         }
     }
@@ -178,6 +192,54 @@ impl MembershipSyncService {
                             permissions_granted.push(granted);
                         }
                     }
+                }
+
+                // Paid DM escrow index: authoritative payment state for the paid-DM gate.
+                if let Some(paid) =
+                    parse_paid_message_sent_event(event, &self.messaging_package_id)
+                {
+                    info!(
+                        "PaidMessageSent: group={} seq={} payer={} recipient={} amount={}",
+                        paid.group_id, paid.seq, paid.payer, paid.recipient, paid.amount
+                    );
+                    let record = PaidEscrowRecord {
+                        group_id: paid.group_id.clone(),
+                        seq: i64::try_from(paid.seq).unwrap_or(i64::MAX),
+                        payer: paid.payer,
+                        recipient: paid.recipient,
+                        amount: i64::try_from(paid.amount).unwrap_or(i64::MAX),
+                        created_at_ms: i64::try_from(paid.created_at_ms).unwrap_or(i64::MAX),
+                    };
+                    if let Err(e) = self.storage.record_paid_escrow(record).await {
+                        warn!(
+                            "Failed to record paid escrow for group {}: {}",
+                            paid.group_id, e
+                        );
+                    }
+                }
+
+                // Gate cache refresh from chain truth (avoids stale social-server refetch).
+                if let Some(policy) =
+                    parse_paid_policy_updated_event(event, &self.messaging_package_id)
+                {
+                    debug!(
+                        "PaidMessagingPolicyUpdated: wallet={} enabled={} min_cost={:?}",
+                        policy.wallet, policy.enabled, policy.min_cost
+                    );
+                    self.message_gate
+                        .apply_policy_update(&policy.wallet, policy.enabled, policy.min_cost);
+                }
+
+                if let Some(follow) = parse_follow_changed_event(event, &self.social_package_id) {
+                    debug!(
+                        "FollowChanged: {} -> {} following={}",
+                        follow.follower, follow.followee, follow.following
+                    );
+                    self.message_gate.apply_follow_update(
+                        &follow.follower,
+                        &follow.followee,
+                        follow.following,
+                    );
                 }
             }
 

@@ -16,8 +16,10 @@ import {
 } from './auth-headers.js';
 import type { RelayerTransport } from './transport.js';
 import type {
+	CheckDmGateParams,
 	DeleteMessageParams,
 	DeletePushTokenParams,
+	DmGateResult,
 	FetchMessageParams,
 	FetchMessagesParams,
 	FetchMessagesResult,
@@ -43,7 +45,7 @@ import type {
 	SubscribeParams,
 	UpdateMessageParams,
 } from './types.js';
-import { RelayerTransportError } from './types.js';
+import { PaymentRequiredError, RelayerTransportError } from './types.js';
 import {
 	fromWireMessage,
 	toWireAttachment,
@@ -98,6 +100,7 @@ interface WireAgentConversation {
 	creator_principal: string;
 	creator_sub_agent_id?: string | null;
 	creator_identity_class?: number | null;
+	organization_id?: string | null;
 	group_name?: string | null;
 	group_uuid?: string | null;
 	created_at: number;
@@ -114,6 +117,7 @@ function fromWireAgentConversation(wire: WireAgentConversation): RelayerAgentCon
 		creatorPrincipal: wire.creator_principal,
 		creatorSubAgentId: wire.creator_sub_agent_id,
 		creatorIdentityClass: wire.creator_identity_class,
+		organizationId: wire.organization_id,
 		groupName: wire.group_name,
 		groupUuid: wire.group_uuid,
 		createdAt: wire.created_at,
@@ -123,6 +127,32 @@ function fromWireAgentConversation(wire: WireAgentConversation): RelayerAgentCon
 interface WireErrorResponse {
 	error: string;
 	code?: string;
+	/** PAYMENT_REQUIRED detail: minimum escrow in MYSO base units, as a string. */
+	min_cost?: string | null;
+	/** PAYMENT_REQUIRED detail: recipient wallet requiring payment. */
+	recipient?: string | null;
+}
+
+interface WireDmGateResponse {
+	allowed: boolean;
+	reason?: string | null;
+	blocked: boolean;
+	following: boolean;
+	paid: boolean;
+	first_outbound?: boolean;
+	peer_paid?: boolean;
+	peer_escrow_amount?: string | null;
+	min_cost?: string | null;
+	recipient: string;
+}
+
+function parseMinCost(minCost: string | null | undefined): bigint | null {
+	if (minCost === null || minCost === undefined || minCost === '') return null;
+	try {
+		return BigInt(minCost);
+	} catch {
+		return null;
+	}
 }
 
 async function createWalletDeleteAuth(
@@ -508,6 +538,30 @@ export class HTTPRelayerTransport implements RelayerTransport {
 		return wire.conversations.map(fromWireAgentConversation);
 	}
 
+	async checkDmGate(params: CheckDmGateParams): Promise<DmGateResult> {
+		const headers = await createWalletHeaderAuth(params.signer);
+		const queryParams = new URLSearchParams({ recipient: params.recipient });
+		if (params.groupId) {
+			queryParams.set('group_id', params.groupId);
+		}
+		const wire = await this.#request<WireDmGateResponse>(
+			this.#v1Path(`/messaging/dm-gate?${queryParams.toString()}`),
+			{ method: 'GET', headers },
+		);
+		return {
+			allowed: wire.allowed,
+			reason: wire.reason ?? null,
+			blocked: wire.blocked,
+			following: wire.following,
+			paid: wire.paid,
+			firstOutbound: wire.first_outbound ?? true,
+			peerPaid: wire.peer_paid ?? false,
+			peerEscrowAmount: parseMinCost(wire.peer_escrow_amount),
+			minCost: parseMinCost(wire.min_cost),
+			recipient: wire.recipient,
+		};
+	}
+
 	/**
 	 * Polling implementation of the realtime event stream: polls messages and
 	 * diffs reaction listings into synthetic `reaction.updated` events. The
@@ -634,11 +688,18 @@ export class HTTPRelayerTransport implements RelayerTransport {
 
 	/**
 	 * Parse an error response from the relayer and throw a RelayerTransportError.
-	 * The relayer returns two error shapes:
+	 * `402 PAYMENT_REQUIRED` (paid-DM gate) maps to {@link PaymentRequiredError}
+	 * carrying the recipient's minimum escrow.
 	 */
 	async #handleErrorResponse(response: Response): Promise<never> {
 		try {
 			const body = (await response.json()) as WireErrorResponse;
+			if (response.status === 402 || body.code === 'PAYMENT_REQUIRED') {
+				throw new PaymentRequiredError(body.error, {
+					minCost: parseMinCost(body.min_cost),
+					recipient: body.recipient ?? null,
+				});
+			}
 			throw new RelayerTransportError(body.error, response.status, body.code);
 		} catch (error) {
 			if (error instanceof RelayerTransportError) throw error;

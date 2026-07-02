@@ -150,8 +150,8 @@ impl AgentGroupStore for PostgresAgentGroupStore {
             r#"INSERT INTO agent_messaging_groups (
                 group_id, creator_actor, creator_principal,
                 creator_sub_agent_id, creator_identity_class,
-                group_name, group_uuid, created_at
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                organization_id, group_name, group_uuid, created_at
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
             ON CONFLICT (group_id) DO NOTHING"#,
         )
         .bind(&group.group_id)
@@ -159,6 +159,7 @@ impl AgentGroupStore for PostgresAgentGroupStore {
         .bind(&group.creator_principal)
         .bind(&group.creator_sub_agent_id)
         .bind(group.creator_identity_class)
+        .bind(&group.organization_id)
         .bind(&group.group_name)
         .bind(&group.group_uuid)
         .bind(group.created_at)
@@ -177,7 +178,7 @@ impl AgentGroupStore for PostgresAgentGroupStore {
         let rows = sqlx::query_as::<_, AgentGroupRow>(
             r#"SELECT group_id, creator_actor, creator_principal,
                       creator_sub_agent_id, creator_identity_class,
-                      group_name, group_uuid, created_at
+                      organization_id, group_name, group_uuid, created_at
                FROM agent_messaging_groups
                WHERE creator_principal = $1
                ORDER BY created_at DESC
@@ -200,7 +201,7 @@ impl AgentGroupStore for PostgresAgentGroupStore {
         let rows = sqlx::query_as::<_, AgentGroupRow>(
             r#"SELECT group_id, creator_actor, creator_principal,
                       creator_sub_agent_id, creator_identity_class,
-                      group_name, group_uuid, created_at
+                      organization_id, group_name, group_uuid, created_at
                FROM agent_messaging_groups
                WHERE creator_actor = $1
                ORDER BY created_at DESC
@@ -223,6 +224,7 @@ struct AgentGroupRow {
     creator_principal: String,
     creator_sub_agent_id: Option<String>,
     creator_identity_class: Option<i16>,
+    organization_id: Option<String>,
     group_name: Option<String>,
     group_uuid: Option<String>,
     created_at: DateTime<Utc>,
@@ -236,6 +238,7 @@ impl From<AgentGroupRow> for AgentMessagingGroup {
             creator_principal: row.creator_principal,
             creator_sub_agent_id: row.creator_sub_agent_id,
             creator_identity_class: row.creator_identity_class,
+            organization_id: row.organization_id,
             group_name: row.group_name,
             group_uuid: row.group_uuid,
             created_at: row.created_at,
@@ -256,6 +259,7 @@ mod tests {
             creator_principal: "0xprincipal".to_string(),
             creator_sub_agent_id: Some("0xsub".to_string()),
             creator_identity_class: Some(1),
+            organization_id: Some("0xorg".to_string()),
             group_name: Some("Support".to_string()),
             group_uuid: Some("uuid".to_string()),
             created_at: Utc::now(),

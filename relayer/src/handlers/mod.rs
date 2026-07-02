@@ -1,4 +1,5 @@
 pub mod agent_groups;
+pub mod dm_gate;
 pub mod group_features;
 pub mod health;
 pub mod messages;

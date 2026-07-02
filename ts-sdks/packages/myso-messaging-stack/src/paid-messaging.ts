@@ -28,9 +28,12 @@ export interface OpenPaidDmOptions {
 	signer: Signer;
 	recipient: string;
 	escrowAmount: bigint;
-	paymentCoinId: string;
-	dedupeKey: Uint8Array | number[];
-	nonce: number | bigint;
+	/** Coin object ID to fund the escrow. When omitted, split from gas. */
+	paymentCoinId?: string;
+	/** Replay-protection key (max 256 bytes). Random 32 bytes when omitted. */
+	dedupeKey?: Uint8Array | number[];
+	/** Per-sender replay nonce (u128). Random when omitted. */
+	nonce?: number | bigint;
 	name?: string;
 	uuid?: string;
 	/** Skip off-chain gating check (default false). */
@@ -40,6 +43,54 @@ export interface OpenPaidDmOptions {
 export interface OpenAgentPaidDmOptions extends OpenPaidDmOptions {
 	platformId: string;
 	memoryAccountId: string;
+}
+
+/**
+ * Options for paying the DM escrow in an **existing** group (e.g. after the
+ * relayer rejected a first message with `PAYMENT_REQUIRED`).
+ */
+export interface PayDmEscrowOptions {
+	signer: Signer;
+	groupRef: GroupRef;
+	recipient: string;
+	escrowAmount: bigint;
+	/** Coin object ID to fund the escrow. When omitted, split from gas. */
+	paymentCoinId?: string;
+	/** Replay-protection key (max 256 bytes). Random 32 bytes when omitted. */
+	dedupeKey?: Uint8Array | number[];
+	/** Per-sender replay nonce (u128). Random when omitted. */
+	nonce?: number | bigint;
+	/** Skip off-chain gating check (default false). */
+	skipGatingCheck?: boolean;
+}
+
+function randomDedupeKey(): Uint8Array {
+	const bytes = new Uint8Array(32);
+	crypto.getRandomValues(bytes);
+	return bytes;
+}
+
+/** Random u128 nonce — per-sender collision odds are negligible. */
+function randomNonce(): bigint {
+	const bytes = new Uint8Array(16);
+	crypto.getRandomValues(bytes);
+	let value = 0n;
+	for (const byte of bytes) {
+		value = (value << 8n) | BigInt(byte);
+	}
+	return value;
+}
+
+/** Resolves the escrow funding source: explicit coin or a split from gas. */
+function resolvePayment(
+	tx: Transaction,
+	options: { paymentCoinId?: string; escrowAmount: bigint },
+) {
+	if (options.paymentCoinId) {
+		return options.paymentCoinId;
+	}
+	const [payment] = tx.splitCoins(tx.gas, [options.escrowAmount]);
+	return payment;
 }
 
 export interface ReplyAndClaimSettledOptions {
@@ -127,10 +178,10 @@ export class PaidMessagingClient {
 			this.#messaging.call.sendPaidMessageDigest({
 				uuid,
 				recipient: options.recipient,
-				payment: options.paymentCoinId,
+				payment: resolvePayment(tx, options),
 				escrowAmount: options.escrowAmount,
-				dedupeKey: options.dedupeKey,
-				nonce: options.nonce,
+				dedupeKey: options.dedupeKey ?? randomDedupeKey(),
+				nonce: options.nonce ?? randomNonce(),
 			}),
 		);
 
@@ -138,6 +189,37 @@ export class PaidMessagingClient {
 		const groupId = this.#messaging.derive.groupId({ uuid });
 		const messageLogId = this.#messaging.derive.messageLogId({ uuid });
 		return { digest, groupId, uuid, messageLogId };
+	}
+
+	/**
+	 * Pay the DM escrow in an existing group — the recovery path after the
+	 * relayer rejects a first message with `PAYMENT_REQUIRED` (e.g. the group
+	 * was created without payment, or a follow was later removed).
+	 *
+	 * Runs the same on-chain checks as `openPaidDm` (`send_paid_message_digest`):
+	 * DM metadata, first paid send, not-following, recipient minimum. After the
+	 * transaction lands and the relayer indexes `PaidMessageSent`, retry the send.
+	 */
+	async payDmEscrow(options: PayDmEscrowOptions): Promise<{ digest: string }> {
+		if (!options.skipGatingCheck && this.#gating) {
+			await this.#gating.assertPaidOpenAllowed({
+				recipient: options.recipient,
+				escrowAmount: options.escrowAmount,
+			});
+		}
+
+		const tx = new Transaction();
+		tx.add(
+			this.#messaging.call.sendPaidMessageDigest({
+				...options.groupRef,
+				recipient: options.recipient,
+				payment: resolvePayment(tx, options),
+				escrowAmount: options.escrowAmount,
+				dedupeKey: options.dedupeKey ?? randomDedupeKey(),
+				nonce: options.nonce ?? randomNonce(),
+			}),
+		);
+		return this.#execute(tx, options.signer, 'pay DM escrow');
 	}
 
 	async openAgentPaidDm(
@@ -170,10 +252,10 @@ export class PaidMessagingClient {
 				platformId: options.platformId,
 				memoryAccountId: options.memoryAccountId,
 				recipient: options.recipient,
-				payment: options.paymentCoinId,
+				payment: resolvePayment(tx, options),
 				escrowAmount: options.escrowAmount,
-				dedupeKey: options.dedupeKey,
-				nonce: options.nonce,
+				dedupeKey: options.dedupeKey ?? randomDedupeKey(),
+				nonce: options.nonce ?? randomNonce(),
 			}),
 		);
 

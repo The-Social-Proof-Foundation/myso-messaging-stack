@@ -78,17 +78,26 @@ pub async fn create_message(
         }
     }
 
-    // DM block check: exactly one other member in group
-    if state.block_check.is_enabled() {
+    // Resolve the 1:1 DM peer once (exactly one other member in the group's
+    // on-chain-synced membership) — shared by the block check and paid-DM gate.
+    let dm_peer: Option<String> = if state.block_check.is_enabled()
+        || state.message_gate.is_enabled()
+    {
         let members = state
             .membership_store
             .list_member_addresses(&req.group_id);
-        let peer: Vec<_> = members
-            .iter()
-            .filter(|m| *m != &req.sender_address)
-            .collect();
-        if peer.len() == 1 {
-            let peer_addr = peer[0];
+        let mut peers = members.into_iter().filter(|m| m != &req.sender_address);
+        match (peers.next(), peers.next()) {
+            (Some(peer), None) => Some(peer),
+            _ => None,
+        }
+    } else {
+        None
+    };
+
+    // DM block check
+    if state.block_check.is_enabled() {
+        if let Some(peer_addr) = dm_peer.as_deref() {
             let blocked = state
                 .block_check
                 .check_either_blocked(&req.sender_address, peer_addr)
@@ -108,6 +117,29 @@ pub async fn create_message(
                 if principal_blocked {
                     return Err(ApiError::Blocked);
                 }
+            }
+        }
+    }
+
+    // Paid-DM gate: a first outbound message from this sender into a DM whose
+    // recipient enabled paid messaging requires an indexed on-chain escrow
+    // (authoritative chain state — mirrors messaging::assert_paid_open_allowed).
+    if state.message_gate.is_enabled() {
+        if let Some(peer_addr) = dm_peer.as_deref() {
+            let gate = crate::handlers::dm_gate::evaluate_paid_dm_gate(
+                &state,
+                Some(&req.group_id),
+                &req.sender_address,
+                attribution.principal_owner.as_deref(),
+                peer_addr,
+                false,
+            )
+            .await?;
+            if gate.payment_required {
+                return Err(ApiError::PaymentRequired {
+                    min_cost: gate.min_cost,
+                    recipient: peer_addr.to_string(),
+                });
             }
         }
     }

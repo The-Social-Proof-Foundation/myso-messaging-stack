@@ -12,6 +12,8 @@ const GENESIS_FRAMEWORK_PACKAGE_ID: &str =
     "0x0000000000000000000000000000000000000000000000000000000000000002";
 const GENESIS_MESSAGING_PACKAGE_ID: &str =
     "0x000000000000000000000000000000000000000000000000000000000000e110";
+const GENESIS_SOCIAL_PACKAGE_ID: &str =
+    "0x00000000000000000000000000000000000000000000000000000000000050c1";
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -79,6 +81,15 @@ pub struct Config {
     pub block_cache_ttl_secs: u64,
     /// Block cache max entries (default: 100000).
     pub block_cache_max_entries: usize,
+
+    /// Enable the paid-DM gate (default: true when SOCIAL_SERVER_URL is set).
+    pub paid_gate_enabled: bool,
+    /// Paid gate follow/policy cache TTL in seconds (default: 300).
+    pub paid_gate_cache_ttl_secs: u64,
+    /// Paid gate cache max entries per cache (default: 100000).
+    pub paid_gate_cache_max_entries: usize,
+    /// myso-social framework package ID (FollowEvent/UnfollowEvent gate cache refresh).
+    pub social_package_id: String,
 
     /// Enable push notifications (default: false).
     pub push_enabled: bool,
@@ -204,6 +215,21 @@ impl Config {
             .and_then(|v| v.parse().ok())
             .unwrap_or(100_000);
 
+        let paid_gate_enabled = env::var("PAID_GATE_ENABLED")
+            .ok()
+            .map(|v| v == "true" || v == "1")
+            .unwrap_or(social_server_url.is_some());
+        let paid_gate_cache_ttl_secs = env::var("PAID_GATE_CACHE_TTL_SECS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(300);
+        let paid_gate_cache_max_entries = env::var("PAID_GATE_CACHE_MAX_ENTRIES")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(100_000);
+        let social_package_id = env::var("SOCIAL_PACKAGE_ID")
+            .unwrap_or_else(|_| GENESIS_SOCIAL_PACKAGE_ID.to_string());
+
         let push_enabled = env::var("PUSH_ENABLED")
             .ok()
             .map(|v| v == "true" || v == "1")
@@ -247,6 +273,10 @@ impl Config {
             block_check_enabled,
             block_cache_ttl_secs,
             block_cache_max_entries,
+            paid_gate_enabled,
+            paid_gate_cache_ttl_secs,
+            paid_gate_cache_max_entries,
+            social_package_id,
             push_enabled,
             presence_ttl_secs,
             apns_key_id,
@@ -285,6 +315,10 @@ impl Default for Config {
             block_check_enabled: false,
             block_cache_ttl_secs: 300,
             block_cache_max_entries: 100_000,
+            paid_gate_enabled: false,
+            paid_gate_cache_ttl_secs: 300,
+            paid_gate_cache_max_entries: 100_000,
+            social_package_id: GENESIS_SOCIAL_PACKAGE_ID.to_string(),
             push_enabled: false,
             presence_ttl_secs: 45,
             apns_key_id: None,

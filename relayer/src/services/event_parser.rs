@@ -46,6 +46,7 @@ pub struct AgentGroupCreatedEvent {
     pub creator_principal: String,
     pub creator_sub_agent_id: Option<String>,
     pub creator_identity_class: u64,
+    pub organization_id: Option<String>,
     pub group_name: String,
     pub group_uuid: String,
     pub created_at_ms: u64,
@@ -57,6 +58,34 @@ pub struct RawPermissionsGrantedEvent {
     pub group_id: String,
     pub member: String,
     pub permissions: Vec<String>,
+}
+
+/// Paid DM escrow from `messaging::message_log::PaidMessageSent`.
+#[derive(Debug, Clone)]
+pub struct PaidMessageSentEvent {
+    pub group_id: String,
+    pub seq: u64,
+    pub payer: String,
+    pub recipient: String,
+    pub amount: u64,
+    pub created_at_ms: u64,
+}
+
+/// Wallet paid-DM policy change from `messaging::paid_messaging_policy::PaidMessagingPolicyUpdated`.
+#[derive(Debug, Clone)]
+pub struct PaidPolicyUpdatedEvent {
+    pub wallet: String,
+    pub enabled: bool,
+    pub min_cost: Option<u64>,
+}
+
+/// Directional follow edge change from `social_contracts::social_graph::FollowEvent` /
+/// `UnfollowEvent` (both share the same two-address BCS layout).
+#[derive(Debug, Clone)]
+pub struct FollowChangedEvent {
+    pub follower: String,
+    pub followee: String,
+    pub following: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -99,6 +128,30 @@ struct BcsAgentGroupCreated {
     group_name: String,
     group_uuid: String,
     created_at: u64,
+}
+
+#[derive(Debug, Deserialize)]
+struct BcsPaidMessageSent {
+    group_id: BcsMoveObjectId,
+    seq: u64,
+    payer: [u8; 32],
+    recipient: [u8; 32],
+    amount: u64,
+    created_at_ms: u64,
+}
+
+#[derive(Debug, Deserialize)]
+struct BcsPaidPolicyUpdated {
+    wallet: [u8; 32],
+    enabled: bool,
+    min_cost: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct BcsFollowChanged {
+    follower: [u8; 32],
+    /// `following` on FollowEvent, `unfollowed` on UnfollowEvent — same layout.
+    followee: [u8; 32],
 }
 
 /// Returns true when the event type uses the messaging witness generic.
@@ -174,8 +227,9 @@ fn format_object_id(id: &BcsMoveObjectId) -> String {
     format!("0x{}", hex::encode(id.bytes))
 }
 
-fn is_messaging_package_event(event_type: &str, messaging_package_id: &str) -> bool {
-    let normalized_pkg = messaging_package_id.trim_start_matches("0x").to_lowercase();
+/// True when the event type string originates from `package_id` (0x-prefix tolerant).
+fn is_event_from_package(event_type: &str, package_id: &str) -> bool {
+    let normalized_pkg = package_id.trim_start_matches("0x").to_lowercase();
     let event_type_lower = event_type.to_lowercase();
     event_type_lower.starts_with(&format!("0x{}", normalized_pkg))
         || event_type_lower.starts_with(&normalized_pkg)
@@ -196,6 +250,10 @@ pub fn parse_agent_group_created_bcs(bcs_bytes: &[u8]) -> Option<AgentGroupCreat
             .as_ref()
             .map(format_object_id),
         creator_identity_class: event_data.creator_identity_class,
+        organization_id: event_data
+            .organization_id
+            .as_ref()
+            .map(format_object_id),
         group_name: event_data.group_name,
         group_uuid: event_data.group_uuid,
         created_at_ms: event_data.created_at,
@@ -211,12 +269,105 @@ pub fn parse_agent_group_created_event(
     if !event_type.contains("::messaging::AgentGroupCreated") {
         return None;
     }
-    if !is_messaging_package_event(event_type, messaging_package_id) {
+    if !is_event_from_package(event_type, messaging_package_id) {
         return None;
     }
     let contents = event.contents.as_ref()?;
     let bcs_bytes = contents.value.as_ref()?;
     parse_agent_group_created_bcs(bcs_bytes)
+}
+
+/// Parses PaidMessageSent from BCS bytes (paid DM escrow index).
+pub fn parse_paid_message_sent_bcs(bcs_bytes: &[u8]) -> Option<PaidMessageSentEvent> {
+    let event_data: BcsPaidMessageSent = bcs::from_bytes(bcs_bytes)
+        .map_err(|e| warn!("Failed to parse PaidMessageSent BCS: {}", e))
+        .ok()?;
+
+    Some(PaidMessageSentEvent {
+        group_id: format_object_id(&event_data.group_id),
+        seq: event_data.seq,
+        payer: format_address(event_data.payer),
+        recipient: format_address(event_data.recipient),
+        amount: event_data.amount,
+        created_at_ms: event_data.created_at_ms,
+    })
+}
+
+/// Parses PaidMessageSent from a MySo checkpoint event (messaging package).
+pub fn parse_paid_message_sent_event(
+    event: &Event,
+    messaging_package_id: &str,
+) -> Option<PaidMessageSentEvent> {
+    let event_type = event.event_type.as_ref()?;
+    if !event_type.contains("::message_log::PaidMessageSent") {
+        return None;
+    }
+    if !is_event_from_package(event_type, messaging_package_id) {
+        return None;
+    }
+    let contents = event.contents.as_ref()?;
+    let bcs_bytes = contents.value.as_ref()?;
+    parse_paid_message_sent_bcs(bcs_bytes)
+}
+
+/// Parses PaidMessagingPolicyUpdated from BCS bytes (gate cache refresh).
+pub fn parse_paid_policy_updated_bcs(bcs_bytes: &[u8]) -> Option<PaidPolicyUpdatedEvent> {
+    let event_data: BcsPaidPolicyUpdated = bcs::from_bytes(bcs_bytes)
+        .map_err(|e| warn!("Failed to parse PaidMessagingPolicyUpdated BCS: {}", e))
+        .ok()?;
+
+    Some(PaidPolicyUpdatedEvent {
+        wallet: format_address(event_data.wallet),
+        enabled: event_data.enabled,
+        min_cost: event_data.min_cost,
+    })
+}
+
+/// Parses PaidMessagingPolicyUpdated from a MySo checkpoint event (messaging package).
+pub fn parse_paid_policy_updated_event(
+    event: &Event,
+    messaging_package_id: &str,
+) -> Option<PaidPolicyUpdatedEvent> {
+    let event_type = event.event_type.as_ref()?;
+    if !event_type.contains("::paid_messaging_policy::PaidMessagingPolicyUpdated") {
+        return None;
+    }
+    if !is_event_from_package(event_type, messaging_package_id) {
+        return None;
+    }
+    let contents = event.contents.as_ref()?;
+    let bcs_bytes = contents.value.as_ref()?;
+    parse_paid_policy_updated_bcs(bcs_bytes)
+}
+
+/// Parses FollowEvent / UnfollowEvent from a MySo checkpoint event (social package).
+/// The `::` prefix in the match keeps `UnfollowEvent` from matching `FollowEvent`.
+pub fn parse_follow_changed_event(
+    event: &Event,
+    social_package_id: &str,
+) -> Option<FollowChangedEvent> {
+    let event_type = event.event_type.as_ref()?;
+    let following = if event_type.contains("::social_graph::FollowEvent") {
+        true
+    } else if event_type.contains("::social_graph::UnfollowEvent") {
+        false
+    } else {
+        return None;
+    };
+    if !is_event_from_package(event_type, social_package_id) {
+        return None;
+    }
+    let contents = event.contents.as_ref()?;
+    let bcs_bytes = contents.value.as_ref()?;
+    let event_data: BcsFollowChanged = bcs::from_bytes(bcs_bytes)
+        .map_err(|e| warn!("Failed to parse Follow/UnfollowEvent BCS: {}", e))
+        .ok()?;
+
+    Some(FollowChangedEvent {
+        follower: format_address(event_data.follower),
+        followee: format_address(event_data.followee),
+        following,
+    })
 }
 
 fn is_groups_package_event(event_type: &str, groups_package_id: &str) -> bool {
@@ -404,13 +555,14 @@ mod tests {
         }
 
         let sub_agent = [0x55u8; 32];
+        let org_id = [0x66u8; 32];
         let bcs = bcs::to_bytes(&BcsAgentGroupCreated {
             group_id: BcsMoveObjectId { bytes: [0x11u8; 32] },
             creator_actor: [0x22u8; 32],
             creator_principal: [0x33u8; 32],
             creator_sub_agent_id: Some(BcsMoveObjectId { bytes: sub_agent }),
             creator_identity_class: 1,
-            organization_id: None,
+            organization_id: Some(BcsMoveObjectId { bytes: org_id }),
             group_name: "Support".to_string(),
             group_uuid: "uuid-1".to_string(),
             created_at: 1_700_000_000_000,
@@ -423,6 +575,10 @@ mod tests {
         assert_eq!(
             parsed.creator_sub_agent_id,
             Some(format!("0x{}", hex::encode(sub_agent)))
+        );
+        assert_eq!(
+            parsed.organization_id,
+            Some(format!("0x{}", hex::encode(org_id)))
         );
         assert_eq!(parsed.creator_identity_class, 1);
     }

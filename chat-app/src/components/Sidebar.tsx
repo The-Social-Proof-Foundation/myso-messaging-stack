@@ -5,6 +5,8 @@ interface SidebarProps {
   groups: StoredGroup[];
   selectedUuid: string | null;
   unreadCounts?: Record<string, number>;
+  /** Groups whose unread messages are paid-DM requests (reply claims escrow). */
+  paidDmGroupIds?: Set<string>;
   onSelectGroup: (uuid: string) => void;
   onCreateGroup: () => void;
   loading?: boolean;
@@ -16,6 +18,7 @@ export function Sidebar({
   groups,
   selectedUuid,
   unreadCounts = {},
+  paidDmGroupIds,
   onSelectGroup,
   onCreateGroup,
   loading = false,
@@ -63,6 +66,7 @@ export function Sidebar({
           <ul className="py-1">
             {groups.map((group) => {
               const unread = unreadCounts[group.groupId] ?? 0;
+              const isPaidRequest = paidDmGroupIds?.has(group.groupId) ?? false;
               return (
               <li key={group.uuid || group.groupId}>
                 <button
@@ -77,11 +81,16 @@ export function Sidebar({
                 >
                   <div className="flex items-center justify-between gap-2">
                     <p className="text-sm font-medium truncate">{group.name}</p>
-                    {unread > 0 && (
-                      <span className="shrink-0 rounded-full bg-primary-500 px-2 py-0.5 text-[10px] font-semibold text-white">
-                        {unread > 99 ? '99+' : unread}
-                      </span>
-                    )}
+                    {unread > 0 &&
+                      (isPaidRequest ? (
+                        <span className="shrink-0 rounded-full bg-amber-500 px-2 py-0.5 text-[10px] font-semibold text-white">
+                          PAID
+                        </span>
+                      ) : (
+                        <span className="shrink-0 rounded-full bg-primary-500 px-2 py-0.5 text-[10px] font-semibold text-white">
+                          {unread > 99 ? '99+' : unread}
+                        </span>
+                      ))}
                   </div>
                   <p className="mt-0.5 text-xs text-secondary-400 font-mono dark:text-secondary-500">
                     {group.groupId.slice(0, 8)}...{group.groupId.slice(-6)}

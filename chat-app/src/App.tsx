@@ -35,7 +35,7 @@ function App() {
     <div className="flex h-screen flex-col bg-secondary-50 dark:bg-secondary-900">
       <header className="flex items-center justify-between border-b border-secondary-200 bg-white px-6 py-3 dark:border-secondary-700 dark:bg-secondary-800">
         <h1 className="text-lg font-semibold text-primary-600 dark:text-primary-400">
-          MySo Messaging Chat
+          MySocial Messaging
         </h1>
         <div className="flex items-center gap-3">
           {session && connectedAddress && (

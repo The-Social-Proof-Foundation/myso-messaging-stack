@@ -1,4 +1,9 @@
-import { RelayerTransportError } from '@socialproof/myso-messaging-stack';
+import {
+  PaymentRequiredError,
+  RelayerTransportError,
+} from '@socialproof/myso-messaging-stack';
+
+import { mistToMyso } from './mys-coin';
 
 export function isNotGroupMemberError(err: unknown): boolean {
   if (err instanceof RelayerTransportError) {
@@ -10,7 +15,25 @@ export function isNotGroupMemberError(err: unknown): boolean {
   return false;
 }
 
+/** Relayer paid-DM gate rejection (402 PAYMENT_REQUIRED). */
+export function isPaymentRequiredError(
+  err: unknown,
+): err is PaymentRequiredError {
+  return (
+    err instanceof PaymentRequiredError ||
+    (err instanceof RelayerTransportError &&
+      (err.status === 402 || err.code === 'PAYMENT_REQUIRED'))
+  );
+}
+
 export function formatRelayerError(err: unknown): string {
+  if (isPaymentRequiredError(err)) {
+    const minCost = err instanceof PaymentRequiredError ? err.minCost : null;
+    return minCost !== null
+      ? `This user requires a ${mistToMyso(minCost)} MYSO escrow before receiving a first message.`
+      : 'This user requires an on-chain payment before receiving a first message.';
+  }
+
   if (isNotGroupMemberError(err)) {
     return (
       'The relayer has not synced your group membership yet. Wait a few seconds and try again. ' +

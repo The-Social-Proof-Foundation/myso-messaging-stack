@@ -64,6 +64,7 @@ export * from './attachments/index.js';
 export * from './recovery/index.js';
 export * from './messaging-types.js';
 export { emojiToStorage, storageToEmoji } from './emoji.js';
+export { MIST_PER_MYSO, mistToMyso, mysoToMist } from './coin.js';
 export {
 	verifyMessageSender,
 	buildCanonicalMessage,
@@ -104,6 +105,7 @@ export {
 	type PaidMessagingClientOptions,
 	type OpenPaidDmOptions,
 	type OpenAgentPaidDmOptions,
+	type PayDmEscrowOptions,
 	type ReplyAndClaimSettledOptions,
 	type RefundPaidEscrowOptions,
 	type SetPaidPolicyOptions,

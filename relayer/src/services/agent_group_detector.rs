@@ -22,6 +22,7 @@ pub fn agent_group_from_created_event(
         creator_principal: created.creator_principal.clone(),
         creator_sub_agent_id: created.creator_sub_agent_id.clone(),
         creator_identity_class: Some(created.creator_identity_class as i16),
+        organization_id: created.organization_id.clone(),
         group_name: Some(created.group_name.clone()),
         group_uuid: Some(created.group_uuid.clone()),
         created_at,
@@ -59,6 +60,7 @@ pub fn detect_agent_groups_in_transaction(
                     creator_principal: principal,
                     creator_sub_agent_id: None,
                     creator_identity_class: None,
+                    organization_id: None,
                     group_name: None,
                     group_uuid: None,
                     created_at: fallback_created_at,
@@ -174,6 +176,7 @@ mod tests {
                 creator_principal: "0xprincipal".to_string(),
                 creator_sub_agent_id: Some("0xsub".to_string()),
                 creator_identity_class: 2,
+                organization_id: Some("0xorg".to_string()),
                 group_name: "Agent DM".to_string(),
                 group_uuid: "uuid".to_string(),
                 created_at_ms: 1_700_000_000_000,
@@ -183,6 +186,7 @@ mod tests {
         let rows = detect_agent_groups_in_transaction(&created, &[], &agent_created, Utc::now());
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].creator_sub_agent_id.as_deref(), Some("0xsub"));
+        assert_eq!(rows[0].organization_id.as_deref(), Some("0xorg"));
         assert_eq!(rows[0].group_name.as_deref(), Some("Agent DM"));
         assert_eq!(rows[0].creator_identity_class, Some(2));
     }

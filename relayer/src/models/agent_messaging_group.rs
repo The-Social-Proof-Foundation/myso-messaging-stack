@@ -10,6 +10,7 @@ pub struct AgentMessagingGroup {
     pub creator_principal: String,
     pub creator_sub_agent_id: Option<String>,
     pub creator_identity_class: Option<i16>,
+    pub organization_id: Option<String>,
     pub group_name: Option<String>,
     pub group_uuid: Option<String>,
     pub created_at: DateTime<Utc>,

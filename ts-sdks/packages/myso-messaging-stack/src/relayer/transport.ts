@@ -3,8 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import type {
+	CheckDmGateParams,
 	DeleteMessageParams,
 	DeletePushTokenParams,
+	DmGateResult,
 	FetchMessageParams,
 	FetchMessagesParams,
 	FetchMessagesResult,
@@ -66,5 +68,10 @@ export interface RelayerTransport {
 	listAgentConversations(params: ListAgentConversationsParams): Promise<RelayerAgentConversation[]>;
 	/** Wallet-authenticated groups where `derivedAddress` is the creator actor. */
 	listGroupsForAgent(params: ListGroupsForAgentParams): Promise<RelayerAgentConversation[]>;
+	/**
+	 * Advisory DM-gate pre-check (`/v1/messaging/dm-gate`) — blocked / paid-DM
+	 * status before sending. Enforcement stays on `sendMessage` (402).
+	 */
+	checkDmGate(params: CheckDmGateParams): Promise<DmGateResult>;
 	disconnect(): void;
 }

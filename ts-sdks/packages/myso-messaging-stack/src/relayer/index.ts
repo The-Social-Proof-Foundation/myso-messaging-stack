@@ -29,11 +29,14 @@ export type {
 	PostPushTokenParams,
 	DeletePushTokenParams,
 	PostPresenceParams,
+	CheckDmGateParams,
+	DmGateReason,
+	DmGateResult,
 	RelayerConfig,
 	RelayerHTTPConfig,
 } from './types.js';
 
-export { RelayerTransportError } from './types.js';
+export { PaymentRequiredError, RelayerTransportError } from './types.js';
 
 export type { RelayerTransport } from './transport.js';
 

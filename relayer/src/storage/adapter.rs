@@ -56,8 +56,8 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use crate::models::{
-    Attachment, EncryptedBlobRecord, Message, PushTokenRecord, ReactionEntry, ReceiptStateResponse,
-    SyncStatus,
+    Attachment, EncryptedBlobRecord, Message, PaidEscrowRecord, PushTokenRecord, ReactionEntry,
+    ReceiptStateResponse, SyncStatus,
 };
 
 /// Errors that can occur during storage operations.
@@ -178,6 +178,37 @@ pub trait StorageAdapter: Send + Sync {
         status: SyncStatus,
         limit: usize,
     ) -> StorageResult<Vec<Message>>;
+
+    // === Paid DM escrow index (synced from on-chain PaidMessageSent events) ===
+
+    /// Upserts an escrow row keyed by `(group_id, seq)` — checkpoint replay safe.
+    async fn record_paid_escrow(&self, escrow: PaidEscrowRecord) -> StorageResult<()>;
+
+    /// True when `payer` escrowed at least `min_amount` MYSO to `recipient` in this group.
+    /// Pass `min_amount = 0` for existence: the contract already enforced the
+    /// recipient's minimum when the escrow was opened.
+    async fn has_paid_escrow(
+        &self,
+        group_id: &str,
+        payer: &str,
+        recipient: &str,
+        min_amount: i64,
+    ) -> StorageResult<bool>;
+
+    /// Latest (highest `seq`) escrowed amount from `payer` to `recipient` in this
+    /// group, if any. Backs the paid-DM gate's reply exemption and the
+    /// "reply to claim" amount surfaced by the advisory endpoint.
+    async fn latest_paid_escrow_amount(
+        &self,
+        group_id: &str,
+        payer: &str,
+        recipient: &str,
+    ) -> StorageResult<Option<i64>>;
+
+    /// True when `sender` has at least one stored message in the group.
+    /// Backs the paid-DM gate's "first outbound message from this sender" check —
+    /// deliberately per-sender, NOT total conversation message count.
+    async fn has_message_from(&self, group_id: &str, sender: &str) -> StorageResult<bool>;
 
     // === /v1 group feature mirror (off-chain; complements on-chain MessageLog) ===
 

@@ -13,6 +13,7 @@ export interface AgentConversation {
 	creatorPrincipal: string;
 	creatorSubAgentId?: string | null;
 	creatorIdentityClass?: number | null;
+	organizationId?: string | null;
 	groupName?: string | null;
 	groupUuid?: string | null;
 	createdAt?: number | null;
@@ -41,6 +42,7 @@ interface WireAgentConversation {
 	creator_principal: string;
 	creator_sub_agent_id?: string | null;
 	creator_identity_class?: number | null;
+	organization_id?: string | null;
 	group_name?: string | null;
 	group_uuid?: string | null;
 	created_at: number;
@@ -63,6 +65,7 @@ function fromWire(wire: WireAgentConversation): AgentConversation {
 		creatorPrincipal: wire.creator_principal,
 		creatorSubAgentId: wire.creator_sub_agent_id,
 		creatorIdentityClass: wire.creator_identity_class,
+		organizationId: wire.organization_id,
 		groupName: wire.group_name,
 		groupUuid: wire.group_uuid,
 		createdAt: wire.created_at,
@@ -76,6 +79,7 @@ function fromRelayerConversation(conv: RelayerAgentConversation): AgentConversat
 		creatorPrincipal: conv.creatorPrincipal,
 		creatorSubAgentId: conv.creatorSubAgentId,
 		creatorIdentityClass: conv.creatorIdentityClass,
+		organizationId: conv.organizationId,
 		groupName: conv.groupName,
 		groupUuid: conv.groupUuid,
 		createdAt: conv.createdAt,

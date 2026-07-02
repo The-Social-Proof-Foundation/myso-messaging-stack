@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { Attachment } from '../../src/attachments/types.js';
 import { HTTPRelayerTransport } from '../../src/relayer/http-transport.js';
-import { RelayerTransportError } from '../../src/relayer/types.js';
+import { PaymentRequiredError, RelayerTransportError } from '../../src/relayer/types.js';
 
 const MOCK_RELAYER_URL = 'https://relayer.example.com';
 
@@ -323,6 +323,192 @@ describe('HTTPRelayerTransport', () => {
 				transport.fetchMessages({ signer: defaultKeypair, groupId: '0x' + 'ab'.repeat(32) }),
 			).rejects.toThrow('Transport is disconnected');
 		});
+
+		it('maps 402 PAYMENT_REQUIRED to PaymentRequiredError with details', async () => {
+			const transport = createTransport();
+			const recipient = '0x' + '11'.repeat(32);
+
+			mockFetch.mockResolvedValueOnce(
+				new Response(
+					JSON.stringify({
+						error: 'Recipient requires payment before receiving a first message',
+						code: 'PAYMENT_REQUIRED',
+						min_cost: '100000000',
+						recipient,
+					}),
+					{ status: 402 },
+				),
+			);
+
+			try {
+				await transport.sendMessage({
+					signer: defaultKeypair,
+					groupId: '0x' + 'ab'.repeat(32),
+					encryptedText: new Uint8Array([1]),
+					nonce: new Uint8Array(12),
+					keyVersion: 0n,
+				});
+				expect.unreachable('sendMessage should have thrown');
+			} catch (e) {
+				expect(e).toBeInstanceOf(PaymentRequiredError);
+				// Subclass keeps RelayerTransportError semantics for existing handlers.
+				expect(e).toBeInstanceOf(RelayerTransportError);
+				const err = e as PaymentRequiredError;
+				expect(err.status).toBe(402);
+				expect(err.code).toBe('PAYMENT_REQUIRED');
+				expect(err.minCost).toBe(100000000n);
+				expect(err.paymentRecipient).toBe(recipient);
+			}
+		});
+
+		it('maps 402 without min_cost to PaymentRequiredError with null details', async () => {
+			const transport = createTransport();
+
+			mockFetch.mockResolvedValueOnce(
+				new Response(JSON.stringify({ error: 'Payment required', code: 'PAYMENT_REQUIRED' }), {
+					status: 402,
+				}),
+			);
+
+			try {
+				await transport.sendMessage({
+					signer: defaultKeypair,
+					groupId: '0x' + 'ab'.repeat(32),
+					encryptedText: new Uint8Array([1]),
+					nonce: new Uint8Array(12),
+					keyVersion: 0n,
+				});
+				expect.unreachable('sendMessage should have thrown');
+			} catch (e) {
+				expect(e).toBeInstanceOf(PaymentRequiredError);
+				const err = e as PaymentRequiredError;
+				expect(err.minCost).toBeNull();
+				expect(err.paymentRecipient).toBeNull();
+			}
+		});
+	});
+
+	// checkDmGate
+
+	describe('checkDmGate', () => {
+		it('GET /v1/messaging/dm-gate with wallet header auth', async () => {
+			const keypair = Ed25519Keypair.generate();
+			const transport = createTransport();
+			const recipient = '0x' + '11'.repeat(32);
+
+			mockFetch.mockResolvedValueOnce(
+				new Response(
+					JSON.stringify({
+						allowed: false,
+						reason: 'PAYMENT_REQUIRED',
+						blocked: false,
+						following: false,
+						paid: false,
+						first_outbound: true,
+						peer_paid: false,
+						min_cost: '250',
+						recipient,
+					}),
+					{ status: 200 },
+				),
+			);
+
+			const result = await transport.checkDmGate({ signer: keypair, recipient });
+
+			expect(result).toEqual({
+				allowed: false,
+				reason: 'PAYMENT_REQUIRED',
+				blocked: false,
+				following: false,
+				paid: false,
+				firstOutbound: true,
+				peerPaid: false,
+				peerEscrowAmount: null,
+				minCost: 250n,
+				recipient,
+			});
+
+			const [url, init] = mockFetch.mock.calls[0];
+			expect(url).toBe(`${MOCK_RELAYER_URL}/v1/messaging/dm-gate?recipient=${recipient}`);
+			expect(init?.method).toBe('GET');
+			const headers = init?.headers as Record<string, string>;
+			expect(headers['x-signature']).toBeTypeOf('string');
+			expect(headers['x-public-key']).toBeTypeOf('string');
+			expect(headers['x-sender-address']).toBe(keypair.toMySoAddress());
+			expect(headers['x-timestamp']).toBeTypeOf('string');
+		});
+
+		it('passes group_id and maps an allowed response', async () => {
+			const transport = createTransport();
+			const recipient = '0x' + '11'.repeat(32);
+			const groupId = '0x' + 'ab'.repeat(32);
+
+			mockFetch.mockResolvedValueOnce(
+				new Response(
+					JSON.stringify({
+						allowed: true,
+						reason: null,
+						blocked: false,
+						following: true,
+						paid: false,
+						recipient,
+					}),
+					{ status: 200 },
+				),
+			);
+
+			const result = await transport.checkDmGate({
+				signer: defaultKeypair,
+				recipient,
+				groupId,
+			});
+
+			expect(result.allowed).toBe(true);
+			expect(result.reason).toBeNull();
+			expect(result.following).toBe(true);
+			expect(result.minCost).toBeNull();
+			// Older relayers omit the reply-exemption fields — safe defaults.
+			expect(result.firstOutbound).toBe(true);
+			expect(result.peerPaid).toBe(false);
+			expect(result.peerEscrowAmount).toBeNull();
+
+			const url = mockFetch.mock.calls[0][0] as string;
+			expect(url).toContain(`group_id=${groupId}`);
+		});
+
+		it('maps peer_paid reply-exemption fields', async () => {
+			const transport = createTransport();
+			const recipient = '0x' + '11'.repeat(32);
+			const groupId = '0x' + 'ab'.repeat(32);
+
+			mockFetch.mockResolvedValueOnce(
+				new Response(
+					JSON.stringify({
+						allowed: true,
+						reason: null,
+						blocked: false,
+						following: false,
+						paid: false,
+						first_outbound: true,
+						peer_paid: true,
+						peer_escrow_amount: '10000000000',
+						recipient,
+					}),
+					{ status: 200 },
+				),
+			);
+
+			const result = await transport.checkDmGate({
+				signer: defaultKeypair,
+				recipient,
+				groupId,
+			});
+
+			expect(result.allowed).toBe(true);
+			expect(result.peerPaid).toBe(true);
+			expect(result.peerEscrowAmount).toBe(10_000_000_000n);
+			expect(result.firstOutbound).toBe(true);
+		});
 	});
 
 	// subscribe
@@ -468,8 +654,7 @@ describe('HTTPRelayerTransport', () => {
 			});
 
 			mockPolling(
-				() =>
-					new Response(JSON.stringify({ messages: [], hasNext: false }), { status: 200 }),
+				() => new Response(JSON.stringify({ messages: [], hasNext: false }), { status: 200 }),
 			);
 
 			setTimeout(() => transport.disconnect(), 50);

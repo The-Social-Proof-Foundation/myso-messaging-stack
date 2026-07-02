@@ -25,6 +25,8 @@ pub struct AgentConversationWire {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub creator_identity_class: Option<i16>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub organization_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub group_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub group_uuid: Option<String>,
@@ -47,6 +49,7 @@ fn to_wire(group: AgentMessagingGroup) -> AgentConversationWire {
         creator_principal: group.creator_principal,
         creator_sub_agent_id: group.creator_sub_agent_id,
         creator_identity_class: group.creator_identity_class,
+        organization_id: group.organization_id,
         group_name: group.group_name,
         group_uuid: group.group_uuid,
         created_at: group.created_at.timestamp(),

@@ -21,6 +21,7 @@ import { HTTPRelayerTransport } from './relayer/http-transport.js';
 import { HybridRelayerTransport } from './relayer/hybrid-transport.js';
 import type { RelayerTransport } from './relayer/transport.js';
 import type {
+	DmGateResult,
 	RelayerConfig,
 	RelayerHTTPConfig,
 	RelayerMessage,
@@ -51,6 +52,7 @@ import type {
 	ClearGroupHandleOptions,
 	CreateGroupOptions,
 	CreateAgentGroupCallOptions,
+	GroupRef,
 	InsertGroupDataOptions,
 	LeaveOptions,
 	MySoMessagingStackClientOptions,
@@ -630,6 +632,33 @@ export class MySoMessagingStackClient<TApproveContext = void> {
 		groupIds: string[];
 	}): Promise<Record<string, number>> {
 		return this.#readState.getUnreadCounts(options);
+	}
+
+	/**
+	 * Advisory paid-DM gate pre-check against the relayer.
+	 *
+	 * Tells the UI whether messaging `recipient` is blocked or requires an
+	 * on-chain payment first (recipient has paid messaging enabled, the signer
+	 * does not follow them, and no escrow is indexed yet). Pass `groupRef` for
+	 * an existing conversation so first-outbound-message and escrow state are
+	 * evaluated; omit it before the DM group exists.
+	 *
+	 * Never trusted as enforcement — the relayer authoritatively rejects unpaid
+	 * sends with a 402 that surfaces as {@link PaymentRequiredError}.
+	 */
+	async checkDmGate(options: {
+		signer: Signer;
+		recipient: string;
+		groupRef?: GroupRef;
+	}): Promise<DmGateResult> {
+		const groupId = options.groupRef
+			? this.derive.resolveGroupRef(options.groupRef).groupId
+			: undefined;
+		return this.transport.checkDmGate({
+			signer: options.signer,
+			recipient: options.recipient,
+			groupId,
+		});
 	}
 
 	/** Disconnect the underlying transport. Active subscriptions will complete. */

@@ -7,6 +7,7 @@ use tokio::sync::mpsc;
 use crate::auth::MembershipStore;
 use crate::config::Config;
 use crate::services::block_check::BlockCheckService;
+use crate::services::message_gate::MessageGateService;
 use crate::services::push::PushService;
 use crate::services::realtime::RealtimeHub;
 use crate::services::AttributionVerifyService;
@@ -22,6 +23,7 @@ pub struct AppState {
     pub agent_group_store: Arc<dyn AgentGroupStore>,
     pub attribution_verify: AttributionVerifyService,
     pub block_check: BlockCheckService,
+    pub message_gate: MessageGateService,
     pub push_service: PushService,
     pub realtime_hub: Arc<RealtimeHub>,
     pub realtime_enabled: bool,
@@ -31,6 +33,7 @@ pub struct AppState {
 }
 
 impl AppState {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         storage: Arc<dyn StorageAdapter>,
         sync_notifier: mpsc::UnboundedSender<()>,
@@ -38,6 +41,7 @@ impl AppState {
         agent_group_store: Arc<dyn AgentGroupStore>,
         attribution_verify: AttributionVerifyService,
         block_check: BlockCheckService,
+        message_gate: MessageGateService,
         push_service: PushService,
         realtime_hub: Arc<RealtimeHub>,
         realtime_enabled: bool,
@@ -52,6 +56,7 @@ impl AppState {
             agent_group_store,
             attribution_verify,
             block_check,
+            message_gate,
             push_service,
             realtime_hub,
             realtime_enabled,
@@ -76,6 +81,33 @@ impl AppState {
             Arc::new(crate::storage::NoOpAgentGroupStore),
             AttributionVerifyService::from_config(&Config::default()),
             block_check,
+            MessageGateService::from_config(&Config::default()),
+            push_service,
+            Arc::new(RealtimeHub::new()),
+            true,
+            true,
+            30,
+            900,
+        )
+    }
+
+    /// Test constructor with an explicit message gate (paid-DM gate tests).
+    pub fn new_for_tests_with_gate(
+        storage: Arc<dyn StorageAdapter>,
+        sync_notifier: mpsc::UnboundedSender<()>,
+        membership_store: Arc<dyn MembershipStore>,
+        block_check: BlockCheckService,
+        message_gate: MessageGateService,
+        push_service: PushService,
+    ) -> Self {
+        Self::new(
+            storage,
+            sync_notifier,
+            membership_store,
+            Arc::new(crate::storage::NoOpAgentGroupStore),
+            AttributionVerifyService::from_config(&Config::default()),
+            block_check,
+            message_gate,
             push_service,
             Arc::new(RealtimeHub::new()),
             true,

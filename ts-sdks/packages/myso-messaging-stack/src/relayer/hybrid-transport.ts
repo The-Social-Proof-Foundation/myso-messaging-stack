@@ -4,8 +4,10 @@
 import { HTTPRelayerTransport, type HTTPRelayerTransportConfig } from './http-transport.js';
 import type { RelayerTransport } from './transport.js';
 import type {
+	CheckDmGateParams,
 	DeleteMessageParams,
 	DeletePushTokenParams,
+	DmGateResult,
 	FetchMessageParams,
 	FetchMessagesParams,
 	FetchMessagesResult,
@@ -175,6 +177,10 @@ export class HybridRelayerTransport implements RelayerTransport {
 
 	listGroupsForAgent(params: ListGroupsForAgentParams): Promise<RelayerAgentConversation[]> {
 		return this.#http.listGroupsForAgent(params);
+	}
+
+	checkDmGate(params: CheckDmGateParams): Promise<DmGateResult> {
+		return this.#http.checkDmGate(params);
 	}
 
 	disconnect(): void {

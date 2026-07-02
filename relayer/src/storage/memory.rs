@@ -7,8 +7,8 @@ use std::sync::RwLock;
 use uuid::Uuid;
 
 use crate::models::{
-    Attachment, EncryptedBlobRecord, Message, PushTokenRecord, ReactionEntry, ReceiptStateResponse,
-    SyncStatus,
+    Attachment, EncryptedBlobRecord, Message, PaidEscrowRecord, PushTokenRecord, ReactionEntry,
+    ReceiptStateResponse, SyncStatus,
 };
 
 use super::adapter::{StorageAdapter, StorageError, StorageResult};
@@ -37,6 +37,8 @@ pub struct InMemoryStorage {
     user_read_states: RwLock<HashMap<String, EncryptedBlobRecord>>,
     push_tokens: RwLock<HashMap<(String, String), PushTokenRecord>>,
     presence: RwLock<HashMap<String, chrono::DateTime<chrono::Utc>>>,
+    /// On-chain paid DM escrows keyed by `(group_id, seq)`.
+    paid_escrows: RwLock<HashMap<(String, i64), PaidEscrowRecord>>,
 }
 
 impl InMemoryStorage {
@@ -52,6 +54,7 @@ impl InMemoryStorage {
             user_read_states: RwLock::new(HashMap::new()),
             push_tokens: RwLock::new(HashMap::new()),
             presence: RwLock::new(HashMap::new()),
+            paid_escrows: RwLock::new(HashMap::new()),
         }
     }
 
@@ -256,6 +259,61 @@ impl StorageAdapter for InMemoryStorage {
             .collect();
 
         Ok(filtered)
+    }
+
+    async fn record_paid_escrow(&self, escrow: PaidEscrowRecord) -> StorageResult<()> {
+        let mut escrows = self
+            .paid_escrows
+            .write()
+            .map_err(|e| StorageError::OperationFailed(format!("Lock poisoned: {}", e)))?;
+        escrows.insert((escrow.group_id.clone(), escrow.seq), escrow);
+        Ok(())
+    }
+
+    async fn has_paid_escrow(
+        &self,
+        group_id: &str,
+        payer: &str,
+        recipient: &str,
+        min_amount: i64,
+    ) -> StorageResult<bool> {
+        let escrows = self
+            .paid_escrows
+            .read()
+            .map_err(|e| StorageError::OperationFailed(format!("Lock poisoned: {}", e)))?;
+        Ok(escrows.values().any(|e| {
+            e.group_id == group_id
+                && e.payer == payer
+                && e.recipient == recipient
+                && e.amount >= min_amount
+        }))
+    }
+
+    async fn latest_paid_escrow_amount(
+        &self,
+        group_id: &str,
+        payer: &str,
+        recipient: &str,
+    ) -> StorageResult<Option<i64>> {
+        let escrows = self
+            .paid_escrows
+            .read()
+            .map_err(|e| StorageError::OperationFailed(format!("Lock poisoned: {}", e)))?;
+        Ok(escrows
+            .values()
+            .filter(|e| e.group_id == group_id && e.payer == payer && e.recipient == recipient)
+            .max_by_key(|e| e.seq)
+            .map(|e| e.amount))
+    }
+
+    async fn has_message_from(&self, group_id: &str, sender: &str) -> StorageResult<bool> {
+        let messages = self
+            .messages
+            .read()
+            .map_err(|e| StorageError::OperationFailed(format!("Lock poisoned: {}", e)))?;
+        Ok(messages
+            .values()
+            .any(|m| m.group_id == group_id && m.sender_wallet_addr == sender))
     }
 
     async fn set_reaction(
@@ -561,6 +619,103 @@ mod tests {
         assert_eq!(created1.order, Some(1));
         assert_eq!(created2.order, Some(2));
         assert_eq!(created3.order, Some(3));
+    }
+
+    #[tokio::test]
+    async fn test_paid_escrow_upsert_and_lookup() {
+        let storage = InMemoryStorage::new();
+        let record = crate::models::PaidEscrowRecord {
+            group_id: "group_1".to_string(),
+            seq: 0,
+            payer: "0xpayer".to_string(),
+            recipient: "0xrecipient".to_string(),
+            amount: 100,
+            created_at_ms: 0,
+        };
+
+        storage.record_paid_escrow(record.clone()).await.unwrap();
+        // Checkpoint replay upserts on (group_id, seq).
+        storage.record_paid_escrow(record).await.unwrap();
+
+        assert!(storage
+            .has_paid_escrow("group_1", "0xpayer", "0xrecipient", 0)
+            .await
+            .unwrap());
+        assert!(storage
+            .has_paid_escrow("group_1", "0xpayer", "0xrecipient", 100)
+            .await
+            .unwrap());
+        // min_amount above escrowed value does not match.
+        assert!(!storage
+            .has_paid_escrow("group_1", "0xpayer", "0xrecipient", 101)
+            .await
+            .unwrap());
+        // Direction matters.
+        assert!(!storage
+            .has_paid_escrow("group_1", "0xrecipient", "0xpayer", 0)
+            .await
+            .unwrap());
+        // Group scope matters.
+        assert!(!storage
+            .has_paid_escrow("group_2", "0xpayer", "0xrecipient", 0)
+            .await
+            .unwrap());
+
+        // Latest-amount lookup returns the highest-seq escrow for the pair.
+        assert_eq!(
+            storage
+                .latest_paid_escrow_amount("group_1", "0xpayer", "0xrecipient")
+                .await
+                .unwrap(),
+            Some(100)
+        );
+        storage
+            .record_paid_escrow(crate::models::PaidEscrowRecord {
+                group_id: "group_1".to_string(),
+                seq: 1,
+                payer: "0xpayer".to_string(),
+                recipient: "0xrecipient".to_string(),
+                amount: 250,
+                created_at_ms: 1,
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            storage
+                .latest_paid_escrow_amount("group_1", "0xpayer", "0xrecipient")
+                .await
+                .unwrap(),
+            Some(250)
+        );
+        // Direction matters for the amount lookup too.
+        assert_eq!(
+            storage
+                .latest_paid_escrow_amount("group_1", "0xrecipient", "0xpayer")
+                .await
+                .unwrap(),
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn test_has_message_from_is_per_sender() {
+        let storage = InMemoryStorage::new();
+        let msg = Message::new(
+            "group_1".to_string(),
+            "0xalice".to_string(),
+            vec![1],
+            unique_nonce(42),
+            0,
+            vec![],
+            vec![0u8; 64],
+            vec![0u8; 33],
+        );
+        storage.create_message(msg).await.unwrap();
+
+        assert!(storage.has_message_from("group_1", "0xalice").await.unwrap());
+        // Same group, different sender — their first outbound message is still pending.
+        assert!(!storage.has_message_from("group_1", "0xbob").await.unwrap());
+        assert!(!storage.has_message_from("group_2", "0xalice").await.unwrap());
     }
 
     #[tokio::test]

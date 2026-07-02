@@ -2,7 +2,7 @@
 //! Run with: DATABASE_URL=postgres://... cargo test --test storage_postgres_test -- --ignored
 
 use chrono::Utc;
-use messaging_relayer::models::{Message, MessageAttribution, SyncStatus};
+use messaging_relayer::models::{Message, MessageAttribution, PaidEscrowRecord, SyncStatus};
 use messaging_relayer::storage::{create_postgres_storage, StorageAdapter, StorageError};
 use uuid::Uuid;
 
@@ -107,4 +107,96 @@ async fn postgres_rejects_duplicate_nonce() {
         .await
         .unwrap_err();
     assert!(matches!(err, StorageError::DuplicateNonce));
+}
+
+#[tokio::test]
+#[ignore = "requires DATABASE_URL pointing at a test Postgres database"]
+async fn postgres_paid_escrow_upsert_and_gate_lookups() {
+    let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL required");
+    let group_id = format!("test-group-pg-escrow-{}", Uuid::new_v4());
+    let payer = "0xpayer";
+    let recipient = "0xrecipient";
+
+    let storage = create_postgres_storage(&database_url).await.unwrap();
+
+    let record = PaidEscrowRecord {
+        group_id: group_id.clone(),
+        seq: 0,
+        payer: payer.to_string(),
+        recipient: recipient.to_string(),
+        amount: 100,
+        created_at_ms: 1_700_000_000_000,
+    };
+    storage.record_paid_escrow(record.clone()).await.unwrap();
+    // Checkpoint replay: same (group_id, seq) upserts instead of erroring.
+    storage.record_paid_escrow(record).await.unwrap();
+
+    assert!(storage
+        .has_paid_escrow(&group_id, payer, recipient, 0)
+        .await
+        .unwrap());
+    assert!(storage
+        .has_paid_escrow(&group_id, payer, recipient, 100)
+        .await
+        .unwrap());
+    // min_amount above the escrowed value does not match.
+    assert!(!storage
+        .has_paid_escrow(&group_id, payer, recipient, 101)
+        .await
+        .unwrap());
+    // Direction matters: recipient never paid the payer.
+    assert!(!storage
+        .has_paid_escrow(&group_id, recipient, payer, 0)
+        .await
+        .unwrap());
+
+    // Latest-amount lookup: highest-seq escrow wins, direction still matters.
+    assert_eq!(
+        storage
+            .latest_paid_escrow_amount(&group_id, payer, recipient)
+            .await
+            .unwrap(),
+        Some(100)
+    );
+    storage
+        .record_paid_escrow(PaidEscrowRecord {
+            group_id: group_id.clone(),
+            seq: 1,
+            payer: payer.to_string(),
+            recipient: recipient.to_string(),
+            amount: 250,
+            created_at_ms: 1_700_000_000_001,
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        storage
+            .latest_paid_escrow_amount(&group_id, payer, recipient)
+            .await
+            .unwrap(),
+        Some(250)
+    );
+    assert_eq!(
+        storage
+            .latest_paid_escrow_amount(&group_id, recipient, payer)
+            .await
+            .unwrap(),
+        None
+    );
+
+    // First-outbound-message lookups are per-sender.
+    let mut nonce = b"escrow-nonce-01".to_vec();
+    nonce[0] = rand::random::<u8>();
+    storage
+        .create_message(sample_message(&group_id, nonce))
+        .await
+        .unwrap();
+    assert!(storage
+        .has_message_from(&group_id, "0xsender")
+        .await
+        .unwrap());
+    assert!(!storage
+        .has_message_from(&group_id, recipient)
+        .await
+        .unwrap());
 }

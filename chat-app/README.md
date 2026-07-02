@@ -1,4 +1,4 @@
-# MySo Messaging Chat — Reference Application
+# MySocial Messaging — Reference Application
 
 ## 1. Overview
 

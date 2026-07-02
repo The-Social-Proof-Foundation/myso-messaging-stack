@@ -10,6 +10,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   BlockedMessagingError,
+  createPaidMessagingClient,
   RelayerTransportError,
 } from '@socialproof/myso-messaging-stack';
 import { useRequiredMessagingClient } from '../contexts/MessagingClientContext';
@@ -22,6 +23,7 @@ import type {
 import {
   formatRelayerError,
   isNotGroupMemberError,
+  isPaymentRequiredError,
 } from '../lib/format-relayer-error';
 
 export interface Message {
@@ -45,6 +47,14 @@ export interface Message {
 /** Reaction entries per message, keyed by the message's relayer `order`. */
 export type MessageReactions = Map<number, RelayerReactionEntry[]>;
 
+/** Paid-DM gate state: the relayer rejected a send with 402 PAYMENT_REQUIRED. */
+export interface PaymentRequiredState {
+  /** Required escrow in MIST (1 MYSO = 10^9 MIST). */
+  minCost: bigint | null;
+  /** Recipient wallet that requires payment. */
+  recipient: string | null;
+}
+
 export interface UseMessagesResult {
   messages: Message[];
   loading: boolean;
@@ -57,6 +67,15 @@ export interface UseMessagesResult {
   deleteMessage: (messageId: string) => Promise<void>;
   toggleReaction: (order: number, emoji: string) => Promise<void>;
   loadMore: () => Promise<void>;
+  /** Set when the last send hit the paid-DM gate; renders the payment dialog. */
+  paymentRequired: PaymentRequiredState | null;
+  /** Payment transaction + post-payment retry in flight. */
+  paying: boolean;
+  paymentError: string | null;
+  /** Pay the escrow on-chain, then retry the pending message. */
+  confirmPayment: () => Promise<void>;
+  /** Dismiss the payment dialog and drop the pending message. */
+  cancelPayment: () => void;
 }
 
 /** Shape returned by the SDK's getMessages method (messages may include attachments). */
@@ -138,6 +157,16 @@ export function useMessages(uuid: string, groupId: string): UseMessagesResult {
   const [hasMore, setHasMore] = useState(false);
   const [reactions, setReactions] = useState<MessageReactions>(new Map());
 
+  // Paid-DM gate: dialog state + the message waiting on payment.
+  const [paymentRequired, setPaymentRequired] =
+    useState<PaymentRequiredState | null>(null);
+  const [paying, setPaying] = useState(false);
+  const [paymentError, setPaymentError] = useState<string | null>(null);
+  const pendingPaidSendRef = useRef<{
+    text: string;
+    files?: AttachmentFile[];
+  } | null>(null);
+
   // Track current uuid and latest order for subscription
   const uuidRef = useRef(uuid);
   uuidRef.current = uuid;
@@ -162,6 +191,9 @@ export function useMessages(uuid: string, groupId: string): UseMessagesResult {
     setError(null);
     setHasMore(false);
     setReactions(new Map());
+    setPaymentRequired(null);
+    setPaymentError(null);
+    pendingPaidSendRef.current = null;
     lastOrderRef.current = undefined;
 
     let cancelled = false;
@@ -298,6 +330,67 @@ export function useMessages(uuid: string, groupId: string): UseMessagesResult {
   // ------------------------------------------------------------------
   // Send a new message
   // ------------------------------------------------------------------
+
+  /**
+   * Core send: relayer POST with membership-lag retries + optimistic append.
+   * Throws on failure (including PaymentRequiredError from the paid-DM gate).
+   */
+  const performSend = useCallback(
+    async (text: string, files?: AttachmentFile[]) => {
+      const sendPayload = {
+        signer,
+        groupRef: { uuid: uuidRef.current },
+        text: text || undefined,
+        files,
+        mydataApproveContext: undefined as undefined,
+      };
+
+      const maxAttempts = 5;
+      let lastErr: unknown;
+      let messageId: string | undefined;
+
+      for (let attempt = 0; attempt < maxAttempts; attempt++) {
+        try {
+          ({ messageId } = await client.messaging.sendMessage(sendPayload));
+          break;
+        } catch (err) {
+          lastErr = err;
+          if (isNotGroupMemberError(err) && attempt < maxAttempts - 1) {
+            await new Promise((resolve) =>
+              setTimeout(resolve, 500 * (attempt + 1)),
+            );
+            continue;
+          }
+          throw err;
+        }
+      }
+
+      if (!messageId) {
+        throw lastErr ?? new Error('Failed to send message.');
+      }
+
+      // Optimistic local append — the subscription will replace this with
+      // the real message when it arrives from the relayer.
+      const optimistic: Message = {
+        messageId,
+        groupId: '',
+        order: (lastOrderRef.current ?? 0) + 1,
+        text,
+        senderAddress: '',
+        createdAt: Date.now() / 1000,
+        updatedAt: Date.now() / 1000,
+        isEdited: false,
+        isDeleted: false,
+        syncStatus: 'SYNC_PENDING',
+        attachments: [],
+        senderVerified: false,
+      };
+
+      setMessages((prev) => mergeMessage(prev, optimistic));
+    },
+    [client, signer],
+  );
+
   const sendMessage = useCallback(
     async (text: string, files?: AttachmentFile[]) => {
       const trimmed = text.trim();
@@ -307,59 +400,22 @@ export function useMessages(uuid: string, groupId: string): UseMessagesResult {
       setSending(true);
       setError(null);
 
-      const sendPayload = {
-        signer,
-        groupRef: { uuid: uuidRef.current },
-        text: trimmed || undefined,
-        files: hasFiles ? files : undefined,
-        mydataApproveContext: undefined as undefined,
-      };
-
-      const maxAttempts = 5;
-      let lastErr: unknown;
-
       try {
-        let messageId: string | undefined;
-
-        for (let attempt = 0; attempt < maxAttempts; attempt++) {
-          try {
-            ({ messageId } = await client.messaging.sendMessage(sendPayload));
-            break;
-          } catch (err) {
-            lastErr = err;
-            if (isNotGroupMemberError(err) && attempt < maxAttempts - 1) {
-              await new Promise((resolve) =>
-                setTimeout(resolve, 500 * (attempt + 1)),
-              );
-              continue;
-            }
-            throw err;
-          }
-        }
-
-        if (!messageId) {
-          throw lastErr ?? new Error('Failed to send message.');
-        }
-
-        // Optimistic local append — the subscription will replace this with
-        // the real message when it arrives from the relayer.
-        const optimistic: Message = {
-          messageId,
-          groupId: '',
-          order: (lastOrderRef.current ?? 0) + 1,
-          text: trimmed,
-          senderAddress: '',
-          createdAt: Date.now() / 1000,
-          updatedAt: Date.now() / 1000,
-          isEdited: false,
-          isDeleted: false,
-          syncStatus: 'SYNC_PENDING',
-          attachments: [],
-          senderVerified: false,
-        };
-
-        setMessages((prev) => mergeMessage(prev, optimistic));
+        await performSend(trimmed, hasFiles ? files : undefined);
       } catch (err) {
+        if (isPaymentRequiredError(err)) {
+          // Paid-DM gate: stash the message and open the payment dialog.
+          pendingPaidSendRef.current = {
+            text: trimmed,
+            files: hasFiles ? files : undefined,
+          };
+          setPaymentRequired({
+            minCost: err.minCost ?? null,
+            recipient: err.paymentRecipient ?? null,
+          });
+          setPaymentError(null);
+          return;
+        }
         console.error('Failed to send message:', err);
         if (err instanceof BlockedMessagingError) {
           setError('You cannot message this user.');
@@ -377,8 +433,72 @@ export function useMessages(uuid: string, groupId: string): UseMessagesResult {
         setSending(false);
       }
     },
-    [client, signer],
+    [performSend],
   );
+
+  // ------------------------------------------------------------------
+  // Paid-DM gate: pay escrow on-chain, then retry the pending message
+  // ------------------------------------------------------------------
+  const confirmPayment = useCallback(async () => {
+    const pending = pendingPaidSendRef.current;
+    if (!pending || !paymentRequired) return;
+
+    const { minCost, recipient } = paymentRequired;
+    if (minCost === null || !recipient) {
+      setPaymentError(
+        'Missing payment details from the relayer. Close and try sending again.',
+      );
+      return;
+    }
+
+    setPaying(true);
+    setPaymentError(null);
+
+    try {
+      // On-chain escrow via send_paid_message_digest (funded from gas). The
+      // contract re-validates DM state, follow graph, and the recipient's
+      // minimum — the relayer's 402 detail is advisory input only.
+      const paid = createPaidMessagingClient({ messaging: client.messaging });
+      await paid.payDmEscrow({
+        signer,
+        groupRef: { uuid: uuidRef.current },
+        recipient,
+        escrowAmount: minCost,
+      });
+
+      // Retry until the relayer's checkpoint indexer sees PaidMessageSent.
+      const maxAttempts = 10;
+      for (let attempt = 0; attempt < maxAttempts; attempt++) {
+        try {
+          await performSend(pending.text, pending.files);
+          pendingPaidSendRef.current = null;
+          setPaymentRequired(null);
+          return;
+        } catch (err) {
+          if (isPaymentRequiredError(err) && attempt < maxAttempts - 1) {
+            await new Promise((resolve) => setTimeout(resolve, 1500));
+            continue;
+          }
+          throw err;
+        }
+      }
+    } catch (err) {
+      console.error('Failed to pay DM escrow:', err);
+      setPaymentError(
+        isPaymentRequiredError(err)
+          ? 'Payment confirmed on-chain, but the relayer has not indexed it yet. Try sending again in a few seconds.'
+          : formatRelayerError(err),
+      );
+    } finally {
+      setPaying(false);
+    }
+  }, [client, signer, paymentRequired, performSend]);
+
+  const cancelPayment = useCallback(() => {
+    pendingPaidSendRef.current = null;
+    setPaymentRequired(null);
+    setPaymentError(null);
+  }, []);
 
   // ------------------------------------------------------------------
   // Edit an existing message
@@ -522,6 +642,11 @@ export function useMessages(uuid: string, groupId: string): UseMessagesResult {
     deleteMessage: deleteMessageFn,
     toggleReaction,
     loadMore,
+    paymentRequired,
+    paying,
+    paymentError,
+    confirmPayment,
+    cancelPayment,
   };
 }
 

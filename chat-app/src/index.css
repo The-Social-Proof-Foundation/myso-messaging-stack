@@ -1,7 +1,7 @@
 @import 'tailwindcss';
 
 /*
- * Custom theme for MySo Messaging Chat.
+ * Custom theme for MySocial Messaging.
  * Tailwind v4 uses CSS-native @theme instead of tailwind.config.js.
  * Dark mode: use `class` strategy via `@variant dark (&:where(.dark, .dark *))`.
  */

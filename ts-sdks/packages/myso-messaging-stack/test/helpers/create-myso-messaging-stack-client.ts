@@ -80,6 +80,9 @@ const noopTransport: RelayerTransport = {
 	listGroupsForAgent: () => {
 		throw new Error('noopTransport: listGroupsForAgent not implemented');
 	},
+	checkDmGate: () => {
+		throw new Error('noopTransport: checkDmGate not implemented');
+	},
 	disconnect: () => {},
 };
 

@@ -9,6 +9,7 @@ import {
   useMessagingClientLoading,
 } from '../contexts/MessagingClientContext';
 import { useMySocialAuth } from '../contexts/MySocialAuthContext';
+import { mistToMyso, mysoToMist } from '../lib/mys-coin';
 
 export function PaidMessagingSettings() {
   const client = useMessagingClient();
@@ -16,7 +17,8 @@ export function PaidMessagingSettings() {
   const { keypair: signer } = useMySocialAuth();
   const [policy, setPolicy] = useState<WalletMessagingPolicy | null>(null);
   const [enabled, setEnabled] = useState(false);
-  const [minCost, setMinCost] = useState('1000');
+  /** Human-entered MYSO amount; converted to MIST on save. */
+  const [minCost, setMinCost] = useState('10');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
@@ -36,7 +38,7 @@ export function PaidMessagingSettings() {
       });
       setEnabled(onChain.enabled);
       if (onChain.minCost !== null) {
-        setMinCost(onChain.minCost.toString());
+        setMinCost(mistToMyso(onChain.minCost));
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load paid policy');
@@ -59,7 +61,7 @@ export function PaidMessagingSettings() {
       await paid.setPolicy({
         signer,
         enabled,
-        minCost: enabled ? BigInt(minCost || '0') : null,
+        minCost: enabled ? mysoToMist(minCost || '0') : null,
       });
       setSaved(true);
       await loadPolicy();
@@ -96,7 +98,7 @@ export function PaidMessagingSettings() {
       )}
       {policy && (
         <p className="mt-1 text-xs text-secondary-500 dark:text-secondary-400">
-          On-chain: {policy.enabled ? `enabled (min ${policy.minCost?.toString() ?? '0'} MYSO)` : 'disabled'}
+          On-chain: {policy.enabled ? `enabled (min ${policy.minCost !== null ? mistToMyso(policy.minCost) : '0'} MYSO)` : 'disabled'}
         </p>
       )}
       <label className="mt-2 flex items-center gap-2 text-sm text-secondary-700 dark:text-secondary-200">

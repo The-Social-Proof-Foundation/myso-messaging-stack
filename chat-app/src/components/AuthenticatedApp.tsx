@@ -3,6 +3,7 @@ import { Sidebar } from './Sidebar';
 import { ChatArea } from './ChatArea';
 import { CreateGroupModal } from './CreateGroupModal';
 import { useGroupDiscovery } from '../hooks/useGroupDiscovery';
+import { usePaidDmRequests } from '../hooks/usePaidDmRequests';
 import { useUnreadCounts } from '../hooks/useUnreadCounts';
 import { useAuthenticatedAddress, useMySocialAuth } from '../contexts/MySocialAuthContext';
 import { AgentConversationsPanel } from './AgentConversationsPanel';
@@ -29,6 +30,7 @@ export function AuthenticatedApp({
   } = useGroupDiscovery(address);
 
   const unreadCounts = useUnreadCounts(groups);
+  const paidDmGroupIds = usePaidDmRequests(groups, unreadCounts);
 
   const [selectedUuid, setSelectedUuid] = useState<string | null>(null);
   const [showCreateModal, setShowCreateModal] = useState(false);
@@ -65,6 +67,7 @@ export function AuthenticatedApp({
           groups={groups}
           selectedUuid={selectedUuid}
           unreadCounts={unreadCounts}
+          paidDmGroupIds={paidDmGroupIds}
           onSelectGroup={setSelectedUuid}
           onCreateGroup={() => setShowCreateModal(true)}
           loading={discoveryLoading}

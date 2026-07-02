@@ -5,10 +5,13 @@ import { useRequiredMessagingClient } from '../contexts/MessagingClientContext';
 import { useAuthenticatedAddress } from '../contexts/MySocialAuthContext';
 import { signAndExecuteTransactionAndWait } from '../lib/sign-and-wait';
 import { useMessages } from '../hooks/useMessages';
+import { usePaidDmGate } from '../hooks/usePaidDmGate';
 import { usePermissions } from '../hooks/usePermissions';
+import { mistToMyso } from '../lib/mys-coin';
 import { MessageBubble } from './MessageBubble';
 import { MessageInput } from './MessageInput';
 import { AdminPanel } from './AdminPanel';
+import { PaymentConfirmDialog } from './PaymentConfirmDialog';
 
 interface ChatAreaProps {
   selectedGroup: StoredGroup | null;
@@ -129,7 +132,14 @@ function ChatView({
     deleteMessage,
     toggleReaction,
     loadMore,
+    paymentRequired,
+    paying,
+    paymentError,
+    confirmPayment,
+    cancelPayment,
   } = useMessages(group.uuid, group.groupId);
+
+  const paidGate = usePaidDmGate(group);
 
   const [showLeaveConfirm, setShowLeaveConfirm] = useState(false);
   const [leaving, setLeaving] = useState(false);
@@ -313,6 +323,17 @@ function ChatView({
 
       {devAgentPanel}
 
+      {/* Reply-to-claim: the peer paid an escrow that our first reply claims */}
+      {paidGate.claimPending && !permissionsLoading && permissions.canSend && (
+        <div className="border-t border-amber-300 bg-amber-50 px-4 py-2 text-center text-xs font-medium text-amber-900 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-100">
+          Reply to claim{' '}
+          {paidGate.peerEscrowAmount !== null
+            ? `${mistToMyso(paidGate.peerEscrowAmount)} MYSO`
+            : 'the escrow'}{' '}
+          from this sender.
+        </div>
+      )}
+
       {/* Message input: while permissions load, show disabled composer (avoid false "no permission"). */}
       {permissionsLoading ? (
         <div className="border-t border-secondary-200 px-4 py-3 dark:border-secondary-700">
@@ -327,7 +348,10 @@ function ChatView({
         </div>
       ) : permissions.canSend ? (
         <MessageInput
-          onSend={(text, files) => sendMessage(text, files)}
+          onSend={async (text, files) => {
+            await sendMessage(text, files);
+            paidGate.refresh();
+          }}
           sending={sending}
         />
       ) : (
@@ -335,6 +359,17 @@ function ChatView({
           You don't have permission to send messages in this group.
         </div>
       )}
+
+      {/* Paid-DM gate: confirm on-chain escrow, then the pending send retries */}
+      <PaymentConfirmDialog
+        open={paymentRequired !== null}
+        recipient={paymentRequired?.recipient ?? null}
+        minCost={paymentRequired?.minCost ?? null}
+        busy={paying}
+        error={paymentError}
+        onConfirm={() => void confirmPayment()}
+        onCancel={cancelPayment}
+      />
 
       {/* Leave group confirmation dialog */}
       {showLeaveConfirm && (

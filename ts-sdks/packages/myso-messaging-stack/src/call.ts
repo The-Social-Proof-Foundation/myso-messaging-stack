@@ -2,7 +2,7 @@
 // Copyright (c) The Social Proof Foundation, LLC.
 // SPDX-License-Identifier: Apache-2.0
 
-import type { Transaction } from '@socialproof/myso/transactions';
+import type { Transaction, TransactionArgument } from '@socialproof/myso/transactions';
 
 import type { MySoGroupsCall } from '@socialproof/myso-groups';
 
@@ -462,7 +462,8 @@ export class MySoMessagingStackCall {
 	sendPaidMessageDigest(
 		options: GroupAndMessageLogRef & {
 			recipient: string;
-			payment: string;
+			/** Coin object ID, or a `TransactionArgument` (e.g. a gas split). */
+			payment: string | TransactionArgument;
 			escrowAmount: number | bigint;
 			dedupeKey: Uint8Array | number[];
 			nonce: number | bigint;
@@ -497,7 +498,8 @@ export class MySoMessagingStackCall {
 			platformId: string;
 			memoryAccountId: string;
 			recipient: string;
-			payment: string;
+			/** Coin object ID, or a `TransactionArgument` (e.g. a gas split). */
+			payment: string | TransactionArgument;
 			escrowAmount: number | bigint;
 			dedupeKey: Uint8Array | number[];
 			nonce: number | bigint;

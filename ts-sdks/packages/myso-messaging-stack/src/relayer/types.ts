@@ -227,6 +227,7 @@ export interface RelayerAgentConversation {
 	creatorPrincipal: string;
 	creatorSubAgentId?: string | null;
 	creatorIdentityClass?: number | null;
+	organizationId?: string | null;
 	groupName?: string | null;
 	groupUuid?: string | null;
 	createdAt: number;
@@ -243,6 +244,51 @@ export interface ListGroupsForAgentParams {
 	limit?: number;
 }
 
+/** Params for `GET /v1/messaging/dm-gate` (wallet auth; sender = signer address). */
+export interface CheckDmGateParams {
+	signer: Signer;
+	/** Recipient wallet address. */
+	recipient: string;
+	/**
+	 * Group scope for first-outbound-message and escrow checks.
+	 * Omit for pre-create checks (before the DM group exists).
+	 */
+	groupId?: string;
+}
+
+/**
+ * Extensible gate denial reason. The relayer may add values (e.g. `RATE_LIMITED`)
+ * without a breaking SDK change.
+ */
+export type DmGateReason = 'BLOCKED' | 'PAYMENT_REQUIRED' | (string & {});
+
+/**
+ * Advisory DM-gate decision from the relayer. `POST /messages` remains the
+ * authoritative enforcement point — treat this as UX guidance only.
+ */
+export interface DmGateResult {
+	allowed: boolean;
+	reason: DmGateReason | null;
+	blocked: boolean;
+	/** Sender follows the recipient (payment never required for followers). */
+	following: boolean;
+	/** An on-chain escrow from the sender to the recipient is already indexed. */
+	paid: boolean;
+	/** No prior outbound message from the signer in this group. */
+	firstOutbound: boolean;
+	/**
+	 * The peer already escrowed MYSO to the signer in this group — replying is
+	 * free and claims the escrow on-chain. Combined with `firstOutbound`, this
+	 * drives "reply to claim" UX.
+	 */
+	peerPaid: boolean;
+	/** Latest peer escrow amount in MIST, when `peerPaid` is true. */
+	peerEscrowAmount: bigint | null;
+	/** Recipient's minimum escrow in MIST, when payment applies. */
+	minCost: bigint | null;
+	recipient: string;
+}
+
 /**
  * Structured error from a transport implementation.
  * Uses HTTP-style status codes for error discrimination (e.g. 401, 404, 405).
@@ -256,6 +302,26 @@ export class RelayerTransportError extends Error {
 		this.name = 'RelayerTransportError';
 		this.status = status;
 		this.code = code;
+	}
+}
+
+/**
+ * The relayer rejected a first DM message with `402 PAYMENT_REQUIRED`: the
+ * recipient has paid messaging enabled and no on-chain escrow from the sender
+ * is indexed yet. Pay via `PaidMessagingClient` (`openPaidDm` for new DMs,
+ * `payDmEscrow` for existing groups), then retry the send.
+ */
+export class PaymentRequiredError extends RelayerTransportError {
+	/** Recipient's minimum escrow in MYSO base units (null when unknown). */
+	readonly minCost: bigint | null;
+	/** Recipient wallet that requires payment (null when unknown). */
+	readonly paymentRecipient: string | null;
+
+	constructor(message: string, options?: { minCost?: bigint | null; recipient?: string | null }) {
+		super(message, 402, 'PAYMENT_REQUIRED');
+		this.name = 'PaymentRequiredError';
+		this.minCost = options?.minCost ?? null;
+		this.paymentRecipient = options?.recipient ?? null;
 	}
 }
 
