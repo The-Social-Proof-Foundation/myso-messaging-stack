@@ -23,6 +23,8 @@ interface MemberListProps {
   onRemoveMember: (address: string) => void;
   onRemoveAndRotate: (address: string) => void;
   onTogglePermission: (member: string, permType: string, has: boolean) => void;
+  /** Presence per member for the online dots. */
+  onlineMembers?: Map<string, boolean>;
 }
 
 export function MemberList({
@@ -36,6 +38,7 @@ export function MemberList({
   onRemoveMember,
   onRemoveAndRotate,
   onTogglePermission,
+  onlineMembers,
 }: Readonly<MemberListProps>) {
   const accountAddress = useAuthenticatedAddress();
   const [expandedMember, setExpandedMember] = useState<string | null>(null);
@@ -68,6 +71,7 @@ export function MemberList({
                 permissions={m.permissions}
                 isSelf={isSelf}
                 isAdmin={isAdmin}
+                online={onlineMembers?.get(m.address) ?? false}
                 isExpanded={expandedMember === m.address}
                 removingMember={removingMember}
                 togglingPerm={togglingPerm}

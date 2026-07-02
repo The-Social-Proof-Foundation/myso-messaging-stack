@@ -103,4 +103,43 @@ describe('HybridRelayerTransport', () => {
 		const [url] = mockFetch.mock.calls[0]!;
 		expect(String(url)).toContain('/v1/messages');
 	});
+
+	it('subscribeUserEvents falls back to HTTP polling when WebSocket fails', async () => {
+		const keypair = Ed25519Keypair.generate();
+		const transport = new HybridRelayerTransport({
+			relayerUrl: MOCK_RELAYER_URL,
+			apiPrefix: '/v1',
+			pollingIntervalMs: 1,
+			fetch: mockFetch,
+			WebSocket: FailingWebSocket as unknown as typeof WebSocket,
+			wsMaxReconnectAttempts: 0,
+		});
+
+		let poll = 0;
+		mockFetch.mockImplementation(async () => {
+			poll += 1;
+			const latest = poll === 1 ? 1 : 6;
+			return new Response(
+				JSON.stringify({
+					items: [{ group_id: '0xa', latest_order: latest, unread_count: latest }],
+				}),
+				{ status: 200 },
+			);
+		});
+
+		const controller = new AbortController();
+		const events = [];
+		for await (const event of transport.subscribeUserEvents({
+			signer: keypair,
+			groupIds: ['0xa'],
+			signal: controller.signal,
+		})) {
+			events.push(event);
+			controller.abort();
+		}
+
+		expect(events).toEqual([{ type: 'group.activity', groupId: '0xa', latestOrder: 6 }]);
+		const [url] = mockFetch.mock.calls[0]!;
+		expect(String(url)).toContain('/v1/users/unread-counts');
+	});
 });

@@ -22,7 +22,9 @@ use crate::handlers::health::health_check;
 use crate::handlers::messages::{create_message, delete_message, get_messages, update_message};
 use crate::handlers::presence::post_presence;
 use crate::handlers::push_devices::{delete_push_token, post_push_token};
+use crate::handlers::unread_counts::post_unread_counts;
 use crate::handlers::user_read_state::{get_read_state, put_read_state};
+use crate::handlers::user_ws::user_ws_handler;
 use crate::handlers::ws::ws_handler;
 use crate::services::{
     AttributionVerifyService, BlockCheckService, FileStorageSyncService, MembershipSyncService,
@@ -79,7 +81,12 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     if config.realtime_enabled && config.uses_postgres_storage() {
         if let Some(database_url) = config.postgres_database_url() {
-            let listener = PgListenerService::new(database_url, storage.clone(), realtime_hub);
+            let listener = PgListenerService::new(
+                database_url,
+                storage.clone(),
+                realtime_hub.clone(),
+                membership_store.clone(),
+            );
             tokio::spawn(async move {
                 listener.run().await;
             });
@@ -92,6 +99,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         agent_group_store.clone(),
         storage.clone(),
         message_gate,
+        realtime_hub,
     );
     tokio::spawn(async move {
         sync_service.run().await;
@@ -127,10 +135,19 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .route(
             "/groups/:group_id/receipts",
             get(group_features::get_receipts).post(group_features::post_receipts),
+        )
+        .route(
+            "/groups/:group_id/typing",
+            post(group_features::post_typing),
+        )
+        .route(
+            "/groups/:group_id/presence",
+            get(group_features::get_group_presence),
         );
 
     let v1_wallet_routes = Router::new()
         .route("/users/read-state", get(get_read_state).put(put_read_state))
+        .route("/users/unread-counts", post(post_unread_counts))
         .route("/devices/push-tokens", post(post_push_token))
         .route("/devices/push-tokens/:token", delete(delete_push_token))
         .route("/devices/presence", post(post_presence))
@@ -146,6 +163,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     let realtime_routes = Router::new()
         .route("/ws", get(ws_handler))
+        .route("/users/ws", get(user_ws_handler))
         .with_state(app_state.clone());
 
     let wallet_auth_state = auth_state.clone();

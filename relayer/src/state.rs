@@ -1,6 +1,8 @@
 //! Application state shared across all handlers.
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, RwLock};
+use std::time::{Duration, Instant};
 
 use tokio::sync::mpsc;
 
@@ -8,10 +10,46 @@ use crate::auth::MembershipStore;
 use crate::config::Config;
 use crate::services::block_check::BlockCheckService;
 use crate::services::message_gate::MessageGateService;
+use crate::services::presence_sync::PresenceRegistry;
 use crate::services::push::PushService;
 use crate::services::realtime::RealtimeHub;
 use crate::services::AttributionVerifyService;
 use crate::storage::{AgentGroupStore, StorageAdapter};
+
+/// Per `(wallet, group)` throttle for `typing.start` broadcasts so keystroke
+/// storms stay cheap. `typing.stop` is never throttled.
+#[derive(Default)]
+pub struct TypingRateLimiter {
+    last_start: RwLock<HashMap<(String, String), Instant>>,
+}
+
+impl TypingRateLimiter {
+    const MIN_START_INTERVAL: Duration = Duration::from_secs(2);
+    /// Opportunistic cleanup threshold to bound memory under long uptimes.
+    const CLEANUP_LEN: usize = 4096;
+
+    pub fn allow_start(&self, wallet: &str, group_id: &str) -> bool {
+        let mut map = self
+            .last_start
+            .write()
+            .expect("typing rate limiter poisoned");
+
+        if map.len() > Self::CLEANUP_LEN {
+            let now = Instant::now();
+            map.retain(|_, last| now.duration_since(*last) < Duration::from_secs(60));
+        }
+
+        let key = (wallet.to_string(), group_id.to_string());
+        let now = Instant::now();
+        match map.get(&key) {
+            Some(last) if now.duration_since(*last) < Self::MIN_START_INTERVAL => false,
+            _ => {
+                map.insert(key, now);
+                true
+            }
+        }
+    }
+}
 
 /// Shared application state passed to all route handlers.
 #[derive(Clone)]
@@ -30,6 +68,10 @@ pub struct AppState {
     pub inline_realtime_publish: bool,
     pub ws_ping_interval_secs: u64,
     pub request_ttl_seconds: i64,
+    /// Wallet connection refcounts for wallet-scoped presence transitions.
+    pub presence_registry: Arc<PresenceRegistry>,
+    /// Throttles `typing.start` broadcasts per (wallet, group).
+    pub typing_rate: Arc<TypingRateLimiter>,
 }
 
 impl AppState {
@@ -63,6 +105,8 @@ impl AppState {
             inline_realtime_publish,
             ws_ping_interval_secs,
             request_ttl_seconds,
+            presence_registry: Arc::new(PresenceRegistry::new()),
+            typing_rate: Arc::new(TypingRateLimiter::default()),
         }
     }
 
@@ -115,5 +159,23 @@ impl AppState {
             30,
             900,
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn typing_rate_limiter_throttles_start_per_wallet_group() {
+        let limiter = TypingRateLimiter::default();
+
+        // First start passes, immediate repeat is throttled.
+        assert!(limiter.allow_start("0xalice", "group-1"));
+        assert!(!limiter.allow_start("0xalice", "group-1"));
+
+        // Other wallets and other groups are independent buckets.
+        assert!(limiter.allow_start("0xbob", "group-1"));
+        assert!(limiter.allow_start("0xalice", "group-2"));
     }
 }

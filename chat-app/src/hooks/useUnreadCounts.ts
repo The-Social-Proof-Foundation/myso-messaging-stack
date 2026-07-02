@@ -1,46 +1,23 @@
-import { useEffect, useState } from 'react';
-import { useMessagingClient } from '../contexts/MessagingClientContext';
-import { useMySocialAuth } from '../contexts/MySocialAuthContext';
+/**
+ * Sidebar unread badges — delegates to {@link useGroupActivityOrder} for a
+ * single batch fetch shared with activity ordering.
+ */
 import type { StoredGroup } from '../lib/group-store';
+import { useGroupActivityOrder } from './useGroupActivityOrder';
 
-export function useUnreadCounts(groups: StoredGroup[]): Record<string, number> {
-  const client = useMessagingClient();
-  const { keypair: signer } = useMySocialAuth();
-  const [counts, setCounts] = useState<Record<string, number>>({});
+export interface UseUnreadCountsResult {
+  counts: Record<string, number>;
+  markRead: (groupId: string) => void;
+  bump: (groupId: string) => void;
+  refresh: () => void;
+}
 
-  useEffect(() => {
-    if (!client || !signer || groups.length === 0) {
-      setCounts({});
-      return;
-    }
-
-    const messagingClient = client;
-    const messagingSigner = signer;
-    let cancelled = false;
-
-    async function refresh() {
-      try {
-        const groupIds = groups.map((g) => g.groupId);
-        const next = await messagingClient.messaging.getUnreadCounts({
-          signer: messagingSigner,
-          groupIds,
-        });
-        if (!cancelled) setCounts(next);
-      } catch (err) {
-        console.warn('Failed to refresh unread counts:', err);
-      }
-    }
-
-    refresh().then();
-    const timer = setInterval(() => {
-      refresh().then();
-    }, 15_000);
-
-    return () => {
-      cancelled = true;
-      clearInterval(timer);
-    };
-  }, [groups, client, signer]);
-
-  return counts;
+export function useUnreadCounts(groups: StoredGroup[]): UseUnreadCountsResult {
+  const activity = useGroupActivityOrder(groups);
+  return {
+    counts: activity.counts,
+    markRead: activity.markRead,
+    bump: activity.bump,
+    refresh: activity.refresh,
+  };
 }

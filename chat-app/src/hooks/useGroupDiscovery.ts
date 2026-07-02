@@ -114,6 +114,14 @@ export interface UseGroupDiscoveryResult {
   loading: boolean;
   /** Manually re-read localStorage and trigger a fresh discovery. */
   refresh: () => void;
+  /**
+   * `group.discovered` user-feed handler: re-fetches the group's canonical
+   * metadata over REST (the event is a refresh hint, never trusted as state)
+   * and adds it to the sidebar. Idempotent — replayed events are harmless.
+   */
+  handleDiscovered: (groupId: string) => void;
+  /** `group.hidden` user-feed handler: drops the group from the sidebar. */
+  handleHidden: (groupId: string) => void;
 }
 
 export function useGroupDiscovery(
@@ -131,6 +139,37 @@ export function useGroupDiscovery(
   addressRef.current = address;
 
   const refresh = useCallback(() => {
+    setGroups(getStoredGroups());
+  }, []);
+
+  const handleDiscovered = useCallback(
+    (groupId: string) => {
+      if (!client) return;
+      const known = getStoredGroups().some((g) => g.groupId === groupId);
+      if (known) return;
+
+      client.messaging.view
+        .groupsMetadata({ groupIds: [groupId], refresh: true })
+        .then((metadata) => {
+          const meta = metadata[groupId];
+          if (!meta) return;
+          addStoredGroup({
+            uuid: meta.uuid,
+            name: meta.name,
+            groupId,
+            createdAt: Date.now(),
+          });
+          setGroups(getStoredGroups());
+        })
+        .catch((err) => {
+          console.warn('Failed to fetch metadata for discovered group:', err);
+        });
+    },
+    [client],
+  );
+
+  const handleHidden = useCallback((groupId: string) => {
+    removeStoredGroup(groupId);
     setGroups(getStoredGroups());
   }, []);
 
@@ -225,5 +264,5 @@ export function useGroupDiscovery(
     };
   }, [address, client, graphqlClient]);
 
-  return { groups, loading, refresh };
+  return { groups, loading, refresh, handleDiscovered, handleHidden };
 }

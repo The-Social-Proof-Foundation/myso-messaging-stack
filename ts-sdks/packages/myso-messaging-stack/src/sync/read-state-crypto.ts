@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import type { Signer } from '@socialproof/myso/cryptography';
+import { decodeMySoPrivateKey } from '@socialproof/myso/cryptography';
 
 import type { CryptoPrimitives } from '../encryption/crypto-primitives.js';
 import { getDefaultCryptoPrimitives } from '../encryption/crypto-primitives.js';
@@ -11,7 +12,14 @@ const READ_STATE_INFO = new TextEncoder().encode('myso-messaging-read-state-v1')
 
 function getSignerSeed(signer: Signer): Uint8Array {
 	if ('getSecretKey' in signer && typeof signer.getSecretKey === 'function') {
-		return signer.getSecretKey();
+		const secret = (signer as { getSecretKey(): string | Uint8Array }).getSecretKey();
+		// Keypair signers return the Bech32 `mysoprivkey...` string — decode to
+		// the raw 32-byte seed for HKDF. (Passing the string to Web Crypto was
+		// a silent-failure bug: every read-state write threw at encrypt time.)
+		if (typeof secret === 'string') {
+			return decodeMySoPrivateKey(secret).secretKey;
+		}
+		return secret;
 	}
 	throw new Error('Read state encryption requires a keypair signer with getSecretKey()');
 }

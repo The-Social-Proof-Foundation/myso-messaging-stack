@@ -23,9 +23,13 @@ import type {
 	FetchMessageParams,
 	FetchMessagesParams,
 	FetchMessagesResult,
+	FetchUnreadCountsParams,
+	GetGroupPresenceParams,
 	GetGroupReceiptsParams,
 	GetUserReadStateParams,
+	GroupPresenceEntry,
 	GroupReceiptState,
+	GroupUnreadCount,
 	ListGroupPinsParams,
 	ListGroupReactionsParams,
 	ListAgentConversationsParams,
@@ -35,17 +39,22 @@ import type {
 	PostPresenceParams,
 	PostPushTokenParams,
 	PutUserReadStateParams,
+	PutUserReadStateResult,
 	RelayerMessage,
 	RelayerReactionEntry,
 	RelayerSubscriptionEvent,
+	RelayerUserEvent,
 	RelayerAgentConversation,
 	SendMessageParams,
 	SendMessageResult,
+	SendTypingParams,
 	SetGroupPinParams,
 	SubscribeParams,
+	SubscribeUserEventsParams,
 	UpdateMessageParams,
+	UserReadStateWire,
 } from './types.js';
-import { PaymentRequiredError, RelayerTransportError } from './types.js';
+import { PaymentRequiredError, ReadStateConflictError, RelayerTransportError } from './types.js';
 import {
 	fromWireMessage,
 	toWireAttachment,
@@ -92,6 +101,26 @@ interface WireReadStateResponse {
 	encrypted_blob: string;
 	blob_version: number;
 	updated_at?: string;
+}
+
+interface WirePutReadStateResponse {
+	ok: boolean;
+	/** Server-assigned version (absent on legacy relayers). */
+	blob_version?: number;
+}
+
+interface WireUnreadCountsResponse {
+	items: Array<{
+		group_id: string;
+		latest_order: number;
+		unread_count: number;
+	}>;
+}
+
+interface WirePresenceEntry {
+	member: string;
+	last_seen?: string | null;
+	online: boolean;
 }
 
 interface WireAgentConversation {
@@ -470,17 +499,78 @@ export class HTTPRelayerTransport implements RelayerTransport {
 		};
 	}
 
-	async putUserReadState(params: PutUserReadStateParams): Promise<void> {
-		const payload = {
+	async putUserReadState(params: PutUserReadStateParams): Promise<PutUserReadStateResult> {
+		const payload: Record<string, unknown> = {
 			encrypted_blob: toHex(params.encryptedBlob),
 			blob_version: params.blobVersion,
 		};
+		if (params.expectedVersion !== undefined) {
+			payload.expected_version = params.expectedVersion;
+		}
 		const { body, headers } = await createBodyAuth(params.signer, payload);
-		await this.#request(this.#v1Path('/users/read-state'), {
-			method: 'PUT',
+
+		try {
+			const wire = await this.#request<WirePutReadStateResponse>(
+				this.#v1Path('/users/read-state'),
+				{
+					method: 'PUT',
+					headers: { ...headers, 'Content-Type': 'application/json' },
+					body: JSON.stringify(body),
+				},
+			);
+			return { blobVersion: wire.blob_version ?? params.blobVersion };
+		} catch (error) {
+			throw toReadStateConflict(error) ?? error;
+		}
+	}
+
+	async fetchUnreadCounts(params: FetchUnreadCountsParams): Promise<GroupUnreadCount[]> {
+		const payload = {
+			items: params.items.map((item) => ({
+				group_id: item.groupId,
+				after_order: item.afterOrder,
+			})),
+		};
+		const { body, headers } = await createBodyAuth(params.signer, payload);
+		const wire = await this.#request<WireUnreadCountsResponse>(
+			this.#v1Path('/users/unread-counts'),
+			{
+				method: 'POST',
+				headers: { ...headers, 'Content-Type': 'application/json' },
+				body: JSON.stringify(body),
+			},
+		);
+		return wire.items.map((item) => ({
+			groupId: item.group_id,
+			latestOrder: item.latest_order,
+			unreadCount: item.unread_count,
+		}));
+	}
+
+	async sendTyping(params: SendTypingParams): Promise<void> {
+		const payload = {
+			group_id: params.groupId,
+			typing: params.typing,
+		};
+		const { body, headers } = await createBodyAuth(params.signer, payload);
+		await this.#request(this.#relayerPath(`/groups/${params.groupId}/typing`), {
+			method: 'POST',
 			headers: { ...headers, 'Content-Type': 'application/json' },
 			body: JSON.stringify(body),
 		});
+	}
+
+	async getGroupPresence(params: GetGroupPresenceParams): Promise<GroupPresenceEntry[]> {
+		const headers = await this.#cachedHeaderAuth(params.signer, params.groupId);
+		const rows = await this.#request<WirePresenceEntry[]>(
+			this.#relayerPath(`/groups/${params.groupId}/presence`),
+			{ method: 'GET', headers },
+		);
+		return rows.map((row) => ({
+			member: row.member,
+			lastSeen: row.last_seen ?? undefined,
+			online: row.online,
+		}));
 	}
 
 	async postPushToken(params: PostPushTokenParams): Promise<void> {
@@ -560,6 +650,50 @@ export class HTTPRelayerTransport implements RelayerTransport {
 			minCost: parseMinCost(wire.min_cost),
 			recipient: wire.recipient,
 		};
+	}
+
+	/**
+	 * Polling fallback for the user feed: when `groupIds` is provided, diffs
+	 * batch unread counts into synthetic `group.activity` events (the first
+	 * snapshot is a baseline). Read-state and discovery events have no polling
+	 * equivalent — consumers reconcile those through their own REST paths.
+	 */
+	async *subscribeUserEvents(
+		params: SubscribeUserEventsParams,
+	): AsyncIterable<RelayerUserEvent> {
+		let snapshot: Map<string, number> | undefined;
+
+		while (!this.#disconnected && !params.signal?.aborted) {
+			try {
+				const groupIds = params.groupIds ?? [];
+				if (groupIds.length > 0) {
+					const counts = await this.fetchUnreadCounts({
+						signer: params.signer,
+						items: groupIds.map((groupId) => ({ groupId, afterOrder: 0 })),
+					});
+
+					const next = new Map(counts.map((c) => [c.groupId, c.latestOrder]));
+					if (snapshot) {
+						for (const [groupId, latestOrder] of next) {
+							if ((snapshot.get(groupId) ?? 0) < latestOrder) {
+								if (this.#disconnected || params.signal?.aborted) return;
+								yield { type: 'group.activity', groupId, latestOrder };
+							}
+						}
+					}
+					snapshot = next;
+				}
+
+				await delay(this.#pollingIntervalMs, params.signal);
+			} catch (error) {
+				if (this.#disconnected || params.signal?.aborted) return;
+				// Client errors (4xx) are not retryable — throw immediately
+				if (error instanceof RelayerTransportError && error.status >= 400 && error.status < 500) {
+					throw error;
+				}
+				await delay(this.#pollingIntervalMs, params.signal);
+			}
+		}
 	}
 
 	/**
@@ -700,10 +834,35 @@ export class HTTPRelayerTransport implements RelayerTransport {
 					recipient: body.recipient ?? null,
 				});
 			}
-			throw new RelayerTransportError(body.error, response.status, body.code);
+			throw new RelayerTransportError(body.error, response.status, body.code, body);
 		} catch (error) {
 			if (error instanceof RelayerTransportError) throw error;
 			throw new RelayerTransportError(response.statusText, response.status);
 		}
 	}
+}
+
+/**
+ * Maps a `409 READ_STATE_CONFLICT` transport error to {@link ReadStateConflictError}
+ * carrying the server's current record; returns null for any other error.
+ */
+function toReadStateConflict(error: unknown): ReadStateConflictError | null {
+	if (
+		!(error instanceof RelayerTransportError) ||
+		error.status !== 409 ||
+		error.code !== 'READ_STATE_CONFLICT'
+	) {
+		return null;
+	}
+	const body = error.body as { current?: WireReadStateResponse } | undefined;
+	const current = body?.current;
+	if (!current) {
+		return null;
+	}
+	const wire: UserReadStateWire = {
+		encryptedBlob: fromHex(current.encrypted_blob),
+		blobVersion: current.blob_version,
+		updatedAt: current.updated_at,
+	};
+	return new ReadStateConflictError(error.message, wire);
 }

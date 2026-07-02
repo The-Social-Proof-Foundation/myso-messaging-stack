@@ -7,15 +7,21 @@ use sqlx::postgres::PgListener;
 use tracing::{info, warn};
 
 use super::{
-    MessageCreatedEvent, ReactionUpdatedEvent, RealtimeHub, MESSAGE_CREATED_EVENT_TYPE,
-    MESSAGE_EVENTS_CHANNEL, REACTION_UPDATED_EVENT_TYPE,
+    MessageCreatedEvent, PresenceChangedSignal, PresenceUpdatedEvent, ReactionUpdatedEvent,
+    ReadStateUpdatedEvent, RealtimeHub, TypingEvent, UserFeedEvent, MESSAGE_CREATED_EVENT_TYPE,
+    MESSAGE_EVENTS_CHANNEL, PRESENCE_CHANGED_SIGNAL_TYPE, READ_STATE_UPDATED_EVENT_TYPE,
+    REACTION_UPDATED_EVENT_TYPE, TYPING_START_EVENT_TYPE, TYPING_STOP_EVENT_TYPE,
 };
+use crate::auth::MembershipStore;
 use crate::storage::StorageAdapter;
 
 pub struct PgListenerService {
     database_url: String,
     storage: Arc<dyn StorageAdapter>,
     hub: Arc<RealtimeHub>,
+    /// Presence fan-out: each instance expands wallet-level `presence.changed`
+    /// signals to group channels through its own membership store.
+    membership_store: Arc<dyn MembershipStore>,
 }
 
 impl PgListenerService {
@@ -23,11 +29,13 @@ impl PgListenerService {
         database_url: String,
         storage: Arc<dyn StorageAdapter>,
         hub: Arc<RealtimeHub>,
+        membership_store: Arc<dyn MembershipStore>,
     ) -> Self {
         Self {
             database_url,
             storage,
             hub,
+            membership_store,
         }
     }
 
@@ -84,6 +92,52 @@ impl PgListenerService {
                         }
                     };
                     self.hub.publish_reaction(&event.group_id.clone(), event);
+                }
+                Some(READ_STATE_UPDATED_EVENT_TYPE) => {
+                    // Metadata only — the blob itself is re-fetched over REST.
+                    let event: ReadStateUpdatedEvent = match serde_json::from_str(payload) {
+                        Ok(event) => event,
+                        Err(err) => {
+                            warn!("invalid NOTIFY payload on {MESSAGE_EVENTS_CHANNEL}: {err}");
+                            continue;
+                        }
+                    };
+                    self.hub.publish_user_event(UserFeedEvent::ReadStateUpdated {
+                        wallet: event.wallet,
+                        blob_version: event.blob_version,
+                    });
+                }
+                Some(TYPING_START_EVENT_TYPE) | Some(TYPING_STOP_EVENT_TYPE) => {
+                    // Ephemeral — publish directly to the group channel.
+                    let event: TypingEvent = match serde_json::from_str(payload) {
+                        Ok(event) => event,
+                        Err(err) => {
+                            warn!("invalid NOTIFY payload on {MESSAGE_EVENTS_CHANNEL}: {err}");
+                            continue;
+                        }
+                    };
+                    self.hub.publish_typing(&event.group_id.clone(), event);
+                }
+                Some(PRESENCE_CHANGED_SIGNAL_TYPE) => {
+                    // Wallet-level signal — fan out to the wallet's groups
+                    // through this instance's membership store.
+                    let signal: PresenceChangedSignal = match serde_json::from_str(payload) {
+                        Ok(signal) => signal,
+                        Err(err) => {
+                            warn!("invalid NOTIFY payload on {MESSAGE_EVENTS_CHANNEL}: {err}");
+                            continue;
+                        }
+                    };
+                    for group_id in self.membership_store.groups_for_member(&signal.member) {
+                        self.hub.publish_presence(
+                            &group_id,
+                            PresenceUpdatedEvent::new(
+                                group_id.clone(),
+                                signal.member.clone(),
+                                signal.online,
+                            ),
+                        );
+                    }
                 }
                 other => {
                     warn!(

@@ -39,7 +39,6 @@ function App() {
           MySocial Messaging
         </h1>
         <div className="flex items-center gap-3">
-          <ThemeToggleButton />
           {session && connectedAddress && (
             <span
               className="max-w-[10rem] truncate text-xs text-secondary-500 dark:text-secondary-400"
@@ -48,6 +47,7 @@ function App() {
               {connectedAddress.slice(0, 8)}…{connectedAddress.slice(-6)}
             </span>
           )}
+          <ThemeToggleButton />
           {session ? (
             <button
               type="button"

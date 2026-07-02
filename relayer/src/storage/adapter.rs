@@ -56,9 +56,19 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use crate::models::{
-    Attachment, EncryptedBlobRecord, Message, PaidEscrowRecord, PushTokenRecord, ReactionEntry,
-    ReceiptStateResponse, SyncStatus,
+    Attachment, EncryptedBlobRecord, GroupActivity, Message, PaidEscrowRecord, PushTokenRecord,
+    ReactionEntry, ReceiptStateResponse, SyncStatus,
 };
+
+/// Outcome of a compare-and-set write to the encrypted user read-state blob.
+#[derive(Debug, Clone)]
+pub enum PutUserReadStateResult {
+    /// Blob stored; carries the server-assigned (monotonic) version.
+    Stored { blob_version: u64 },
+    /// `expected_version` did not match; carries the current record so the
+    /// caller can merge and retry without another GET.
+    Conflict { current: EncryptedBlobRecord },
+}
 
 /// Errors that can occur during storage operations.
 #[derive(Debug, Error)]
@@ -210,6 +220,16 @@ pub trait StorageAdapter: Send + Sync {
     /// deliberately per-sender, NOT total conversation message count.
     async fn has_message_from(&self, group_id: &str, sender: &str) -> StorageResult<bool>;
 
+    /// Aggregate activity for a group: highest assigned order plus the exact
+    /// count of non-deleted messages with `order > after_order`. Backs the
+    /// batch `/v1/users/unread-counts` endpoint (one cheap aggregate per group
+    /// instead of paging message bodies).
+    async fn get_group_activity(
+        &self,
+        group_id: &str,
+        after_order: i64,
+    ) -> StorageResult<GroupActivity>;
+
     // === /v1 group feature mirror (off-chain; complements on-chain MessageLog) ===
 
     /// Sets or clears `member`'s reaction on a message. Idempotent: re-adding an
@@ -259,11 +279,20 @@ pub trait StorageAdapter: Send + Sync {
 
     async fn get_user_read_state(&self, wallet: &str) -> StorageResult<Option<EncryptedBlobRecord>>;
 
+    /// Stores the encrypted read-state blob with server-assigned versioning.
+    ///
+    /// The stored `blob_version` is always `previous + 1` (or 1 for the first
+    /// write) — client-proposed versions are ignored. When `expected_version`
+    /// is `Some`, the write only succeeds if it matches the current stored
+    /// version (compare-and-set); on mismatch the current record is returned
+    /// as [`PutUserReadStateResult::Conflict`]. `None` preserves the legacy
+    /// last-writer-wins behavior for older clients.
     async fn put_user_read_state(
         &self,
         wallet: &str,
-        record: EncryptedBlobRecord,
-    ) -> StorageResult<()>;
+        encrypted_blob: Vec<u8>,
+        expected_version: Option<u64>,
+    ) -> StorageResult<PutUserReadStateResult>;
 
     // === Push device tokens ===
 
@@ -278,4 +307,12 @@ pub trait StorageAdapter: Send + Sync {
     async fn update_presence(&self, wallet: &str) -> StorageResult<()>;
 
     async fn get_presence_last_seen(&self, wallet: &str) -> StorageResult<Option<chrono::DateTime<chrono::Utc>>>;
+
+    // === Cross-instance realtime signal (ephemeral events) ===
+
+    /// Broadcasts a pre-serialized realtime payload to all relayer instances.
+    /// Postgres: `pg_notify` on the message-events channel (each instance's
+    /// listener fans out). In-memory: no-op — single-instance deployments
+    /// publish inline instead. Never persisted.
+    async fn notify_realtime_event(&self, payload_json: &str) -> StorageResult<()>;
 }

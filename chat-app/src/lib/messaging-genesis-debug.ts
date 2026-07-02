@@ -22,12 +22,22 @@ import {
 
 export { getGenesisGraphqlUrl, STALE_GHOST_OBJECT_ID };
 
-export interface CreateGroupObjectIds {
+/**
+ * Type alias (not interface) so these stay assignable to the widened
+ * `Record<string, string>` params of the tx-input/RPC diagnostics.
+ */
+export type CreateGroupObjectIds = {
   versionId: string;
   namespaceId: string;
   groupManagerId: string;
   blockListRegistryId: string;
-}
+};
+
+/** Shared-object inputs of the paid-DM PTB (create group + `send_paid_message_digest`). */
+export type PaidDmObjectIds = CreateGroupObjectIds & {
+  socialGraphId: string;
+  paidMessagingRegistryId: string;
+};
 
 type TransactionWithPrepare = Transaction & {
   prepareForSerialization(options: {
@@ -122,6 +132,12 @@ export function deriveGroupManagerId(namespaceId: string): string {
   return deriveObjectID(namespaceId, '0x1::string::String', key);
 }
 
+/** Matches Move `PAID_MESSAGING_REGISTRY_DERIVATION_KEY` (`b"paid_messaging_registry"`). */
+export function derivePaidMessagingRegistryId(namespaceId: string): string {
+  const key = bcs.string().serialize('paid_messaging_registry').toBytes();
+  return deriveObjectID(namespaceId, '0x1::string::String', key);
+}
+
 function warnIfStale(label: string, objectId: string): void {
   if (objectId === STALE_GHOST_OBJECT_ID) {
     console.warn(
@@ -139,6 +155,21 @@ export function expectedCreateGroupObjectIds(
     namespaceId,
     groupManagerId: deriveGroupManagerId(namespaceId),
     blockListRegistryId,
+  };
+}
+
+/**
+ * The paid-DM PTB references the create-group singletons plus `SocialGraph`
+ * and the derived `PaidMessagingRegistry` (see `send_paid_message_digest`).
+ */
+export function expectedPaidDmObjectIds(
+  resolved: ResolvedGenesisMessagingConfig,
+): PaidDmObjectIds {
+  const { namespaceId, socialGraphId } = resolved.messaging;
+  return {
+    ...expectedCreateGroupObjectIds(resolved),
+    socialGraphId,
+    paidMessagingRegistryId: derivePaidMessagingRegistryId(namespaceId),
   };
 }
 
@@ -315,7 +346,7 @@ export async function logCreateGroupTxInputs(
   label: string,
   tx: Transaction,
   client: ClientWithCoreApi,
-  expected?: CreateGroupObjectIds,
+  expected?: Record<string, string>,
   options?: {
     resolvedMemoryAccountId?: string | null;
   },
@@ -451,10 +482,10 @@ export async function logSignerGasCoins(
   }
 }
 
-/** Dev helper: RPC existence check for the four create-group singletons. */
+/** Dev helper: RPC existence check for a named set of singleton object IDs. */
 export async function verifyCreateGroupObjectsOnRpc(
   label: string,
-  expected: CreateGroupObjectIds,
+  expected: Record<string, string>,
   client: ClientWithCoreApi = createBaseMySoRpcClient(),
 ): Promise<void> {
   if (!import.meta.env.DEV) return;

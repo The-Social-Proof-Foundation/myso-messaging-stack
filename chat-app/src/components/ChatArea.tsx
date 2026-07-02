@@ -10,12 +10,18 @@ import { usePermissions } from '../hooks/usePermissions';
 import { mistToMyso } from '../lib/mys-coin';
 import { MessageBubble } from './MessageBubble';
 import { MessageInput } from './MessageInput';
+import { TypingIndicator } from './TypingIndicator';
 import { AdminPanel } from './AdminPanel';
 import { PaymentConfirmDialog } from './PaymentConfirmDialog';
+import { useGroupMemberLabels } from '../hooks/useGroupMemberLabels';
 
 interface ChatAreaProps {
   selectedGroup: StoredGroup | null;
   onLeaveGroup?: () => void;
+  /** Called after the read watermark advances — clears the sidebar badge. */
+  onReadStateChanged?: (groupId: string) => void;
+  /** Called when a message is sent or received in the open thread. */
+  onGroupActivity?: (order: number) => void;
   devAgentPanel?: ReactNode;
 }
 
@@ -23,6 +29,8 @@ interface ChatAreaProps {
 export function ChatArea({
   selectedGroup,
   onLeaveGroup,
+  onReadStateChanged,
+  onGroupActivity,
   devAgentPanel,
 }: Readonly<ChatAreaProps>) {
   if (!selectedGroup) {
@@ -55,6 +63,8 @@ export function ChatArea({
     <ChatView
       group={selectedGroup}
       onLeaveGroup={onLeaveGroup}
+      onReadStateChanged={onReadStateChanged}
+      onGroupActivity={onGroupActivity}
       devAgentPanel={devAgentPanel}
     />
   );
@@ -62,12 +72,14 @@ export function ChatArea({
 
 function ChatHeader({
   name,
+  onlineCount,
   onLeaveClick,
   leaving,
   onToggleAdmin,
   adminPanelOpen,
 }: Readonly<{
   name: string;
+  onlineCount?: number;
   onLeaveClick?: () => void;
   leaving?: boolean;
   onToggleAdmin?: () => void;
@@ -75,9 +87,17 @@ function ChatHeader({
 }>) {
   return (
     <div className="flex items-center justify-between border-b border-secondary-200 px-6 py-3 dark:border-secondary-700">
-      <h3 className="text-sm font-semibold text-secondary-800 dark:text-secondary-200">
-        {name}
-      </h3>
+      <div className="flex items-baseline gap-2">
+        <h3 className="text-sm font-semibold text-secondary-800 dark:text-secondary-200">
+          {name}
+        </h3>
+        {onlineCount !== undefined && onlineCount > 0 && (
+          <span className="flex items-center gap-1 text-xs text-secondary-400 dark:text-secondary-500">
+            <span className="inline-block h-1.5 w-1.5 rounded-full bg-green-500" />
+            {onlineCount} online
+          </span>
+        )}
+      </div>
       <div className="flex items-center gap-2">
         {onLeaveClick && (
           <button
@@ -109,10 +129,14 @@ function ChatHeader({
 function ChatView({
   group,
   onLeaveGroup,
+  onReadStateChanged,
+  onGroupActivity,
   devAgentPanel,
 }: Readonly<{
   group: StoredGroup;
   onLeaveGroup?: () => void;
+  onReadStateChanged?: (groupId: string) => void;
+  onGroupActivity?: (order: number) => void;
   devAgentPanel?: ReactNode;
 }>) {
   const myAddress = useAuthenticatedAddress();
@@ -120,26 +144,42 @@ function ChatView({
   const { permissions, loading: permissionsLoading, refresh: refreshPermissions } =
     usePermissions(group.groupId);
   const [adminPanelOpen, setAdminPanelOpen] = useState(false);
+  const { labelFor, refresh: refreshMemberLabels } = useGroupMemberLabels(
+    group.groupId,
+    { refreshKey: adminPanelOpen ? 1 : 0 },
+  );
+  const paidGate = usePaidDmGate(group);
   const {
     messages,
     loading,
     sending,
+    claiming,
     error,
     hasMore,
     reactions,
+    typingMembers,
+    onlineMembers,
     sendMessage,
     editMessage,
     deleteMessage,
     toggleReaction,
+    sendTyping,
     loadMore,
     paymentRequired,
     paying,
     paymentError,
     confirmPayment,
     cancelPayment,
-  } = useMessages(group.uuid, group.groupId);
+  } = useMessages(group.uuid, group.groupId, {
+    onReadStateChanged,
+    claimPending: paidGate.claimPending,
+    onGroupActivity,
+  });
 
-  const paidGate = usePaidDmGate(group);
+  const typingTypers = typingMembers.map((address) => ({
+    address,
+    label: labelFor(address),
+  }));
 
   const [showLeaveConfirm, setShowLeaveConfirm] = useState(false);
   const [leaving, setLeaving] = useState(false);
@@ -202,6 +242,13 @@ function ChatView({
     }
   }, [messages.length, isAtBottom]);
 
+  // Keep typing bubble visible when near the bottom of the thread.
+  useEffect(() => {
+    if (isAtBottom && typingMembers.length > 0) {
+      bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [typingMembers.length, isAtBottom]);
+
   // Preserve scroll position when loading older messages (prepending)
   const prevScrollHeightRef = useRef(0);
   useEffect(() => {
@@ -226,6 +273,7 @@ function ChatView({
       <div className="flex min-w-0 flex-1 flex-col">
       <ChatHeader
         name={group.name}
+        onlineCount={[...onlineMembers.values()].filter(Boolean).length}
         onLeaveClick={() => setShowLeaveConfirm(true)}
         leaving={leaving}
         onToggleAdmin={() => setAdminPanelOpen((o) => !o)}
@@ -294,6 +342,10 @@ function ChatView({
           </div>
         )}
 
+        {typingTypers.length > 0 && (
+          <TypingIndicator typers={typingTypers} />
+        )}
+
         <div ref={bottomRef} />
       </div>
 
@@ -326,7 +378,7 @@ function ChatView({
       {/* Reply-to-claim: the peer paid an escrow that our first reply claims */}
       {paidGate.claimPending && !permissionsLoading && permissions.canSend && (
         <div className="border-t border-amber-300 bg-amber-50 px-4 py-2 text-center text-xs font-medium text-amber-900 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-100">
-          Reply to claim{' '}
+          Reply with at least 6 characters to claim{' '}
           {paidGate.peerEscrowAmount !== null
             ? `${mistToMyso(paidGate.peerEscrowAmount)} MYSO`
             : 'the escrow'}{' '}
@@ -347,13 +399,21 @@ function ChatView({
           />
         </div>
       ) : permissions.canSend ? (
-        <MessageInput
-          onSend={async (text, files) => {
-            await sendMessage(text, files);
-            paidGate.refresh();
-          }}
-          sending={sending}
-        />
+        <>
+          {claiming && (
+            <p className="border-t border-secondary-200 px-4 py-1 text-center text-xs text-secondary-500 dark:border-secondary-700 dark:text-secondary-400">
+              Claiming escrow…
+            </p>
+          )}
+          <MessageInput
+            onSend={async (text, files) => {
+              await sendMessage(text, files);
+              paidGate.refresh();
+            }}
+            onTyping={sendTyping}
+            sending={sending || claiming}
+          />
+        </>
       ) : (
         <div className="border-t border-secondary-200 px-4 py-3 text-center text-xs text-secondary-400 dark:border-secondary-700 dark:text-secondary-500">
           You don't have permission to send messages in this group.
@@ -422,7 +482,11 @@ function ChatView({
         groupUuid={group.uuid}
         groupName={group.name}
         permissions={permissions}
-        onPermissionsChanged={refreshPermissions}
+        onPermissionsChanged={() => {
+          refreshPermissions();
+          refreshMemberLabels();
+        }}
+        onlineMembers={onlineMembers}
       />
     </div>
   );

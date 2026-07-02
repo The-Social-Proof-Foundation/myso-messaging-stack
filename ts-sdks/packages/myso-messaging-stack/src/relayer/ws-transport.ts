@@ -1,15 +1,21 @@
 // Copyright (c) The Social Proof Foundation, LLC.
 // SPDX-License-Identifier: Apache-2.0
 
-import { createWsAuthQuery } from './auth-headers.js';
-import type { SubscribeParams } from './types.js';
+import { createUserWsAuthQuery, createWsAuthQuery } from './auth-headers.js';
+import type { SubscribeParams, SubscribeUserEventsParams } from './types.js';
 import { RelayerTransportError } from './types.js';
-import type { RelayerSubscriptionEvent } from './types.js';
+import type { RelayerSubscriptionEvent, RelayerUserEvent } from './types.js';
 import {
 	fromWireMessage,
+	fromWirePresenceEvent,
 	fromWireReactionEvent,
+	fromWireTypingEvent,
+	fromWireUserFeedEvent,
 	type WireMessageCreatedEvent,
+	type WirePresenceEvent,
 	type WireReactionUpdatedEvent,
+	type WireTypingEvent,
+	type WireUserFeedEvent,
 } from './wire.js';
 
 /** Thrown when a WebSocket connection cannot be established or is lost. */
@@ -55,6 +61,13 @@ function resolveWsPath(apiPrefix: string): string {
 	return '/v1/ws';
 }
 
+function resolveUserWsPath(apiPrefix: string): string {
+	if (apiPrefix) {
+		return `${apiPrefix}/users/ws`;
+	}
+	return '/v1/users/ws';
+}
+
 function delay(ms: number, signal?: AbortSignal): Promise<void> {
 	return new Promise((resolve, reject) => {
 		if (signal?.aborted) {
@@ -73,16 +86,56 @@ function delay(ms: number, signal?: AbortSignal): Promise<void> {
 	});
 }
 
+/** Parses a group-feed frame into a domain event, or null to skip it. */
+function parseGroupFrame(
+	data: string,
+	afterOrder: number | undefined,
+): RelayerSubscriptionEvent | null {
+	const frame = JSON.parse(data) as
+		| WireMessageCreatedEvent
+		| WireReactionUpdatedEvent
+		| WireTypingEvent
+		| WirePresenceEvent
+		| { type?: string };
+	if (frame.type === 'message.created' && 'message' in frame) {
+		const message = fromWireMessage(frame.message);
+		if (afterOrder !== undefined && message.order <= afterOrder) {
+			return null;
+		}
+		return { type: 'message.created', message };
+	}
+	if (frame.type === 'reaction.updated' && 'chain_seq' in frame) {
+		return { type: 'reaction.updated', reaction: fromWireReactionEvent(frame) };
+	}
+	if ((frame.type === 'typing.start' || frame.type === 'typing.stop') && 'member' in frame) {
+		return { type: frame.type, typing: fromWireTypingEvent(frame as WireTypingEvent) };
+	}
+	if (frame.type === 'presence.updated' && 'member' in frame) {
+		return { type: 'presence.updated', presence: fromWirePresenceEvent(frame) };
+	}
+	return null;
+}
+
+/** Parses a user-feed frame into a domain event, or null to skip it. */
+function parseUserFrame(data: string): RelayerUserEvent | null {
+	const frame = JSON.parse(data) as WireUserFeedEvent | { type?: string };
+	if (!frame.type) {
+		return null;
+	}
+	return fromWireUserFeedEvent(frame as WireUserFeedEvent);
+}
+
 /**
- * WebSocket transport for realtime `subscribe()` only.
+ * WebSocket transport for the realtime streams:
+ * - `subscribe()` — per-group feed (`/v1/ws`): messages, reactions, typing, presence
+ * - `subscribeUserEvents()` — wallet feed (`/v1/users/ws`): activity, read-state, discovery
  *
- * Parses `{ type: "message.created", message: WireMessageResponse }` and
- * `{ type: "reaction.updated", ... }` frames and yields domain events
- * directly — no HTTP refetch after delivery.
+ * Frames are parsed into domain events directly — no HTTP refetch after delivery.
  */
 export class WSRelayerTransport {
 	readonly #relayerUrl: string;
 	readonly #wsPath: string;
+	readonly #userWsPath: string;
 	readonly #reconnectInitialMs: number;
 	readonly #reconnectMaxMs: number;
 	readonly #maxReconnectAttempts: number;
@@ -97,6 +150,7 @@ export class WSRelayerTransport {
 				? ''
 				: (rawPrefix.startsWith('/') ? rawPrefix : `/${rawPrefix}`).replace(/\/+$/, '');
 		this.#wsPath = resolveWsPath(apiPrefix);
+		this.#userWsPath = resolveUserWsPath(apiPrefix);
 		this.#reconnectInitialMs = config.reconnectInitialMs ?? DEFAULT_RECONNECT_INITIAL_MS;
 		this.#reconnectMaxMs = config.reconnectMaxMs ?? DEFAULT_RECONNECT_MAX_MS;
 		this.#maxReconnectAttempts = config.maxReconnectAttempts ?? DEFAULT_MAX_RECONNECT_ATTEMPTS;
@@ -109,7 +163,13 @@ export class WSRelayerTransport {
 
 		while (!this.#disconnected && !params.signal?.aborted) {
 			try {
-				for await (const event of this.#connectAndStream(params, lastOrder)) {
+				const afterOrder = lastOrder;
+				const query = await createWsAuthQuery(params.signer, params.groupId, afterOrder);
+				const wsUrl = `${relayerUrlToWsBase(this.#relayerUrl)}${this.#wsPath}?${query}`;
+
+				for await (const event of this.#connectAndStream(wsUrl, params.signal, (data) =>
+					parseGroupFrame(data, afterOrder),
+				)) {
 					if (this.#disconnected || params.signal?.aborted) return;
 					yield event;
 					if (event.type === 'message.created') {
@@ -119,47 +179,94 @@ export class WSRelayerTransport {
 				}
 				return;
 			} catch (error) {
-				if (this.#disconnected || params.signal?.aborted) return;
-				if (error instanceof RelayerTransportError && error.status >= 400 && error.status < 500) {
-					throw error;
-				}
-				if (error instanceof WsConnectionError && !error.retryable) {
-					throw error;
-				}
-				if (error instanceof DOMException && error.name === 'AbortError') {
-					return;
-				}
-
-				reconnectAttempt += 1;
-				if (reconnectAttempt > this.#maxReconnectAttempts) {
-					throw error instanceof Error
-						? error
-						: new WsConnectionError('WebSocket subscribe failed');
-				}
-
-				const backoff = Math.min(
-					this.#reconnectInitialMs * 2 ** (reconnectAttempt - 1),
-					this.#reconnectMaxMs,
+				reconnectAttempt = await this.#handleStreamError(
+					error,
+					reconnectAttempt,
+					params.signal,
 				);
-				await delay(backoff, params.signal);
+				if (reconnectAttempt < 0) return;
 			}
 		}
 	}
 
-	async *#connectAndStream(
-		params: SubscribeParams,
-		afterOrder: number | undefined,
-	): AsyncIterable<RelayerSubscriptionEvent> {
-		const query = await createWsAuthQuery(params.signer, params.groupId, afterOrder);
-		const wsUrl = `${relayerUrlToWsBase(this.#relayerUrl)}${this.#wsPath}?${query}`;
+	async *subscribeUserEvents(
+		params: SubscribeUserEventsParams,
+	): AsyncIterable<RelayerUserEvent> {
+		let reconnectAttempt = 0;
 
+		while (!this.#disconnected && !params.signal?.aborted) {
+			try {
+				const query = await createUserWsAuthQuery(params.signer);
+				const wsUrl = `${relayerUrlToWsBase(this.#relayerUrl)}${this.#userWsPath}?${query}`;
+
+				for await (const event of this.#connectAndStream(
+					wsUrl,
+					params.signal,
+					parseUserFrame,
+				)) {
+					if (this.#disconnected || params.signal?.aborted) return;
+					yield event;
+					reconnectAttempt = 0;
+				}
+				return;
+			} catch (error) {
+				reconnectAttempt = await this.#handleStreamError(
+					error,
+					reconnectAttempt,
+					params.signal,
+				);
+				if (reconnectAttempt < 0) return;
+			}
+		}
+	}
+
+	/**
+	 * Shared stream error handling: rethrows non-retryable errors, returns -1
+	 * to end the stream on abort/disconnect, otherwise waits with exponential
+	 * backoff and returns the incremented attempt count.
+	 */
+	async #handleStreamError(
+		error: unknown,
+		reconnectAttempt: number,
+		signal: AbortSignal | undefined,
+	): Promise<number> {
+		if (this.#disconnected || signal?.aborted) return -1;
+		if (error instanceof RelayerTransportError && error.status >= 400 && error.status < 500) {
+			throw error;
+		}
+		if (error instanceof WsConnectionError && !error.retryable) {
+			throw error;
+		}
+		if (error instanceof DOMException && error.name === 'AbortError') {
+			return -1;
+		}
+
+		const attempt = reconnectAttempt + 1;
+		if (attempt > this.#maxReconnectAttempts) {
+			throw error instanceof Error ? error : new WsConnectionError('WebSocket subscribe failed');
+		}
+
+		const backoff = Math.min(this.#reconnectInitialMs * 2 ** (attempt - 1), this.#reconnectMaxMs);
+		try {
+			await delay(backoff, signal);
+		} catch {
+			return -1;
+		}
+		return attempt;
+	}
+
+	async *#connectAndStream<TEvent>(
+		wsUrl: string,
+		signal: AbortSignal | undefined,
+		parseFrame: (data: string) => TEvent | null,
+	): AsyncIterable<TEvent> {
 		const socket = new this.#WebSocket(wsUrl);
-		const messageQueue: RelayerSubscriptionEvent[] = [];
-		let resolveNext: ((value: RelayerSubscriptionEvent | typeof STREAM_END) => void) | undefined;
+		const messageQueue: TEvent[] = [];
+		let resolveNext: ((value: TEvent | typeof STREAM_END) => void) | undefined;
 		let streamEnded = false;
 		const STREAM_END = Symbol('stream_end');
 
-		const pushEvent = (event: RelayerSubscriptionEvent) => {
+		const pushEvent = (event: TEvent) => {
 			if (resolveNext) {
 				resolveNext(event);
 				resolveNext = undefined;
@@ -178,17 +285,17 @@ export class WSRelayerTransport {
 				socket.close();
 				reject(new DOMException('Aborted', 'AbortError'));
 			};
-			params.signal?.addEventListener('abort', onAbort, { once: true });
+			signal?.addEventListener('abort', onAbort, { once: true });
 
 			socket.onopen = () => {
 				clearTimeout(timer);
-				params.signal?.removeEventListener('abort', onAbort);
+				signal?.removeEventListener('abort', onAbort);
 				resolve();
 			};
 
 			socket.onerror = () => {
 				clearTimeout(timer);
-				params.signal?.removeEventListener('abort', onAbort);
+				signal?.removeEventListener('abort', onAbort);
 				reject(new WsConnectionError('WebSocket connection failed'));
 			};
 		});
@@ -196,18 +303,9 @@ export class WSRelayerTransport {
 		socket.onmessage = (event) => {
 			try {
 				const data = typeof event.data === 'string' ? event.data : String(event.data);
-				const frame = JSON.parse(data) as
-					| WireMessageCreatedEvent
-					| WireReactionUpdatedEvent
-					| { type?: string };
-				if (frame.type === 'message.created' && 'message' in frame) {
-					const message = fromWireMessage(frame.message);
-					if (afterOrder !== undefined && message.order <= afterOrder) {
-						return;
-					}
-					pushEvent({ type: 'message.created', message });
-				} else if (frame.type === 'reaction.updated' && 'chain_seq' in frame) {
-					pushEvent({ type: 'reaction.updated', reaction: fromWireReactionEvent(frame) });
+				const parsed = parseFrame(data);
+				if (parsed !== null) {
+					pushEvent(parsed);
 				}
 			} catch {
 				// Ignore malformed frames; server should only send valid JSON events.
@@ -227,13 +325,13 @@ export class WSRelayerTransport {
 		try {
 			await waitForOpen;
 
-			while (!this.#disconnected && !params.signal?.aborted && !streamEnded) {
+			while (!this.#disconnected && !signal?.aborted && !streamEnded) {
 				if (messageQueue.length > 0) {
 					yield messageQueue.shift()!;
 					continue;
 				}
 
-				const next = await new Promise<RelayerSubscriptionEvent | typeof STREAM_END>((resolve) => {
+				const next = await new Promise<TEvent | typeof STREAM_END>((resolve) => {
 					if (messageQueue.length > 0) {
 						resolve(messageQueue.shift()!);
 						return;

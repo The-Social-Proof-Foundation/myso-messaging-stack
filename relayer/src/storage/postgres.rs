@@ -9,14 +9,14 @@ use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
 use crate::models::{
-    Attachment, EncryptedBlobRecord, Message, MessageAttribution, PaidEscrowRecord,
+    Attachment, EncryptedBlobRecord, GroupActivity, Message, MessageAttribution, PaidEscrowRecord,
     PushTokenRecord, ReactionEntry, ReceiptStateResponse, SyncStatus,
 };
 use crate::services::realtime::{
-    MessageCreatedEvent, ReactionUpdatedEvent, MESSAGE_EVENTS_CHANNEL,
+    MessageCreatedEvent, ReactionUpdatedEvent, ReadStateUpdatedEvent, MESSAGE_EVENTS_CHANNEL,
 };
 
-use super::adapter::{StorageAdapter, StorageError, StorageResult};
+use super::adapter::{PutUserReadStateResult, StorageAdapter, StorageError, StorageResult};
 use super::memory::InMemoryStorage;
 use super::migrations;
 
@@ -395,6 +395,34 @@ impl StorageAdapter for PostgresStorage {
         Ok(exists)
     }
 
+    async fn get_group_activity(
+        &self,
+        group_id: &str,
+        after_order: i64,
+    ) -> StorageResult<GroupActivity> {
+        // Single aggregate on idx_messages_group_order; soft-deleted rows keep
+        // their order (latest_order includes them) but are excluded from count.
+        let row = sqlx::query(
+            r#"SELECT COALESCE(MAX(order_num), 0) AS latest_order,
+                      COUNT(*) FILTER (
+                          WHERE order_num > $2
+                            AND sync_status NOT IN ('DELETE_PENDING', 'DELETED')
+                      ) AS unread_count
+               FROM messages
+               WHERE group_id = $1"#,
+        )
+        .bind(group_id)
+        .bind(after_order)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|e| StorageError::OperationFailed(e.to_string()))?;
+
+        Ok(GroupActivity {
+            latest_order: row.get("latest_order"),
+            unread_count: row.get("unread_count"),
+        })
+    }
+
     async fn set_reaction(
         &self,
         group_id: &str,
@@ -606,8 +634,43 @@ impl StorageAdapter for PostgresStorage {
     async fn put_user_read_state(
         &self,
         wallet: &str,
-        record: EncryptedBlobRecord,
-    ) -> StorageResult<()> {
+        encrypted_blob: Vec<u8>,
+        expected_version: Option<u64>,
+    ) -> StorageResult<PutUserReadStateResult> {
+        // Row lock serializes concurrent writers so version assignment and the
+        // CAS check are atomic.
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| StorageError::OperationFailed(e.to_string()))?;
+
+        let current = sqlx::query(
+            "SELECT encrypted_blob, blob_version, updated_at FROM user_read_states WHERE wallet = $1 FOR UPDATE",
+        )
+        .bind(wallet)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|e| StorageError::OperationFailed(e.to_string()))?
+        .map(|r| EncryptedBlobRecord {
+            encrypted_blob: r.get("encrypted_blob"),
+            blob_version: r.get::<i64, _>("blob_version") as u64,
+            updated_at: r.get("updated_at"),
+        });
+
+        if let (Some(expected), Some(current)) = (expected_version, current.as_ref()) {
+            if expected != current.blob_version {
+                // Read-only path: no write happened; commit just releases the lock.
+                tx.commit()
+                    .await
+                    .map_err(|e| StorageError::OperationFailed(e.to_string()))?;
+                return Ok(PutUserReadStateResult::Conflict {
+                    current: current.clone(),
+                });
+            }
+        }
+
+        let blob_version = current.map(|c| c.blob_version).unwrap_or(0) + 1;
         sqlx::query(
             r#"INSERT INTO user_read_states (wallet, encrypted_blob, blob_version, updated_at)
                VALUES ($1,$2,$3,$4)
@@ -617,13 +680,29 @@ impl StorageAdapter for PostgresStorage {
                  updated_at = EXCLUDED.updated_at"#,
         )
         .bind(wallet)
-        .bind(&record.encrypted_blob)
-        .bind(record.blob_version as i64)
-        .bind(record.updated_at)
-        .execute(&self.pool)
+        .bind(&encrypted_blob)
+        .bind(blob_version as i64)
+        .bind(Utc::now())
+        .execute(&mut *tx)
         .await
         .map_err(|e| StorageError::OperationFailed(e.to_string()))?;
-        Ok(())
+
+        // Cross-instance realtime fan-out (metadata only; blob re-fetched over REST).
+        let notify = ReadStateUpdatedEvent::new(wallet.to_string(), blob_version);
+        let notify_json = serde_json::to_string(&notify)
+            .map_err(|e| StorageError::OperationFailed(e.to_string()))?;
+        sqlx::query("SELECT pg_notify($1, $2)")
+            .bind(MESSAGE_EVENTS_CHANNEL)
+            .bind(notify_json)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| StorageError::OperationFailed(e.to_string()))?;
+
+        tx.commit()
+            .await
+            .map_err(|e| StorageError::OperationFailed(e.to_string()))?;
+
+        Ok(PutUserReadStateResult::Stored { blob_version })
     }
 
     async fn upsert_push_token(&self, record: PushTokenRecord) -> StorageResult<()> {
@@ -697,6 +776,16 @@ impl StorageAdapter for PostgresStorage {
             .await
             .map_err(|e| StorageError::OperationFailed(e.to_string()))?;
         Ok(row.map(|r| r.get("last_seen_at")))
+    }
+
+    async fn notify_realtime_event(&self, payload_json: &str) -> StorageResult<()> {
+        sqlx::query("SELECT pg_notify($1, $2)")
+            .bind(MESSAGE_EVENTS_CHANNEL)
+            .bind(payload_json)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| StorageError::OperationFailed(e.to_string()))?;
+        Ok(())
     }
 }
 

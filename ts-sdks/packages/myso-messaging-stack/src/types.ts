@@ -38,6 +38,8 @@ export type MySoMessagingStackPackageConfig = {
 	socialGraphId: string;
 	/** Social MemoryRegistry shared object ID (`0x50c1::memory::MemoryRegistry`) */
 	memoryRegistryId: string;
+	/** Social EcosystemTreasury shared object ID (`0x50c1::profile::EcosystemTreasury`) */
+	ecosystemTreasuryId: string;
 };
 
 /**
@@ -214,6 +216,23 @@ export interface ShareGroupCallOptions {
 export type GroupAndMessageLogRef = GroupRef & {
 	messageLogId?: string;
 };
+
+/**
+ * Group + message log reference that also accepts same-transaction results.
+ *
+ * Use the `{ group, messageLog }` form to borrow the values returned by
+ * `createGroup` before `shareGroup` shares them — required when the group is
+ * created in the same PTB (its derived ids do not exist on-chain yet, so they
+ * cannot be passed as object inputs).
+ */
+export type GroupAndMessageLogArgs =
+	| GroupAndMessageLogRef
+	| {
+			/** The PermissionedGroup<Messaging> result from `createGroup`. */
+			group: TransactionArgument;
+			/** The MessageLog result from `createGroup`. */
+			messageLog: TransactionArgument;
+	  };
 
 /** Options for leaving a messaging group. */
 export interface LeaveCallOptions {

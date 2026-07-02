@@ -1,11 +1,17 @@
-import { useState, useRef, type KeyboardEvent } from 'react';
+import { useState, useRef, useEffect, type KeyboardEvent } from 'react';
 import type { AttachmentFile } from '../hooks/useMessages';
 
 const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5 MB
 const MAX_FILES = 10;
+/** Max one typing.start broadcast per this window while typing continues. */
+const TYPING_THROTTLE_MS = 3_000;
+/** Send typing.stop after this much keyboard silence. */
+const TYPING_IDLE_MS = 3_000;
 
 interface MessageInputProps {
   onSend: (text: string, files?: AttachmentFile[]) => Promise<void>;
+  /** Broadcast typing state: `true` on keystrokes (throttled), `false` on send/clear/idle. */
+  onTyping?: (typing: boolean) => void;
   disabled?: boolean;
   sending?: boolean;
 }
@@ -19,6 +25,7 @@ function formatSize(bytes: number): string {
 
 export function MessageInput({
   onSend,
+  onTyping,
   disabled = false,
   sending = false,
 }: Readonly<MessageInputProps>) {
@@ -27,9 +34,60 @@ export function MessageInput({
   const [fileError, setFileError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // Typing broadcast state: explicit start/stop with the TTL as server-side
+  // recovery. `start` is throttled; `stop` fires on send, clear, and idle.
+  const onTypingRef = useRef(onTyping);
+  onTypingRef.current = onTyping;
+  const lastStartRef = useRef(0);
+  const isTypingRef = useRef(false);
+  const idleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  function stopTyping() {
+    if (idleTimerRef.current) {
+      clearTimeout(idleTimerRef.current);
+      idleTimerRef.current = null;
+    }
+    if (isTypingRef.current) {
+      isTypingRef.current = false;
+      onTypingRef.current?.(false);
+    }
+  }
+
+  function noteTyping(value: string) {
+    if (!onTypingRef.current) return;
+
+    if (!value.trim()) {
+      stopTyping();
+      return;
+    }
+
+    const now = Date.now();
+    if (!isTypingRef.current || now - lastStartRef.current >= TYPING_THROTTLE_MS) {
+      lastStartRef.current = now;
+      isTypingRef.current = true;
+      onTypingRef.current(true);
+    }
+
+    if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
+    idleTimerRef.current = setTimeout(stopTyping, TYPING_IDLE_MS);
+  }
+
+  // Best-effort stop when the composer unmounts (group switch, sign-out).
+  useEffect(() => {
+    return () => {
+      if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
+      if (isTypingRef.current) {
+        isTypingRef.current = false;
+        onTypingRef.current?.(false);
+      }
+    };
+  }, []);
+
   async function handleSend() {
     const trimmed = text.trim();
     if ((!trimmed && files.length === 0) || disabled || sending) return;
+
+    stopTyping();
 
     // Convert File objects to AttachmentFile[]
     let attachmentFiles: AttachmentFile[] | undefined;
@@ -157,7 +215,10 @@ export function MessageInput({
 
         <textarea
           value={text}
-          onChange={(e) => setText(e.target.value)}
+          onChange={(e) => {
+            setText(e.target.value);
+            noteTyping(e.target.value);
+          }}
           onKeyDown={handleKeyDown}
           placeholder="Type a message..."
           rows={1}

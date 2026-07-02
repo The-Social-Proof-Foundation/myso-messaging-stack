@@ -8,6 +8,8 @@ interface MemberItemProps {
   permissions: string[];
   isSelf: boolean;
   isAdmin: boolean;
+  /** Wallet-scoped presence (one online state per wallet). */
+  online?: boolean;
   isExpanded: boolean;
   removingMember: string | null;
   togglingPerm: string | null;
@@ -43,6 +45,7 @@ export function MemberItem({
   permissions,
   isSelf,
   isAdmin,
+  online = false,
   isExpanded,
   removingMember,
   togglingPerm,
@@ -57,8 +60,14 @@ export function MemberItem({
       <div className="flex items-center justify-between">
         <button
           onClick={onToggleExpand}
-          className="font-mono text-xs text-secondary-700 hover:text-primary-500 dark:text-secondary-300"
+          className="flex items-center font-mono text-xs text-secondary-700 hover:text-primary-500 dark:text-secondary-300"
         >
+          <span
+            className={`mr-1.5 inline-block h-1.5 w-1.5 shrink-0 rounded-full ${
+              online ? 'bg-green-500' : 'bg-secondary-300 dark:bg-secondary-600'
+            }`}
+            title={online ? 'Online' : 'Offline'}
+          />
           {truncateAddress(address)}
           {isSelf && <span className="ml-1 text-primary-500">(you)</span>}
           <span className="ml-1 text-secondary-300">

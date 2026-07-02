@@ -99,4 +99,5 @@ export const GENESIS_MYSO_MESSAGING_STACK_PACKAGE_CONFIG_SHELL = {
 	blockListRegistryId: '',
 	socialGraphId: '',
 	memoryRegistryId: '',
+	ecosystemTreasuryId: '',
 } satisfies MySoMessagingStackPackageConfig;

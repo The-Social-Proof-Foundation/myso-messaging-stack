@@ -21,12 +21,14 @@ const NAMESPACE_TYPE = `${GENESIS_PACKAGE_IDS.messaging}::messaging::MessagingNa
 const BLOCK_LIST_TYPE = `${GENESIS_PACKAGE_IDS.social}::block_list::BlockListRegistry`;
 const SOCIAL_GRAPH_TYPE = `${GENESIS_PACKAGE_IDS.social}::social_graph::SocialGraph`;
 const MEMORY_REGISTRY_TYPE = `${GENESIS_PACKAGE_IDS.social}::memory::MemoryRegistry`;
+const ECOSYSTEM_TREASURY_TYPE = `${GENESIS_PACKAGE_IDS.social}::profile::EcosystemTreasury`;
 
 const MOCK_NAMESPACE_ID = '0x' + 'aa'.repeat(32);
 const MOCK_VERSION_ID = '0x' + 'bb'.repeat(32);
 const MOCK_BLOCK_LIST_ID = '0x' + 'cc'.repeat(32);
 const MOCK_SOCIAL_GRAPH_ID = '0x' + 'dd'.repeat(32);
 const MOCK_MEMORY_REGISTRY_ID = '0x' + 'ee'.repeat(32);
+const MOCK_ECOSYSTEM_TREASURY_ID = '0x' + 'ff'.repeat(32);
 
 const OBJECT_TYPES: Record<string, string> = {
 	[MOCK_NAMESPACE_ID]: NAMESPACE_TYPE,
@@ -34,6 +36,7 @@ const OBJECT_TYPES: Record<string, string> = {
 	[MOCK_BLOCK_LIST_ID]: BLOCK_LIST_TYPE,
 	[MOCK_SOCIAL_GRAPH_ID]: SOCIAL_GRAPH_TYPE,
 	[MOCK_MEMORY_REGISTRY_ID]: MEMORY_REGISTRY_TYPE,
+	[MOCK_ECOSYSTEM_TREASURY_ID]: ECOSYSTEM_TREASURY_TYPE,
 };
 
 function graphqlResponse(nodes: { address: string }[]) {
@@ -104,6 +107,7 @@ function createMockClient(options?: {
 					{ objectId: MOCK_BLOCK_LIST_ID, idOperation: 'Created' as const },
 					{ objectId: MOCK_SOCIAL_GRAPH_ID, idOperation: 'Created' as const },
 					{ objectId: MOCK_MEMORY_REGISTRY_ID, idOperation: 'Created' as const },
+					{ objectId: MOCK_ECOSYSTEM_TREASURY_ID, idOperation: 'Created' as const },
 				];
 
 				const objectTypes: Record<string, string> = { ...OBJECT_TYPES };
@@ -134,6 +138,7 @@ function mockGraphqlFetch(fetchMock: ReturnType<typeof vi.fn>) {
 				MOCK_BLOCK_LIST_ID,
 				MOCK_SOCIAL_GRAPH_ID,
 				MOCK_MEMORY_REGISTRY_ID,
+				MOCK_ECOSYSTEM_TREASURY_ID,
 			]) as Response;
 		}
 
@@ -156,6 +161,9 @@ function mockGraphqlFetch(fetchMock: ReturnType<typeof vi.fn>) {
 		}
 		if (moveType === MEMORY_REGISTRY_TYPE) {
 			return graphqlResponse([{ address: MOCK_MEMORY_REGISTRY_ID }]) as Response;
+		}
+		if (moveType === ECOSYSTEM_TREASURY_TYPE) {
+			return graphqlResponse([{ address: MOCK_ECOSYSTEM_TREASURY_ID }]) as Response;
 		}
 		throw new Error(`unexpected GraphQL type: ${moveType}`);
 	});
@@ -214,6 +222,7 @@ describe('resolveGenesisMessagingConfig RPC fallback', () => {
 					MOCK_BLOCK_LIST_ID,
 					MOCK_SOCIAL_GRAPH_ID,
 					MOCK_MEMORY_REGISTRY_ID,
+					MOCK_ECOSYSTEM_TREASURY_ID,
 				]) as Response;
 			}
 
@@ -236,6 +245,9 @@ describe('resolveGenesisMessagingConfig RPC fallback', () => {
 			}
 			if (moveType === MEMORY_REGISTRY_TYPE) {
 				return graphqlResponse([{ address: MOCK_MEMORY_REGISTRY_ID }]) as Response;
+			}
+			if (moveType === ECOSYSTEM_TREASURY_TYPE) {
+				return graphqlResponse([{ address: MOCK_ECOSYSTEM_TREASURY_ID }]) as Response;
 			}
 			throw new Error(`unexpected GraphQL type: ${moveType}`);
 		});

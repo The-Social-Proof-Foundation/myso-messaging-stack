@@ -16,7 +16,8 @@ use tonic::{Request, Response, Status};
 
 use messaging_relayer::auth::{InMemoryMembershipStore, MembershipStore, MessagingPermission};
 use messaging_relayer::config::Config;
-use messaging_relayer::services::{MembershipSyncService, MessageGateService};
+use messaging_relayer::services::realtime::{DiscoveryReason, UserFeedEvent};
+use messaging_relayer::services::{MembershipSyncService, MessageGateService, RealtimeHub};
 use messaging_relayer::storage::{InMemoryStorage, NoOpAgentGroupStore};
 
 /// Builds a sync service with in-memory stores and a disabled message gate.
@@ -24,12 +25,22 @@ fn new_sync_service(
     config: &Config,
     store: Arc<dyn MembershipStore>,
 ) -> MembershipSyncService {
+    new_sync_service_with_hub(config, store, Arc::new(RealtimeHub::new()))
+}
+
+/// Variant with an injected hub for asserting user-feed discovery events.
+fn new_sync_service_with_hub(
+    config: &Config,
+    store: Arc<dyn MembershipStore>,
+    hub: Arc<RealtimeHub>,
+) -> MembershipSyncService {
     MembershipSyncService::new(
         config,
         store,
         Arc::new(NoOpAgentGroupStore),
         Arc::new(InMemoryStorage::new()),
         MessageGateService::from_config(config),
+        hub,
     )
 }
 
@@ -725,4 +736,164 @@ async fn test_checkpoint_cursor_rewind_clears_cache_and_reprocesses() {
         &to_hex_address(&member_new),
         MessagingPermission::MessagingSender
     ));
+}
+
+// Group discovery user-feed events (sole publisher: MembershipSyncService)
+
+/// BCS layout for `GroupCreated` (object::ID wrapper for group_id).
+#[derive(serde::Serialize)]
+struct GroupCreatedBcs {
+    group_id: ObjectIdBcs,
+    creator: [u8; 32],
+}
+
+#[derive(serde::Serialize)]
+struct ObjectIdBcs {
+    bytes: [u8; 32],
+}
+
+fn make_group_created_event(package_id: &str, group_id: &[u8; 32], creator: &[u8; 32]) -> Event {
+    let bcs_bytes = bcs::to_bytes(&GroupCreatedBcs {
+        group_id: ObjectIdBcs { bytes: *group_id },
+        creator: *creator,
+    })
+    .unwrap();
+    make_event(package_id, "GroupCreated", bcs_bytes)
+}
+
+#[tokio::test]
+async fn test_member_added_publishes_group_discovered_invited() {
+    let group_id = [0x41u8; 32];
+    let member = [0x42u8; 32];
+
+    // MemberAdded + PermissionsGranted (is_member requires >= 1 permission).
+    let checkpoints = vec![make_checkpoint_response(
+        1,
+        vec![
+            make_member_added_event(PACKAGE_ID, &group_id, &member),
+            make_permissions_granted_event(
+                PACKAGE_ID,
+                &group_id,
+                &member,
+                vec![format!("{}::messaging::MessagingReader", PACKAGE_ID)],
+            ),
+        ],
+    )];
+
+    let addr = start_mock_server(checkpoints).await;
+    let store: Arc<dyn MembershipStore> = Arc::new(InMemoryMembershipStore::new());
+    let hub = Arc::new(RealtimeHub::new());
+    // Subscribe before running — the hub drops events with no receivers.
+    let mut feed_rx = hub.subscribe_user_feed();
+
+    let config = test_config(&format!("http://{}", addr), PACKAGE_ID);
+    let mut service = new_sync_service_with_hub(&config, store.clone(), hub);
+    service.run_subscription().await.unwrap();
+
+    let event = feed_rx.try_recv().expect("group.discovered event");
+    match event {
+        UserFeedEvent::GroupDiscovered {
+            wallet,
+            group_id: gid,
+            reason,
+        } => {
+            assert_eq!(wallet, to_hex_address(&member));
+            assert_eq!(gid, to_hex_address(&group_id));
+            // No GroupCreated in the transaction -> invited.
+            assert_eq!(reason, DiscoveryReason::Invited);
+        }
+        other => panic!("expected GroupDiscovered, got {:?}", other),
+    }
+
+    // Publish-after-persist: by event delivery time the store reflects the add.
+    assert!(store.is_member(&to_hex_address(&group_id), &to_hex_address(&member)));
+}
+
+#[tokio::test]
+async fn test_creator_member_added_publishes_group_discovered_created() {
+    let group_id = [0x51u8; 32];
+    let creator = [0x52u8; 32];
+    let invitee = [0x53u8; 32];
+
+    // One transaction: GroupCreated + MemberAdded(creator) + MemberAdded(invitee).
+    let checkpoints = vec![make_checkpoint_response(
+        1,
+        vec![
+            make_group_created_event(PACKAGE_ID, &group_id, &creator),
+            make_member_added_event(PACKAGE_ID, &group_id, &creator),
+            make_member_added_event(PACKAGE_ID, &group_id, &invitee),
+        ],
+    )];
+
+    let addr = start_mock_server(checkpoints).await;
+    let store: Arc<dyn MembershipStore> = Arc::new(InMemoryMembershipStore::new());
+    let hub = Arc::new(RealtimeHub::new());
+    let mut feed_rx = hub.subscribe_user_feed();
+
+    let config = test_config(&format!("http://{}", addr), PACKAGE_ID);
+    let mut service = new_sync_service_with_hub(&config, store.clone(), hub);
+    service.run_subscription().await.unwrap();
+
+    let first = feed_rx.try_recv().expect("creator discovery event");
+    match first {
+        UserFeedEvent::GroupDiscovered { wallet, reason, .. } => {
+            assert_eq!(wallet, to_hex_address(&creator));
+            assert_eq!(reason, DiscoveryReason::Created);
+        }
+        other => panic!("expected GroupDiscovered, got {:?}", other),
+    }
+
+    let second = feed_rx.try_recv().expect("invitee discovery event");
+    match second {
+        UserFeedEvent::GroupDiscovered { wallet, reason, .. } => {
+            assert_eq!(wallet, to_hex_address(&invitee));
+            assert_eq!(reason, DiscoveryReason::Invited);
+        }
+        other => panic!("expected GroupDiscovered, got {:?}", other),
+    }
+}
+
+#[tokio::test]
+async fn test_member_removed_publishes_group_hidden() {
+    let group_id = [0x61u8; 32];
+    let member = [0x62u8; 32];
+
+    let checkpoints = vec![
+        make_checkpoint_response(
+            1,
+            vec![make_member_added_event(PACKAGE_ID, &group_id, &member)],
+        ),
+        make_checkpoint_response(
+            2,
+            vec![make_member_removed_event(PACKAGE_ID, &group_id, &member)],
+        ),
+    ];
+
+    let addr = start_mock_server(checkpoints).await;
+    let store: Arc<dyn MembershipStore> = Arc::new(InMemoryMembershipStore::new());
+    let hub = Arc::new(RealtimeHub::new());
+    let mut feed_rx = hub.subscribe_user_feed();
+
+    let config = test_config(&format!("http://{}", addr), PACKAGE_ID);
+    let mut service = new_sync_service_with_hub(&config, store.clone(), hub);
+    service.run_subscription().await.unwrap();
+
+    // Drain the discovery event from checkpoint 1.
+    let discovered = feed_rx.try_recv().expect("discovered event");
+    assert!(matches!(discovered, UserFeedEvent::GroupDiscovered { .. }));
+
+    let hidden = feed_rx.try_recv().expect("group.hidden event");
+    match hidden {
+        UserFeedEvent::GroupHidden {
+            wallet,
+            group_id: gid,
+        } => {
+            assert_eq!(wallet, to_hex_address(&member));
+            assert_eq!(gid, to_hex_address(&group_id));
+        }
+        other => panic!("expected GroupHidden, got {:?}", other),
+    }
+
+    // Publish-after-persist: membership is already gone when the event lands.
+    assert!(!store.is_member(&to_hex_address(&group_id), &to_hex_address(&member)));
 }

@@ -58,20 +58,40 @@ Agents use `openAgentPaidDm()` with `platformId` and `memoryAccountId`.
 
 ## Reply and settle
 
-Recipients reply on-chain and claim escrow (with platform/ecosystem fee split):
+Recipients claim escrow on-chain when replying to the first paid message. The relayer delivers the message separately after the claim transaction.
 
 ```typescript
+import {
+  PAID_DM_MIN_REPLY_CHARS,
+  PAID_MSG_NO_PLATFORM_FEE_RECIPIENT,
+} from '@socialproof/myso-messaging-stack';
+
+// Wallet paid DM (no platform): platform sentinel routes 500 bps to ecosystem treasury.
 await paid.replyAndClaimSettled({
   signer: recipientKeypair,
   groupRef: { uuid },
-  paidMsgSeq: 1n,
+  paidMsgSeq: 0n, // first escrow is seq 0
+  charCount: 42, // must be >= PAID_DM_MIN_REPLY_CHARS (6)
+  dedupeKey,
+  nonce: 2n,
+  platformFeeRecipient: PAID_MSG_NO_PLATFORM_FEE_RECIPIENT,
+});
+
+// Agent/platform paid DM: normal 250 bps platform + 250 bps ecosystem split.
+await paid.replyAndClaimSettled({
+  signer: recipientKeypair,
+  groupRef: { uuid },
+  paidMsgSeq: 0n,
   charCount: 42,
   dedupeKey,
   nonce: 2n,
-  platformFeeRecipient: '0x…',
-  ecosystemFeeRecipient: '0x…',
+  platformFeeRecipient: '0x…', // platform treasury payout address
 });
 ```
+
+Ecosystem fees are resolved on-chain from the genesis `EcosystemTreasury` shared object (`profile::get_treasury_address`). The SDK passes `ecosystemTreasuryId` from `packageConfig` (resolved via `resolveGenesisMessagingConfig`).
+
+For unsigned PTBs (custom signing / gas resolution), use `buildReplyAndClaimSettled()`.
 
 Senders may refund expired escrow:
 
@@ -79,7 +99,7 @@ Senders may refund expired escrow:
 await paid.refundEscrow({
   signer: senderKeypair,
   groupRef: { uuid },
-  paidMsgSeq: 1n,
+  paidMsgSeq: 0n,
 });
 ```
 
@@ -90,3 +110,5 @@ The relayer does **not** index paid escrow state. Clients read `MessageLog` on-c
 ## Chat-app
 
 Set `VITE_SOCIAL_SERVER_URL` and use the sidebar **Paid messaging** panel to set/display policy. Optional paid-DM badge in message UI can key off recipient policy via `getOnChainPolicy()`.
+
+Reply-to-claim uses the genesis-resolved `EcosystemTreasury` shared object from SDK `packageConfig` — no fee recipient env vars are required.

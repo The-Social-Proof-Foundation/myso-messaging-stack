@@ -28,6 +28,7 @@ export const GENESIS_MYSO_MESSAGING_STACK_PACKAGE_CONFIG = {
 	blockListRegistryId: '',
 	socialGraphId: '',
 	memoryRegistryId: '',
+	ecosystemTreasuryId: '',
 } satisfies MySoMessagingStackPackageConfig;
 
 export interface ResolvedGenesisMessagingConfig {
@@ -321,7 +322,7 @@ export async function resolveGenesisMessagingConfig(
 		return cached;
 	}
 
-	const [namespaceId, versionId, blockListRegistryId, socialGraphId, memoryRegistryId] =
+	const [namespaceId, versionId, blockListRegistryId, socialGraphId, memoryRegistryId, ecosystemTreasuryId] =
 		await Promise.all([
 			findSharedObjectByType(
 				client,
@@ -368,6 +369,15 @@ export async function resolveGenesisMessagingConfig(
 				'MemoryRegistry',
 				options.signal,
 			),
+			findSharedObjectByType(
+				client,
+				graphqlUrl,
+				rpcUrl,
+				GENESIS_PACKAGE_IDS.social,
+				socialStructType('profile', 'EcosystemTreasury'),
+				'EcosystemTreasury',
+				options.signal,
+			),
 		]);
 
 	const resolved: ResolvedGenesisMessagingConfig = {
@@ -379,6 +389,7 @@ export async function resolveGenesisMessagingConfig(
 			blockListRegistryId,
 			socialGraphId,
 			memoryRegistryId,
+			ecosystemTreasuryId,
 		},
 		permissionedGroups: GENESIS_MYSO_GROUPS_PACKAGE_CONFIG,
 	};

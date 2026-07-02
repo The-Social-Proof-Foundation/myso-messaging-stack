@@ -41,6 +41,18 @@ const noopTransport: RelayerTransport = {
 	subscribe: () => {
 		throw new Error('noopTransport: subscribe not implemented');
 	},
+	subscribeUserEvents: () => {
+		throw new Error('noopTransport: subscribeUserEvents not implemented');
+	},
+	fetchUnreadCounts: () => {
+		throw new Error('noopTransport: fetchUnreadCounts not implemented');
+	},
+	sendTyping: () => {
+		throw new Error('noopTransport: sendTyping not implemented');
+	},
+	getGroupPresence: () => {
+		throw new Error('noopTransport: getGroupPresence not implemented');
+	},
 	listGroupReactions: () => {
 		throw new Error('noopTransport: listGroupReactions not implemented');
 	},

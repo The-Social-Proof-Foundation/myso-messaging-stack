@@ -11,8 +11,8 @@ import type { Transaction } from '@socialproof/myso/transactions';
 import { BlockedMessagingError, BlockGatingClient } from './block-gating.js';
 import { emojiToStorage } from './emoji.js';
 import { MySoMessagingStackClientError } from './error.js';
-import { ReadStateManager } from './read-state/read-state-manager.js';
-import type { UserReadState } from './read-state/types.js';
+import { MessagingSyncManager } from './sync/messaging-sync-manager.js';
+import type { UserReadState } from './sync/types.js';
 import { AttachmentsManager } from './attachments/attachments-manager.js';
 import type { Attachment, AttachmentFile, AttachmentHandle } from './attachments/types.js';
 import { EnvelopeEncryption, buildMessageAad } from './encryption/envelope-encryption.js';
@@ -22,10 +22,12 @@ import { HybridRelayerTransport } from './relayer/hybrid-transport.js';
 import type { RelayerTransport } from './relayer/transport.js';
 import type {
 	DmGateResult,
+	GroupPresenceEntry,
 	RelayerConfig,
 	RelayerHTTPConfig,
 	RelayerMessage,
 	RelayerReactionEntry,
+	RelayerUserEvent,
 } from './relayer/types.js';
 import {
 	signMessageContent,
@@ -174,7 +176,7 @@ export class MySoMessagingStackClient<TApproveContext = void> {
 	#client: ClientWithCoreApi;
 	#groupsClient: MySoGroupsClient;
 	#blockGating: BlockGatingClient | undefined;
-	#readState: ReadStateManager;
+	#sync: MessagingSyncManager;
 	#attachments: AttachmentsManager<TApproveContext> | undefined;
 	#recovery: RecoveryTransport | undefined;
 	readonly #textEncoder = new TextEncoder();
@@ -265,7 +267,7 @@ export class MySoMessagingStackClient<TApproveContext = void> {
 			? options.relayer.transport
 			: buildDefaultRelayerTransport(options.relayer);
 
-		this.#readState = new ReadStateManager(this.transport);
+		this.#sync = new MessagingSyncManager(this.transport);
 
 		this.#recovery = options.recovery;
 	}
@@ -550,19 +552,45 @@ export class MySoMessagingStackClient<TApproveContext = void> {
 			afterOrder: options.afterOrder,
 			signal: options.signal,
 		})) {
-			if (event.type === 'message.created') {
-				try {
-					const message = await this.#decryptMessage(
-						event.message,
-						{ groupId, encryptionHistoryId },
-						approveContext,
-					);
-					yield { type: 'message', message };
-				} catch {
-					// Skip messages that fail decryption (e.g. key not available yet).
+			switch (event.type) {
+				case 'message.created': {
+					try {
+						const message = await this.#decryptMessage(
+							event.message,
+							{ groupId, encryptionHistoryId },
+							approveContext,
+						);
+						yield { type: 'message', message };
+					} catch {
+						// Skip messages that fail decryption (e.g. key not available yet).
+					}
+					break;
 				}
-			} else {
-				yield { type: 'reaction', reaction: event.reaction };
+				case 'reaction.updated':
+					yield { type: 'reaction', reaction: event.reaction };
+					break;
+				case 'typing.start':
+					yield {
+						type: 'typing',
+						typing: {
+							member: event.typing.member,
+							typing: true,
+							expiresAt: event.typing.expiresAt,
+						},
+					};
+					break;
+				case 'typing.stop':
+					yield {
+						type: 'typing',
+						typing: { member: event.typing.member, typing: false },
+					};
+					break;
+				case 'presence.updated':
+					yield {
+						type: 'presence',
+						presence: { member: event.presence.member, online: event.presence.online },
+					};
+					break;
 			}
 		}
 	}
@@ -612,26 +640,113 @@ export class MySoMessagingStackClient<TApproveContext = void> {
 		});
 	}
 
-	/** Fetch and decrypt the wallet-scoped read-state document from the relayer. */
-	async getReadState(options: { signer: Signer }): Promise<UserReadState> {
-		return this.#readState.getReadState(options.signer);
+	// === User-scoped synchronization ===
+
+	/**
+	 * Subscribe to the wallet-scoped user feed: `group.activity` (a message
+	 * landed in one of your groups), `read_state.updated` (another device/tab
+	 * advanced your read state), and `group.discovered` / `group.hidden`
+	 * (conversations appearing/leaving).
+	 *
+	 * One socket per wallet; frames are metadata-only notifications — re-fetch
+	 * canonical state over REST. Read-state cache invalidation is wired
+	 * automatically: a `read_state.updated` event drops the local cache so the
+	 * next `getReadState`/`getUnreadCounts` refetches.
+	 *
+	 * @yields {@link RelayerUserEvent} items as they arrive from the transport.
+	 */
+	async *subscribeUserEvents(options: {
+		signer: Signer;
+		signal?: AbortSignal;
+		/** Sidebar group ids for the HTTP polling fallback (WS path ignores it). */
+		groupIds?: string[];
+	}): AsyncIterable<RelayerUserEvent> {
+		const address = options.signer.toMySoAddress();
+
+		for await (const event of this.transport.subscribeUserEvents({
+			signer: options.signer,
+			signal: options.signal,
+			groupIds: options.groupIds,
+		})) {
+			if (event.type === 'read_state.updated') {
+				this.#sync.invalidateReadState(address, event.blobVersion);
+			}
+			yield event;
+		}
 	}
 
-	/** Merge and upload an updated read watermark for a group. */
+	/** Fetch and decrypt the wallet-scoped read-state document from the relayer. */
+	async getReadState(options: { signer: Signer }): Promise<UserReadState> {
+		return this.#sync.getReadState(options.signer);
+	}
+
+	/**
+	 * Advance a group's read watermark. Compare-and-set protected: concurrent
+	 * writes from other tabs/devices are merged and retried, never clobbered.
+	 * Skips the network round trip when the watermark would not advance.
+	 */
 	async updateReadState(options: {
 		signer: Signer;
 		groupId: string;
 		readUpto: number;
 	}): Promise<UserReadState> {
-		return this.#readState.updateReadState(options);
+		return this.#sync.updateReadState(options);
 	}
 
-	/** Compute unread counts for the given on-chain group IDs. */
+	/**
+	 * Exact unread counts for the given on-chain group IDs — one batch relayer
+	 * request (no per-group message paging, no 100-message ceiling).
+	 */
 	async getUnreadCounts(options: {
 		signer: Signer;
 		groupIds: string[];
 	}): Promise<Record<string, number>> {
-		return this.#readState.getUnreadCounts(options);
+		return this.#sync.getUnreadCounts(options);
+	}
+
+	/**
+	 * Unread counts and latest message order per group — one batch relayer request.
+	 */
+	async getGroupActivitySummary(options: {
+		signer: Signer;
+		groupIds: string[];
+	}): Promise<{
+		counts: Record<string, number>;
+		latestOrders: Record<string, number>;
+	}> {
+		return this.#sync.getGroupActivitySummary(options);
+	}
+
+	// === Typing & presence (ephemeral) ===
+
+	/**
+	 * Broadcast the signer's typing state to the group. `typing: true` emits
+	 * `typing.start` (rate-limited server-side); `typing: false` emits
+	 * `typing.stop`. Fire-and-forget — never persisted.
+	 */
+	async sendTyping(options: {
+		signer: Signer;
+		groupRef: GroupRef;
+		typing: boolean;
+	}): Promise<void> {
+		const { groupId } = this.derive.resolveGroupRef(options.groupRef);
+		await this.transport.sendTyping({
+			signer: options.signer,
+			groupId,
+			typing: options.typing,
+		});
+	}
+
+	/**
+	 * Presence snapshot for a group's members (online = recent heartbeat).
+	 * Live transitions arrive as `presence` events on {@link subscribe}.
+	 */
+	async getGroupPresence(options: {
+		signer: Signer;
+		groupRef: GroupRef;
+	}): Promise<GroupPresenceEntry[]> {
+		const { groupId } = this.derive.resolveGroupRef(options.groupRef);
+		return this.transport.getGroupPresence({ signer: options.signer, groupId });
 	}
 
 	/**

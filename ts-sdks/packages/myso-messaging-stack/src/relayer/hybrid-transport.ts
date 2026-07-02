@@ -11,9 +11,13 @@ import type {
 	FetchMessageParams,
 	FetchMessagesParams,
 	FetchMessagesResult,
+	FetchUnreadCountsParams,
+	GetGroupPresenceParams,
 	GetGroupReceiptsParams,
 	GetUserReadStateParams,
+	GroupPresenceEntry,
 	GroupReceiptState,
+	GroupUnreadCount,
 	ListGroupPinsParams,
 	ListGroupReactionsParams,
 	ListAgentConversationsParams,
@@ -23,14 +27,18 @@ import type {
 	PostPresenceParams,
 	PostPushTokenParams,
 	PutUserReadStateParams,
+	PutUserReadStateResult,
 	RelayerMessage,
 	RelayerReactionEntry,
 	RelayerSubscriptionEvent,
+	RelayerUserEvent,
 	RelayerAgentConversation,
 	SendMessageParams,
 	SendMessageResult,
+	SendTypingParams,
 	SetGroupPinParams,
 	SubscribeParams,
+	SubscribeUserEventsParams,
 	UpdateMessageParams,
 	UserReadStateWire,
 } from './types.js';
@@ -109,20 +117,49 @@ export class HybridRelayerTransport implements RelayerTransport {
 		try {
 			yield* this.#ws.subscribe(params);
 		} catch (error) {
-			if (error instanceof RelayerTransportError && error.status >= 400 && error.status < 500) {
-				throw error;
-			}
-			if (error instanceof WsConnectionError && !error.retryable) {
-				throw error;
-			}
-			if (error instanceof DOMException && error.name === 'AbortError') {
-				return;
-			}
-			if (!this.#fallbackToHttp) {
-				throw error;
-			}
+			if (this.#shouldEndStream(error)) return;
 			yield* this.#http.subscribe(params);
 		}
+	}
+
+	async *subscribeUserEvents(
+		params: SubscribeUserEventsParams,
+	): AsyncIterable<RelayerUserEvent> {
+		if (!this.#preferWebSocket) {
+			yield* this.#http.subscribeUserEvents(params);
+			return;
+		}
+
+		try {
+			yield* this.#ws.subscribeUserEvents(params);
+		} catch (error) {
+			if (this.#shouldEndStream(error)) return;
+			yield* this.#http.subscribeUserEvents(params);
+		}
+	}
+
+	/**
+	 * Shared WS failure handling: throws non-retryable errors, returns `true`
+	 * for aborts, and returns `false` when HTTP fallback should take over.
+	 */
+	#shouldEndStream(error: unknown): boolean {
+		if (error instanceof RelayerTransportError && error.status >= 400 && error.status < 500) {
+			throw error;
+		}
+		if (error instanceof WsConnectionError && !error.retryable) {
+			throw error;
+		}
+		if (error instanceof DOMException && error.name === 'AbortError') {
+			return true;
+		}
+		if (!this.#fallbackToHttp) {
+			throw error;
+		}
+		return false;
+	}
+
+	fetchUnreadCounts(params: FetchUnreadCountsParams): Promise<GroupUnreadCount[]> {
+		return this.#http.fetchUnreadCounts(params);
 	}
 
 	listGroupReactions(params: ListGroupReactionsParams): Promise<RelayerReactionEntry[]> {
@@ -131,6 +168,14 @@ export class HybridRelayerTransport implements RelayerTransport {
 
 	postGroupReaction(params: PostGroupReactionParams): Promise<void> {
 		return this.#http.postGroupReaction(params);
+	}
+
+	sendTyping(params: SendTypingParams): Promise<void> {
+		return this.#http.sendTyping(params);
+	}
+
+	getGroupPresence(params: GetGroupPresenceParams): Promise<GroupPresenceEntry[]> {
+		return this.#http.getGroupPresence(params);
 	}
 
 	listGroupPins(params: ListGroupPinsParams): Promise<number[]> {
@@ -153,7 +198,7 @@ export class HybridRelayerTransport implements RelayerTransport {
 		return this.#http.getUserReadState(params);
 	}
 
-	putUserReadState(params: PutUserReadStateParams): Promise<void> {
+	putUserReadState(params: PutUserReadStateParams): Promise<PutUserReadStateResult> {
 		return this.#http.putUserReadState(params);
 	}
 

@@ -17,7 +17,7 @@ pub mod user_read_state;
 pub use attachment::Attachment;
 #[allow(unused_imports)]
 pub use membership::GroupMembership;
-pub use group_aux::{ReactionEntry, ReceiptStateResponse};
+pub use group_aux::{GroupActivity, ReactionEntry, ReceiptStateResponse};
 pub use message::{Message, SyncStatus};
 pub use message_attribution::MessageAttribution;
 pub use agent_messaging_group::AgentMessagingGroup;

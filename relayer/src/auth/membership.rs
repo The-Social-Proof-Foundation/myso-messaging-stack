@@ -95,6 +95,10 @@ pub trait MembershipStore: Send + Sync {
     /// Lists all member addresses in a group (any non-empty permission set).
     fn list_member_addresses(&self, group_id: &str) -> Vec<String>;
 
+    /// Reverse lookup: groups where `address` currently has any permission.
+    /// Backs wallet-scoped presence fan-out.
+    fn groups_for_member(&self, address: &str) -> Vec<String>;
+
     /// Last processed checkpoint cursor (Postgres-backed stores persist this).
     fn get_last_checkpoint_cursor(&self) -> Option<u64> {
         None
@@ -315,6 +319,20 @@ impl MembershipStore for InMemoryMembershipStore {
             .unwrap_or_default()
     }
 
+    fn groups_for_member(&self, address: &str) -> Vec<String> {
+        let members = self.members.read().unwrap();
+        members
+            .iter()
+            .filter(|(_, group_members)| {
+                group_members
+                    .get(address)
+                    .map(|perms| !perms.is_empty())
+                    .unwrap_or(false)
+            })
+            .map(|(group_id, _)| group_id.clone())
+            .collect()
+    }
+
     fn clear_all(&self) {
         self.clear();
     }
@@ -380,6 +398,23 @@ mod tests {
         store.add_member(group_id, address, vec![]);
 
         assert!(store.has_permission(group_id, address, MessagingPermission::MessagingSender));
+    }
+
+    #[test]
+    fn test_groups_for_member_reverse_lookup() {
+        let store = InMemoryMembershipStore::new();
+        store.add_member("group-1", "0xalice", vec![MessagingPermission::MessagingReader]);
+        store.add_member("group-2", "0xalice", vec![MessagingPermission::MessagingSender]);
+        store.add_member("group-2", "0xbob", vec![MessagingPermission::MessagingReader]);
+        // Empty permission set does not count as membership.
+        store.add_member("group-3", "0xalice", vec![]);
+
+        let mut groups = store.groups_for_member("0xalice");
+        groups.sort();
+        assert_eq!(groups, vec!["group-1", "group-2"]);
+
+        assert_eq!(store.groups_for_member("0xbob"), vec!["group-2"]);
+        assert!(store.groups_for_member("0xcarol").is_empty());
     }
 
     #[test]

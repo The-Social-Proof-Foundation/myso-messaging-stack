@@ -12,6 +12,8 @@ export interface StoredGroup {
   name: string;
   groupId: string;
   createdAt: number;
+  /** Highest known relayer message order — used for sidebar sort before network refresh. */
+  lastActivityOrder?: number;
 }
 
 /** Read all stored groups from localStorage. */
@@ -25,9 +27,17 @@ export function getStoredGroups(): StoredGroup[] {
   }
 }
 
-/** Add a group to localStorage (deduplicates by uuid). */
+/**
+ * Add a group to localStorage. No-ops when the group already exists (by
+ * uuid or groupId), so replayed discovery events are harmless.
+ */
 export function addStoredGroup(group: StoredGroup): void {
   const groups = getStoredGroups();
+  const exists = groups.some(
+    (g) =>
+      (group.uuid && g.uuid === group.uuid) || g.groupId === group.groupId,
+  );
+  if (exists) return;
   groups.push(group);
   localStorage.setItem(STORAGE_KEY, JSON.stringify(groups));
 }
@@ -35,6 +45,17 @@ export function addStoredGroup(group: StoredGroup): void {
 /** Remove a group from localStorage by uuid. */
 export function removeStoredGroup(groupId: string): void {
   const groups = getStoredGroups().filter((g) => g.groupId !== groupId);
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(groups));
+}
+
+/** Update a group's cached activity order in localStorage. */
+export function updateStoredGroupActivityOrder(
+  groupId: string,
+  lastActivityOrder: number,
+): void {
+  const groups = getStoredGroups().map((g) =>
+    g.groupId === groupId ? { ...g, lastActivityOrder } : g,
+  );
   localStorage.setItem(STORAGE_KEY, JSON.stringify(groups));
 }
 

@@ -1,4 +1,5 @@
 import { type SyntheticEvent, useState } from 'react';
+import { MYSO_CLOCK_OBJECT_ID } from '@socialproof/myso/utils';
 import { createPaidMessagingClient } from '@socialproof/myso-messaging-stack';
 import { useRequiredMessagingClient } from '../contexts/MessagingClientContext';
 import { signAndExecuteTransactionAndWait } from '../lib/sign-and-wait';
@@ -8,6 +9,7 @@ import { waitForGroupReady } from '../lib/wait-for-relayer-membership';
 import {
   assertMemoryRegistryConfigured,
   expectedCreateGroupObjectIds,
+  expectedPaidDmObjectIds,
   fetchAndLogGenesisConfig,
   logClientDeriveIds,
   logCreateGroupTxInputs,
@@ -189,9 +191,15 @@ export function CreateGroupModal({
 
   /**
    * Confirmed paid DM: one signed transaction creates the group and escrows
-   * the payment (`openPaidDm` → create_and_share_group + send_paid_message_digest).
-   * The escrow is funded by splitting from gas; the contract re-validates the
+   * the payment (create_and_share_group + send_paid_message_digest). The
+   * escrow is funded by splitting from gas; the contract re-validates the
    * recipient's minimum on-chain.
+   *
+   * Runs the same diagnostics + hardened signing as the normal create path:
+   * the PTB is built via `buildOpenPaidDm` and signed through
+   * `signAndExecuteTransactionAndWait`, whose gas resolution RPC-verifies
+   * coins (stale local indexers after `--force-regenesis` list ghost coins
+   * that otherwise become invalid PTB inputs when the escrow splits from gas).
    */
   async function handleConfirmPaidDm() {
     if (!pendingPaidDm) return;
@@ -205,14 +213,55 @@ export function CreateGroupModal({
       });
       const paid = createPaidMessagingClient({ messaging: client.messaging });
 
+      const freshGenesis = await fetchAndLogGenesisConfig(
+        client,
+        'open-paid-dm (fresh client + graphql)',
+        { bypassCache: true },
+      );
+      const expectedObjects = expectedPaidDmObjectIds(freshGenesis);
+      assertMemoryRegistryConfigured('open-paid-dm', freshGenesis);
+
       const uuid = crypto.randomUUID();
-      const { groupId } = await paid.openPaidDm({
-        signer,
+      logClientDeriveIds('open-paid-dm (fresh client)', client.messaging.derive, uuid);
+      logFullGenesisClientMismatch('open-paid-dm', freshGenesis, client);
+      await verifyCreateGroupObjectsOnRpc('open-paid-dm', expectedObjects, client);
+      await logMyDataKeyServers('open-paid-dm', client);
+      await logSignerGasCoins('open-paid-dm', client, signer);
+
+      const sender = signer.toMySoAddress();
+
+      let resolvedMemoryAccountId: string | null | undefined;
+      if (import.meta.env.DEV) {
+        resolvedMemoryAccountId =
+          await client.messaging.view.memoryAccountIdForOwner({ owner: sender });
+      }
+
+      const { transaction, groupId } = paid.buildOpenPaidDm({
+        sender,
         recipient: pendingPaidDm.recipient,
         escrowAmount: pendingPaidDm.minCost,
         name: pendingPaidDm.name,
         uuid,
+        // Reuse the diagnostics resolution (dev); undefined lets the SDK
+        // resolve wallet-vs-profile routing at build time as usual.
+        creatorMemoryAccountId: resolvedMemoryAccountId ?? undefined,
       });
+
+      await logCreateGroupTxInputs(
+        'open-paid-dm (pre-sign)',
+        transaction,
+        client,
+        {
+          ...expectedObjects,
+          // The group/log are same-PTB results (created then shared in this
+          // transaction), so they never appear as object inputs — only the
+          // singletons and the clock do.
+          clockId: MYSO_CLOCK_OBJECT_ID,
+        },
+        { resolvedMemoryAccountId },
+      );
+
+      await signAndExecuteTransactionAndWait(client, signer, transaction);
 
       setSyncing(true);
       await waitForGroupReady({
@@ -220,7 +269,7 @@ export function CreateGroupModal({
         signer,
         groupId,
         uuid,
-        memberAddress: signer.toMySoAddress(),
+        memberAddress: sender,
       });
 
       addStoredGroup({
@@ -237,6 +286,16 @@ export function CreateGroupModal({
       onClose();
     } catch (err) {
       console.error('Failed to open paid DM:', err);
+      if (
+        err instanceof Error &&
+        err.message.includes(STALE_GHOST_OBJECT_ID)
+      ) {
+        console.error(
+          `[chat-app] open-paid-dm failed on stale object ${STALE_GHOST_OBJECT_ID}. ` +
+            'Check "[chat-app] create-group tx inputs — open-paid-dm (pre-sign)" and ' +
+            '"[chat-app] messaging genesis" above.',
+        );
+      }
       setPayError(formatCreateGroupError(err));
     } finally {
       setPayingDm(false);

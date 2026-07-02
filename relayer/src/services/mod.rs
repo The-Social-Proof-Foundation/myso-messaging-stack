@@ -11,6 +11,7 @@ pub mod event_parser;
 pub mod membership_sync;
 pub mod message_gate;
 pub mod file_storage_sync;
+pub mod presence_sync;
 pub mod push;
 pub mod realtime;
 
@@ -19,5 +20,6 @@ pub use block_check::BlockCheckService;
 pub use membership_sync::MembershipSyncService;
 pub use message_gate::MessageGateService;
 pub use file_storage_sync::FileStorageSyncService;
+pub use presence_sync::PresenceRegistry;
 pub use push::PushService;
 pub use realtime::{PgListenerService, RealtimeHub};

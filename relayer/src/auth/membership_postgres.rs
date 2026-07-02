@@ -280,6 +280,10 @@ impl MembershipStore for PostgresMembershipStore {
         self.inner.list_member_addresses(group_id)
     }
 
+    fn groups_for_member(&self, address: &str) -> Vec<String> {
+        self.inner.groups_for_member(address)
+    }
+
     fn get_last_checkpoint_cursor(&self) -> Option<u64> {
         self.run_db(async {
             let row: Option<(Option<i64>,)> = sqlx::query_as(

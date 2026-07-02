@@ -31,6 +31,7 @@ use super::event_parser::{
     AgentDetectionEvent, GroupsEvent,
 };
 use super::message_gate::MessageGateService;
+use super::realtime::{DiscoveryReason, RealtimeHub, UserFeedEvent};
 
 pub struct MembershipSyncService {
     myso_rpc_url: String,
@@ -43,6 +44,11 @@ pub struct MembershipSyncService {
     storage: Arc<dyn StorageAdapter>,
     /// Shared with HTTP handlers — checkpoint events refresh its follow/policy caches.
     message_gate: MessageGateService,
+    /// Sole publisher of `group.discovered` / `group.hidden` user-feed events.
+    /// Every relayer instance runs its own sync service against the same
+    /// checkpoint stream, so a local publish reaches that instance's user-feed
+    /// connections without a cross-instance NOTIFY.
+    realtime_hub: Arc<RealtimeHub>,
     last_cursor: Option<u64>,
 }
 
@@ -53,6 +59,7 @@ impl MembershipSyncService {
         agent_group_store: Arc<dyn AgentGroupStore>,
         storage: Arc<dyn StorageAdapter>,
         message_gate: MessageGateService,
+        realtime_hub: Arc<RealtimeHub>,
     ) -> Self {
         let last_cursor = membership_store.get_last_checkpoint_cursor();
         info!(
@@ -72,6 +79,7 @@ impl MembershipSyncService {
             agent_group_store,
             storage,
             message_gate,
+            realtime_hub,
             last_cursor,
         }
     }
@@ -171,9 +179,20 @@ impl MembershipSyncService {
             let mut permissions_granted = Vec::new();
             let mut agent_group_created_map: HashMap<String, _> = HashMap::new();
 
+            // Pre-scan: group creators in this transaction, so MemberAdded for
+            // the creator can be published as `group.discovered { reason: created }`.
+            let mut creators_in_tx: HashMap<String, String> = HashMap::new();
+            for event in events {
+                if let Some(AgentDetectionEvent::GroupCreated(created)) =
+                    parse_agent_detection_event(event, &self.groups_package_id)
+                {
+                    creators_in_tx.insert(created.group_id.clone(), created.creator.clone());
+                }
+            }
+
             for event in events {
                 if let Some(groups_event) = parse_myso_event(event, &self.groups_package_id) {
-                    self.apply_event(&groups_event);
+                    self.apply_event(&groups_event, &creators_in_tx);
                     events_processed += 1;
                 }
 
@@ -250,7 +269,16 @@ impl MembershipSyncService {
                         "Failed to upsert agent messaging group {} from AgentGroupCreated: {}",
                         group.group_id, e
                     );
+                    continue;
                 }
+                // The principal is often not an on-chain member of an agent
+                // group; notify them directly so the conversation appears.
+                self.realtime_hub
+                    .publish_user_event(UserFeedEvent::GroupDiscovered {
+                        wallet: created.creator_principal.clone(),
+                        group_id: created.group_id.clone(),
+                        reason: DiscoveryReason::Created,
+                    });
             }
 
             let indexed_group_ids: HashSet<_> =
@@ -282,17 +310,39 @@ impl MembershipSyncService {
         }
     }
 
-    /// Applies a parsed GroupsEvent to the membership store
-    fn apply_event(&self, event: &GroupsEvent) {
+    /// Applies a parsed GroupsEvent to the membership store.
+    ///
+    /// Discovery user-feed events are published here — and only here — AFTER
+    /// the membership store update succeeds, so a client's follow-up REST
+    /// fetch can never race the underlying state.
+    fn apply_event(&self, event: &GroupsEvent, creators_in_tx: &HashMap<String, String>) {
         match event {
             GroupsEvent::MemberAdded { group_id, member } => {
                 info!("MemberAdded: {} -> {}", member, group_id);
                 self.membership_store.add_member(group_id, member, vec![]);
+
+                let reason = if creators_in_tx.get(group_id) == Some(member) {
+                    DiscoveryReason::Created
+                } else {
+                    DiscoveryReason::Invited
+                };
+                self.realtime_hub
+                    .publish_user_event(UserFeedEvent::GroupDiscovered {
+                        wallet: member.clone(),
+                        group_id: group_id.clone(),
+                        reason,
+                    });
             }
 
             GroupsEvent::MemberRemoved { group_id, member } => {
                 info!("MemberRemoved: {} from {}", member, group_id);
                 self.membership_store.remove_member(group_id, member);
+
+                self.realtime_hub
+                    .publish_user_event(UserFeedEvent::GroupHidden {
+                        wallet: member.clone(),
+                        group_id: group_id.clone(),
+                    });
             }
 
             GroupsEvent::PermissionsGranted {

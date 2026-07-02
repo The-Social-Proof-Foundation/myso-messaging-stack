@@ -7,11 +7,11 @@ use std::sync::RwLock;
 use uuid::Uuid;
 
 use crate::models::{
-    Attachment, EncryptedBlobRecord, Message, PaidEscrowRecord, PushTokenRecord, ReactionEntry,
-    ReceiptStateResponse, SyncStatus,
+    Attachment, EncryptedBlobRecord, GroupActivity, Message, PaidEscrowRecord, PushTokenRecord,
+    ReactionEntry, ReceiptStateResponse, SyncStatus,
 };
 
-use super::adapter::{StorageAdapter, StorageError, StorageResult};
+use super::adapter::{PutUserReadStateResult, StorageAdapter, StorageError, StorageResult};
 
 /// In-memory storage backend using HashMaps protected by RwLock for thread-safety.
 /// RwLock allows either many readers OR one writer at a time
@@ -316,6 +316,36 @@ impl StorageAdapter for InMemoryStorage {
             .any(|m| m.group_id == group_id && m.sender_wallet_addr == sender))
     }
 
+    async fn get_group_activity(
+        &self,
+        group_id: &str,
+        after_order: i64,
+    ) -> StorageResult<GroupActivity> {
+        let messages = self
+            .messages
+            .read()
+            .map_err(|e| StorageError::OperationFailed(format!("Lock poisoned: {}", e)))?;
+
+        let mut latest_order = 0i64;
+        let mut unread_count = 0i64;
+        for m in messages.values().filter(|m| m.group_id == group_id) {
+            let order = m.order.unwrap_or(0);
+            latest_order = latest_order.max(order);
+            let deleted = matches!(
+                m.sync_status,
+                SyncStatus::DeletePending | SyncStatus::Deleted
+            );
+            if order > after_order && !deleted {
+                unread_count += 1;
+            }
+        }
+
+        Ok(GroupActivity {
+            latest_order,
+            unread_count,
+        })
+    }
+
     async fn set_reaction(
         &self,
         group_id: &str,
@@ -482,14 +512,37 @@ impl StorageAdapter for InMemoryStorage {
     async fn put_user_read_state(
         &self,
         wallet: &str,
-        record: EncryptedBlobRecord,
-    ) -> StorageResult<()> {
+        encrypted_blob: Vec<u8>,
+        expected_version: Option<u64>,
+    ) -> StorageResult<PutUserReadStateResult> {
         let mut states = self
             .user_read_states
             .write()
             .map_err(|e| StorageError::OperationFailed(format!("Lock poisoned: {}", e)))?;
-        states.insert(wallet.to_string(), record);
-        Ok(())
+
+        let current_version = states.get(wallet).map(|r| r.blob_version);
+
+        // CAS check: only when the caller supplied an expectation AND a row
+        // exists. Rows are never deleted, so "expected but absent" only occurs
+        // for odd client state — treat it as a create.
+        if let (Some(expected), Some(current)) = (expected_version, current_version) {
+            if expected != current {
+                return Ok(PutUserReadStateResult::Conflict {
+                    current: states.get(wallet).cloned().expect("checked above"),
+                });
+            }
+        }
+
+        let blob_version = current_version.unwrap_or(0) + 1;
+        states.insert(
+            wallet.to_string(),
+            EncryptedBlobRecord {
+                encrypted_blob,
+                blob_version,
+                updated_at: Utc::now(),
+            },
+        );
+        Ok(PutUserReadStateResult::Stored { blob_version })
     }
 
     async fn upsert_push_token(&self, record: PushTokenRecord) -> StorageResult<()> {
@@ -544,6 +597,11 @@ impl StorageAdapter for InMemoryStorage {
             .map_err(|e| StorageError::OperationFailed(format!("Lock poisoned: {}", e)))?;
         Ok(presence.get(wallet).copied())
     }
+
+    async fn notify_realtime_event(&self, _payload_json: &str) -> StorageResult<()> {
+        // Single-instance in-memory deployments publish inline; nothing to do.
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -575,6 +633,129 @@ mod tests {
 
         assert_eq!(created.order, Some(1));
         assert_eq!(created.group_id, "group_1");
+    }
+
+    fn sample_message(group_id: &str, nonce_seed: u8) -> Message {
+        Message::new(
+            group_id.to_string(),
+            "0xabc".to_string(),
+            vec![1, 2, 3],
+            unique_nonce(nonce_seed),
+            0,
+            vec![],
+            vec![0u8; 64],
+            vec![0u8; 33],
+        )
+    }
+
+    #[tokio::test]
+    async fn test_get_group_activity_counts_and_boundaries() {
+        let storage = InMemoryStorage::new();
+
+        // Empty group: zeros.
+        let empty = storage.get_group_activity("group_1", 0).await.unwrap();
+        assert_eq!(empty.latest_order, 0);
+        assert_eq!(empty.unread_count, 0);
+
+        for i in 0..4u8 {
+            storage
+                .create_message(sample_message("group_1", i))
+                .await
+                .unwrap();
+        }
+        // Another group's messages must not leak into the count.
+        storage
+            .create_message(sample_message("group_2", 100))
+            .await
+            .unwrap();
+
+        let all = storage.get_group_activity("group_1", 0).await.unwrap();
+        assert_eq!(all.latest_order, 4);
+        assert_eq!(all.unread_count, 4);
+
+        // after_order is exclusive: order > 2 leaves orders 3 and 4.
+        let after = storage.get_group_activity("group_1", 2).await.unwrap();
+        assert_eq!(after.latest_order, 4);
+        assert_eq!(after.unread_count, 2);
+
+        // Watermark at (or past) the head: zero unread.
+        let head = storage.get_group_activity("group_1", 4).await.unwrap();
+        assert_eq!(head.unread_count, 0);
+        assert_eq!(head.latest_order, 4);
+    }
+
+    #[tokio::test]
+    async fn test_get_group_activity_excludes_deleted_but_keeps_latest_order() {
+        let storage = InMemoryStorage::new();
+
+        let mut ids = Vec::new();
+        for i in 0..3u8 {
+            let created = storage
+                .create_message(sample_message("group_1", i))
+                .await
+                .unwrap();
+            ids.push(created.id);
+        }
+
+        // Soft-delete the newest message (order 3).
+        storage.delete_message(ids[2]).await.unwrap();
+
+        let activity = storage.get_group_activity("group_1", 0).await.unwrap();
+        // Order assignment is monotonic — deleted rows keep their slot.
+        assert_eq!(activity.latest_order, 3);
+        // But deleted messages never count as unread.
+        assert_eq!(activity.unread_count, 2);
+    }
+
+    #[tokio::test]
+    async fn test_put_user_read_state_versions_and_cas() {
+        let storage = InMemoryStorage::new();
+
+        // First write (no expectation): server assigns version 1.
+        let first = storage
+            .put_user_read_state("0xw", vec![1], None)
+            .await
+            .unwrap();
+        let PutUserReadStateResult::Stored { blob_version } = first else {
+            panic!("expected stored");
+        };
+        assert_eq!(blob_version, 1);
+
+        // Legacy last-writer-wins (no expected_version): always succeeds, bumps version.
+        let lww = storage
+            .put_user_read_state("0xw", vec![2], None)
+            .await
+            .unwrap();
+        let PutUserReadStateResult::Stored { blob_version } = lww else {
+            panic!("expected stored");
+        };
+        assert_eq!(blob_version, 2);
+
+        // CAS success: matching expectation.
+        let cas_ok = storage
+            .put_user_read_state("0xw", vec![3], Some(2))
+            .await
+            .unwrap();
+        let PutUserReadStateResult::Stored { blob_version } = cas_ok else {
+            panic!("expected stored");
+        };
+        assert_eq!(blob_version, 3);
+
+        // CAS conflict: stale expectation returns the current record unchanged.
+        let conflict = storage
+            .put_user_read_state("0xw", vec![9], Some(2))
+            .await
+            .unwrap();
+        let PutUserReadStateResult::Conflict { current } = conflict else {
+            panic!("expected conflict");
+        };
+        assert_eq!(current.blob_version, 3);
+        assert_eq!(current.encrypted_blob, vec![3]);
+
+        // Stored blob was not clobbered by the conflicting write.
+        let stored = storage.get_user_read_state("0xw").await.unwrap().unwrap();
+        assert_eq!(stored.blob_version, 3);
+        assert_eq!(stored.encrypted_blob, vec![3]);
     }
 
     #[tokio::test]

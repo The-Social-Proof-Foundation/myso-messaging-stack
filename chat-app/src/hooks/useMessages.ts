@@ -2,15 +2,19 @@
  * Hook for fetching, sending, and subscribing to messages in a group.
  *
  * - Loads initial message history via getMessages()
- * - Subscribes to real-time message + reaction events via subscribe()
- * - Provides sendMessage / editMessage / deleteMessage / toggleReaction
+ * - Subscribes to real-time message/reaction/typing/presence events via subscribe()
+ * - Provides sendMessage / editMessage / deleteMessage / toggleReaction / sendTyping
  * - Deduplicates incoming messages by messageId
  * - Tracks per-message reactions keyed by relayer `order`
+ * - Advances the read watermark (deduped — only when maxOrder increases) and
+ *   notifies `onReadStateChanged` so the sidebar badge clears instantly
  */
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import {
   BlockedMessagingError,
   createPaidMessagingClient,
+  PAID_DM_MIN_REPLY_CHARS,
+  PAID_MSG_NO_PLATFORM_FEE_RECIPIENT,
   RelayerTransportError,
 } from '@socialproof/myso-messaging-stack';
 import { useRequiredMessagingClient } from '../contexts/MessagingClientContext';
@@ -21,10 +25,19 @@ import type {
   RelayerReactionEvent,
 } from '@socialproof/myso-messaging-stack';
 import {
+  formatPaidClaimError,
   formatRelayerError,
   isNotGroupMemberError,
   isPaymentRequiredError,
 } from '../lib/format-relayer-error';
+import { signAndExecuteTransactionAndWait } from '../lib/sign-and-wait';
+import {
+  applySnapshotEntries,
+  applyWsPresence,
+  presenceRecordsToOnlineMap,
+  sweepStaleWsPresence,
+  type PresenceRecord,
+} from '../lib/presence-utils';
 
 export interface Message {
   messageId: string;
@@ -62,20 +75,37 @@ export interface UseMessagesResult {
   error: string | null;
   hasMore: boolean;
   reactions: MessageReactions;
+  /** Members (excluding self) currently typing. */
+  typingMembers: string[];
+  /** Online state per member (presence snapshot + live events). */
+  onlineMembers: Map<string, boolean>;
   sendMessage: (text: string, files?: AttachmentFile[]) => Promise<void>;
   editMessage: (messageId: string, text: string) => Promise<void>;
   deleteMessage: (messageId: string) => Promise<void>;
   toggleReaction: (order: number, emoji: string) => Promise<void>;
+  /** Broadcast the signer's typing state (fire-and-forget, ephemeral). */
+  sendTyping: (typing: boolean) => void;
   loadMore: () => Promise<void>;
   /** Set when the last send hit the paid-DM gate; renders the payment dialog. */
   paymentRequired: PaymentRequiredState | null;
   /** Payment transaction + post-payment retry in flight. */
   paying: boolean;
+  /** On-chain escrow claim transaction in flight (first reply to a paid DM). */
+  claiming: boolean;
   paymentError: string | null;
   /** Pay the escrow on-chain, then retry the pending message. */
   confirmPayment: () => Promise<void>;
   /** Dismiss the payment dialog and drop the pending message. */
   cancelPayment: () => void;
+}
+
+export interface UseMessagesOptions {
+  /** Called after the read watermark is successfully advanced on the relayer. */
+  onReadStateChanged?: (groupId: string) => void;
+  /** When true, the next outbound send claims peer escrow on-chain before relayer delivery. */
+  claimPending?: boolean;
+  /** Called when a message is sent or received — for sidebar activity ordering. */
+  onGroupActivity?: (order: number) => void;
 }
 
 /** Shape returned by the SDK's getMessages method (messages may include attachments). */
@@ -147,15 +177,37 @@ function applyReactionEvent(
   return next;
 }
 
-export function useMessages(uuid: string, groupId: string): UseMessagesResult {
+export function useMessages(
+  uuid: string,
+  groupId: string,
+  options?: UseMessagesOptions,
+): UseMessagesResult {
   const { client, signer } = useRequiredMessagingClient();
 
   const [messages, setMessages] = useState<Message[]>([]);
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
+  const [claiming, setClaiming] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [hasMore, setHasMore] = useState(false);
   const [reactions, setReactions] = useState<MessageReactions>(new Map());
+  /** Typing members mapped to their expiry (ms epoch) — TTL is the recovery path. */
+  const [typingUntil, setTypingUntil] = useState<Map<string, number>>(new Map());
+  const [presenceRecords, setPresenceRecords] = useState<
+    Map<string, PresenceRecord>
+  >(new Map());
+
+  const onlineMembers = useMemo(
+    () => presenceRecordsToOnlineMap(presenceRecords),
+    [presenceRecords],
+  );
+
+  const onReadStateChangedRef = useRef(options?.onReadStateChanged);
+  onReadStateChangedRef.current = options?.onReadStateChanged;
+  const onGroupActivityRef = useRef(options?.onGroupActivity);
+  onGroupActivityRef.current = options?.onGroupActivity;
+  const claimPendingRef = useRef(options?.claimPending ?? false);
+  claimPendingRef.current = options?.claimPending ?? false;
 
   // Paid-DM gate: dialog state + the message waiting on payment.
   const [paymentRequired, setPaymentRequired] =
@@ -174,6 +226,21 @@ export function useMessages(uuid: string, groupId: string): UseMessagesResult {
   // Latest reactions for toggle decisions without re-creating callbacks.
   const reactionsRef = useRef<MessageReactions>(reactions);
   reactionsRef.current = reactions;
+  // Highest watermark already sent to the relayer — dedupes read-state writes.
+  const lastSentReadUptoRef = useRef(0);
+
+  const resyncPresence = useCallback(async () => {
+    try {
+      const entries = await client.messaging.getGroupPresence({
+        signer,
+        groupRef: { uuid: uuidRef.current },
+      });
+      if (uuidRef.current !== uuid) return;
+      setPresenceRecords((prev) => applySnapshotEntries(prev, entries));
+    } catch (err) {
+      console.warn('Failed to resync presence:', err);
+    }
+  }, [client, signer, uuid]);
 
   // Update lastOrderRef whenever messages change
   useEffect(() => {
@@ -191,10 +258,13 @@ export function useMessages(uuid: string, groupId: string): UseMessagesResult {
     setError(null);
     setHasMore(false);
     setReactions(new Map());
+    setTypingUntil(new Map());
+    setPresenceRecords(new Map());
     setPaymentRequired(null);
     setPaymentError(null);
     pendingPaidSendRef.current = null;
     lastOrderRef.current = undefined;
+    lastSentReadUptoRef.current = 0;
 
     let cancelled = false;
 
@@ -223,6 +293,18 @@ export function useMessages(uuid: string, groupId: string): UseMessagesResult {
         } catch (err) {
           console.warn('Failed to load reactions:', err);
         }
+
+        // Presence snapshot; live transitions arrive on the group stream.
+        try {
+          const entries = await client.messaging.getGroupPresence({
+            signer,
+            groupRef: {uuid},
+          });
+          if (cancelled || uuidRef.current !== uuid) return;
+          setPresenceRecords((prev) => applySnapshotEntries(prev, entries));
+        } catch (err) {
+          console.warn('Failed to load presence:', err);
+        }
       } catch (err) {
         if (cancelled || uuidRef.current !== uuid) return;
         console.error('Failed to load messages:', err);
@@ -244,16 +326,19 @@ export function useMessages(uuid: string, groupId: string): UseMessagesResult {
   }, [uuid, client, signer]);
 
   // ------------------------------------------------------------------
-  // Real-time subscription (messages + reaction updates)
+  // Real-time subscription (messages, reactions, typing, presence)
   // ------------------------------------------------------------------
   useEffect(() => {
     // Don't subscribe while still loading initial messages
     if (loading) return;
 
     const controller = new AbortController();
+    const myAddress = signer.toMySoAddress();
 
     async function startSubscription() {
       try {
+        await resyncPresence();
+
         const stream = client.messaging.subscribe({
           signer,
           groupRef: {uuid},
@@ -264,10 +349,43 @@ export function useMessages(uuid: string, groupId: string): UseMessagesResult {
 
         for await (const event of stream) {
           if (controller.signal.aborted || uuidRef.current !== uuid) break;
-          if (event.type === 'message') {
-            setMessages((prev) => mergeMessage(prev, event.message as Message));
-          } else {
-            setReactions((prev) => applyReactionEvent(prev, event.reaction));
+          switch (event.type) {
+            case 'message':
+              setMessages((prev) => mergeMessage(prev, event.message as Message));
+              if (typeof event.message.order === 'number') {
+                onGroupActivityRef.current?.(event.message.order);
+              }
+              break;
+            case 'reaction':
+              setReactions((prev) => applyReactionEvent(prev, event.reaction));
+              break;
+            case 'typing': {
+              if (event.typing.member === myAddress) break;
+              const member = event.typing.member;
+              if (event.typing.typing) {
+                const expiresMs = event.typing.expiresAt
+                  ? event.typing.expiresAt * 1000
+                  : Date.now() + 5_000;
+                setTypingUntil((prev) => new Map(prev).set(member, expiresMs));
+              } else {
+                setTypingUntil((prev) => {
+                  if (!prev.has(member)) return prev;
+                  const next = new Map(prev);
+                  next.delete(member);
+                  return next;
+                });
+              }
+              break;
+            }
+            case 'presence':
+              setPresenceRecords((prev) =>
+                applyWsPresence(
+                  prev,
+                  event.presence.member,
+                  event.presence.online,
+                ),
+              );
+              break;
           }
         }
       } catch (err) {
@@ -282,23 +400,89 @@ export function useMessages(uuid: string, groupId: string): UseMessagesResult {
     return () => {
       controller.abort();
     };
-  }, [uuid, client, signer, loading]);
+  }, [uuid, client, signer, loading, resyncPresence]);
 
-  // Mark thread read + presence heartbeat for push gating
+  // Periodic presence reconciliation + stale WS sweep.
+  useEffect(() => {
+    if (loading) return;
+
+    const reconcileTimer = setInterval(() => {
+      resyncPresence().then();
+    }, 30_000);
+
+    const sweepTimer = setInterval(() => {
+      setPresenceRecords((prev) => sweepStaleWsPresence(prev));
+    }, 5_000);
+
+    return () => {
+      clearInterval(reconcileTimer);
+      clearInterval(sweepTimer);
+    };
+  }, [loading, resyncPresence]);
+
+  // TTL fallback: clear typing indicators whose stop event never arrived.
+  useEffect(() => {
+    if (typingUntil.size === 0) return;
+    const timer = setInterval(() => {
+      const now = Date.now();
+      setTypingUntil((prev) => {
+        let changed = false;
+        const next = new Map(prev);
+        for (const [member, until] of next) {
+          if (until <= now) {
+            next.delete(member);
+            changed = true;
+          }
+        }
+        return changed ? next : prev;
+      });
+    }, 1_000);
+    return () => clearInterval(timer);
+  }, [typingUntil]);
+
+  // Mark thread read + presence heartbeat for push gating.
+  // Deduped: only writes when the watermark actually advances; on success the
+  // sidebar badge is cleared instantly via onReadStateChanged.
   useEffect(() => {
     if (loading || !groupId || messages.length === 0) return;
 
     const maxOrder = Math.max(...messages.map((m) => m.order));
     if (!Number.isFinite(maxOrder)) return;
 
-    client.messaging
-      .updateReadState({ signer, groupId, readUpto: maxOrder })
-      .catch((err) => console.warn('Failed to update read state:', err));
+    if (maxOrder > lastSentReadUptoRef.current) {
+      lastSentReadUptoRef.current = maxOrder;
+      client.messaging
+        .updateReadState({ signer, groupId, readUpto: maxOrder })
+        .then(() => {
+          onReadStateChangedRef.current?.(groupId);
+        })
+        .catch((err) => {
+          // Allow a retry on the next messages change.
+          if (lastSentReadUptoRef.current === maxOrder) {
+            lastSentReadUptoRef.current = 0;
+          }
+          console.warn('Failed to update read state:', err);
+        });
+    }
 
     client.messaging.transport
       .postPresence({ signer, active: true })
       .catch((err) => console.warn('Failed to post presence:', err));
   }, [messages, loading, groupId, client, signer]);
+
+  // ------------------------------------------------------------------
+  // Typing broadcast (fire-and-forget, ephemeral)
+  // ------------------------------------------------------------------
+  const sendTyping = useCallback(
+    (typing: boolean) => {
+      client.messaging
+        .sendTyping({ signer, groupRef: { uuid: uuidRef.current }, typing })
+        .catch((err) => {
+          console.warn('Failed to send typing:', err);
+        });
+    },
+    [client, signer],
+  );
 
   // ------------------------------------------------------------------
   // Load older messages (pagination)
@@ -387,6 +571,7 @@ export function useMessages(uuid: string, groupId: string): UseMessagesResult {
       };
 
       setMessages((prev) => mergeMessage(prev, optimistic));
+      onGroupActivityRef.current?.(optimistic.order);
     },
     [client, signer],
   );
@@ -397,12 +582,41 @@ export function useMessages(uuid: string, groupId: string): UseMessagesResult {
       const hasFiles = files && files.length > 0;
       if (!trimmed && !hasFiles) return;
 
+      if (claimPendingRef.current) {
+        if (trimmed.length < PAID_DM_MIN_REPLY_CHARS) {
+          setError(
+            `Reply with at least ${PAID_DM_MIN_REPLY_CHARS} characters to claim the escrow.`,
+          );
+          return;
+        }
+      }
+
       setSending(true);
       setError(null);
 
+      let claimCompleted = false;
+
       try {
+        if (claimPendingRef.current) {
+          setClaiming(true);
+          const paid = createPaidMessagingClient({ messaging: client.messaging });
+          const { transaction } = paid.buildReplyAndClaimSettled({
+            groupRef: { uuid: uuidRef.current },
+            paidMsgSeq: 0n,
+            charCount: trimmed.length,
+            platformFeeRecipient: PAID_MSG_NO_PLATFORM_FEE_RECIPIENT,
+          });
+          await signAndExecuteTransactionAndWait(client, signer, transaction);
+          claimCompleted = true;
+        }
+
         await performSend(trimmed, hasFiles ? files : undefined);
       } catch (err) {
+        if (claimPendingRef.current && !claimCompleted) {
+          console.error('Failed to claim paid DM escrow:', err);
+          setError(formatPaidClaimError(err));
+          return;
+        }
         if (isPaymentRequiredError(err)) {
           // Paid-DM gate: stash the message and open the payment dialog.
           pendingPaidSendRef.current = {
@@ -430,10 +644,11 @@ export function useMessages(uuid: string, groupId: string): UseMessagesResult {
           );
         }
       } finally {
+        setClaiming(false);
         setSending(false);
       }
     },
-    [performSend],
+    [client, signer, groupId, performSend],
   );
 
   // ------------------------------------------------------------------
@@ -458,13 +673,16 @@ export function useMessages(uuid: string, groupId: string): UseMessagesResult {
       // On-chain escrow via send_paid_message_digest (funded from gas). The
       // contract re-validates DM state, follow graph, and the recipient's
       // minimum — the relayer's 402 detail is advisory input only.
+      // Built unsigned + signed through signAndExecuteTransactionAndWait so
+      // gas coins are RPC-verified (a stale indexer after --force-regenesis
+      // can list ghost coins that would become invalid PTB inputs).
       const paid = createPaidMessagingClient({ messaging: client.messaging });
-      await paid.payDmEscrow({
-        signer,
+      const { transaction } = paid.buildPayDmEscrow({
         groupRef: { uuid: uuidRef.current },
         recipient,
         escrowAmount: minCost,
       });
+      await signAndExecuteTransactionAndWait(client, signer, transaction);
 
       // Retry until the relayer's checkpoint indexer sees PaidMessageSent.
       const maxAttempts = 10;
@@ -637,13 +855,17 @@ export function useMessages(uuid: string, groupId: string): UseMessagesResult {
     error,
     hasMore,
     reactions,
+    typingMembers: [...typingUntil.keys()],
+    onlineMembers,
     sendMessage,
     editMessage,
     deleteMessage: deleteMessageFn,
     toggleReaction,
+    sendTyping,
     loadMore,
     paymentRequired,
     paying,
+    claiming,
     paymentError,
     confirmPayment,
     cancelPayment,

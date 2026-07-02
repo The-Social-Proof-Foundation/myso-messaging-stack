@@ -161,12 +161,23 @@ export type SubscribeOptions<TApproveContext = void> = WithApproveContext<
 >;
 
 /**
- * Event yielded by {@link MySoMessagingStackClient.subscribe}: either a
- * decrypted message or an absolute-state reaction update.
+ * Event yielded by {@link MySoMessagingStackClient.subscribe}: a decrypted
+ * message, an absolute-state reaction update, or an ephemeral typing /
+ * presence change.
  */
 export type MessagingEvent =
 	| { type: 'message'; message: DecryptedMessage }
-	| { type: 'reaction'; reaction: RelayerReactionEvent };
+	| { type: 'reaction'; reaction: RelayerReactionEvent }
+	| {
+			type: 'typing';
+			typing: {
+				member: string;
+				typing: boolean;
+				/** Unix seconds TTL for a start without a matching stop. */
+				expiresAt?: number;
+			};
+	  }
+	| { type: 'presence'; presence: { member: string; online: boolean } };
 
 // ── Reactions ────────────────────────────────────────────────────
 

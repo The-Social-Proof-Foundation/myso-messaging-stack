@@ -46,6 +46,56 @@ export interface OpenAgentPaidDmOptions extends OpenPaidDmOptions {
 }
 
 /**
+ * Options for {@link PaidMessagingClient.buildOpenPaidDm} — the unsigned
+ * transaction variant of {@link OpenPaidDmOptions}. Takes the sender address
+ * instead of a signer; the caller owns signing (e.g. with its own gas
+ * resolution strategy).
+ */
+export interface BuildOpenPaidDmOptions {
+	/** Transaction sender (the group creator). */
+	sender: string;
+	recipient: string;
+	escrowAmount: bigint;
+	/** Coin object ID to fund the escrow. When omitted, split from gas. */
+	paymentCoinId?: string;
+	/** Replay-protection key (max 256 bytes). Random 32 bytes when omitted. */
+	dedupeKey?: Uint8Array | number[];
+	/** Per-sender replay nonce (u128). Random when omitted. */
+	nonce?: number | bigint;
+	name?: string;
+	uuid?: string;
+	/**
+	 * Creator's MemoryAccount object ID. When omitted, resolved on-chain at
+	 * build time (wallet-only senders fall back to the wallet group variant).
+	 */
+	creatorMemoryAccountId?: string;
+}
+
+/** Unsigned open-paid-DM transaction plus the ids derived from its UUID. */
+export interface BuildOpenPaidDmResult {
+	transaction: Transaction;
+	uuid: string;
+	groupId: string;
+	messageLogId: string;
+}
+
+/**
+ * Options for {@link PaidMessagingClient.buildPayDmEscrow} — the unsigned
+ * transaction variant of {@link PayDmEscrowOptions}.
+ */
+export interface BuildPayDmEscrowOptions {
+	groupRef: GroupRef;
+	recipient: string;
+	escrowAmount: bigint;
+	/** Coin object ID to fund the escrow. When omitted, split from gas. */
+	paymentCoinId?: string;
+	/** Replay-protection key (max 256 bytes). Random 32 bytes when omitted. */
+	dedupeKey?: Uint8Array | number[];
+	/** Per-sender replay nonce (u128). Random when omitted. */
+	nonce?: number | bigint;
+}
+
+/**
  * Options for paying the DM escrow in an **existing** group (e.g. after the
  * relayer rejected a first message with `PAYMENT_REQUIRED`).
  */
@@ -93,6 +143,15 @@ function resolvePayment(
 	return payment;
 }
 
+/** Minimum reply character count for on-chain paid-DM escrow claim (`MIN_REPLY_CHARS`). */
+export const PAID_DM_MIN_REPLY_CHARS = 6;
+
+/**
+ * Pass as `platformFeeRecipient` when no platform is associated with the paid DM.
+ * On-chain, both fee slices (500 bps total) route to the ecosystem treasury address.
+ */
+export const PAID_MSG_NO_PLATFORM_FEE_RECIPIENT = '0x0';
+
 export interface ReplyAndClaimSettledOptions {
 	signer: Signer;
 	groupRef: GroupRef;
@@ -101,7 +160,15 @@ export interface ReplyAndClaimSettledOptions {
 	dedupeKey: Uint8Array | number[];
 	nonce: number | bigint;
 	platformFeeRecipient: string;
-	ecosystemFeeRecipient: string;
+}
+
+export interface BuildReplyAndClaimSettledOptions {
+	groupRef: GroupRef;
+	paidMsgSeq: number | bigint;
+	charCount: number;
+	dedupeKey?: Uint8Array | number[];
+	nonce?: number | bigint;
+	platformFeeRecipient: string;
 }
 
 export interface RefundPaidEscrowOptions {
@@ -148,6 +215,65 @@ export class PaidMessagingClient {
 		return this.#messaging.view.requiresPaymentFromRecipient(recipient);
 	}
 
+	/**
+	 * Builds the unsigned open-paid-DM transaction as one PTB:
+	 * `messaging::create_group` (or the wallet variant) returning the
+	 * `(group, encryptionHistory, messageLog)` values, then
+	 * `messaging::send_paid_message_digest` borrowing those results, then
+	 * `transfer::public_share_object` on all three — sharing must come last.
+	 *
+	 * The group/log must be passed as same-transaction results, never by their
+	 * derived ids: the objects do not exist on-chain until this transaction
+	 * executes, so id-based object inputs fail resolution with
+	 * "input objects invalid".
+	 *
+	 * The escrow is funded from `paymentCoinId` or a gas split. Use this
+	 * builder when the caller owns signing — e.g. to pre-resolve gas payment
+	 * against live RPC.
+	 */
+	buildOpenPaidDm(options: BuildOpenPaidDmOptions): BuildOpenPaidDmResult {
+		const uuid = options.uuid ?? crypto.randomUUID();
+		const name = options.name ?? 'Paid DM';
+
+		const transaction = new Transaction();
+		const created = transaction.add(
+			this.#messaging.call.createGroup({
+				sender: options.sender,
+				name,
+				uuid,
+				initialMembers: [options.recipient],
+				...(options.creatorMemoryAccountId && {
+					creatorMemoryAccountId: options.creatorMemoryAccountId,
+				}),
+			}),
+		);
+		transaction.add(
+			this.#messaging.call.sendPaidMessageDigest({
+				group: created[0],
+				messageLog: created[2],
+				recipient: options.recipient,
+				payment: resolvePayment(transaction, options),
+				escrowAmount: options.escrowAmount,
+				dedupeKey: options.dedupeKey ?? randomDedupeKey(),
+				nonce: options.nonce ?? randomNonce(),
+			}),
+		);
+		transaction.add(
+			this.#messaging.call.shareGroup({
+				group: created[0],
+				encryptionHistory: created[1],
+				messageLog: created[2],
+			}),
+		);
+
+		return {
+			transaction,
+			uuid,
+			groupId: this.#messaging.derive.groupId({ uuid }),
+			messageLogId: this.#messaging.derive.messageLogId({ uuid }),
+		};
+	}
+
 	async openPaidDm(options: OpenPaidDmOptions): Promise<{
 		digest: string;
 		groupId: string;
@@ -161,33 +287,18 @@ export class PaidMessagingClient {
 			});
 		}
 
-		const uuid = options.uuid ?? crypto.randomUUID();
-		const name = options.name ?? 'Paid DM';
-		const sender = options.signer.toMySoAddress();
+		const { transaction, uuid, groupId, messageLogId } = this.buildOpenPaidDm({
+			sender: options.signer.toMySoAddress(),
+			recipient: options.recipient,
+			escrowAmount: options.escrowAmount,
+			paymentCoinId: options.paymentCoinId,
+			dedupeKey: options.dedupeKey,
+			nonce: options.nonce,
+			name: options.name,
+			uuid: options.uuid,
+		});
 
-		const tx = new Transaction();
-		tx.add(
-			this.#messaging.call.createAndShareGroup({
-				sender,
-				name,
-				uuid,
-				initialMembers: [options.recipient],
-			}),
-		);
-		tx.add(
-			this.#messaging.call.sendPaidMessageDigest({
-				uuid,
-				recipient: options.recipient,
-				payment: resolvePayment(tx, options),
-				escrowAmount: options.escrowAmount,
-				dedupeKey: options.dedupeKey ?? randomDedupeKey(),
-				nonce: options.nonce ?? randomNonce(),
-			}),
-		);
-
-		const { digest } = await this.#execute(tx, options.signer, 'open paid DM');
-		const groupId = this.#messaging.derive.groupId({ uuid });
-		const messageLogId = this.#messaging.derive.messageLogId({ uuid });
+		const { digest } = await this.#execute(transaction, options.signer, 'open paid DM');
 		return { digest, groupId, uuid, messageLogId };
 	}
 
@@ -200,6 +311,26 @@ export class PaidMessagingClient {
 	 * DM metadata, first paid send, not-following, recipient minimum. After the
 	 * transaction lands and the relayer indexes `PaidMessageSent`, retry the send.
 	 */
+	/**
+	 * Builds the unsigned pay-escrow transaction for an existing group
+	 * (`messaging::send_paid_message_digest`). See {@link buildOpenPaidDm}
+	 * for when to prefer builders over the signing methods.
+	 */
+	buildPayDmEscrow(options: BuildPayDmEscrowOptions): { transaction: Transaction } {
+		const transaction = new Transaction();
+		transaction.add(
+			this.#messaging.call.sendPaidMessageDigest({
+				...options.groupRef,
+				recipient: options.recipient,
+				payment: resolvePayment(transaction, options),
+				escrowAmount: options.escrowAmount,
+				dedupeKey: options.dedupeKey ?? randomDedupeKey(),
+				nonce: options.nonce ?? randomNonce(),
+			}),
+		);
+		return { transaction };
+	}
+
 	async payDmEscrow(options: PayDmEscrowOptions): Promise<{ digest: string }> {
 		if (!options.skipGatingCheck && this.#gating) {
 			await this.#gating.assertPaidOpenAllowed({
@@ -208,18 +339,15 @@ export class PaidMessagingClient {
 			});
 		}
 
-		const tx = new Transaction();
-		tx.add(
-			this.#messaging.call.sendPaidMessageDigest({
-				...options.groupRef,
-				recipient: options.recipient,
-				payment: resolvePayment(tx, options),
-				escrowAmount: options.escrowAmount,
-				dedupeKey: options.dedupeKey ?? randomDedupeKey(),
-				nonce: options.nonce ?? randomNonce(),
-			}),
-		);
-		return this.#execute(tx, options.signer, 'pay DM escrow');
+		const { transaction } = this.buildPayDmEscrow({
+			groupRef: options.groupRef,
+			recipient: options.recipient,
+			escrowAmount: options.escrowAmount,
+			paymentCoinId: options.paymentCoinId,
+			dedupeKey: options.dedupeKey,
+			nonce: options.nonce,
+		});
+		return this.#execute(transaction, options.signer, 'pay DM escrow');
 	}
 
 	async openAgentPaidDm(
@@ -235,9 +363,12 @@ export class PaidMessagingClient {
 		const uuid = options.uuid ?? crypto.randomUUID();
 		const name = options.name ?? 'Agent paid DM';
 
+		// Same-PTB composition as buildOpenPaidDm: create (values) -> paid
+		// digest borrowing the results -> share last. The derived group/log ids
+		// do not exist yet, so they cannot be object inputs.
 		const tx = new Transaction();
-		tx.add(
-			this.#messaging.call.createAgentAndShareGroup({
+		const created = tx.add(
+			this.#messaging.call.createAgentGroup({
 				name,
 				uuid,
 				initialMembers: [options.recipient],
@@ -248,7 +379,8 @@ export class PaidMessagingClient {
 		);
 		tx.add(
 			this.#messaging.call.sendAgentPaidMessageDigest({
-				uuid,
+				group: created[0],
+				messageLog: created[2],
 				platformId: options.platformId,
 				memoryAccountId: options.memoryAccountId,
 				recipient: options.recipient,
@@ -258,6 +390,13 @@ export class PaidMessagingClient {
 				nonce: options.nonce ?? randomNonce(),
 			}),
 		);
+		tx.add(
+			this.#messaging.call.shareGroup({
+				group: created[0],
+				encryptionHistory: created[1],
+				messageLog: created[2],
+			}),
+		);
 
 		const { digest } = await this.#execute(tx, options.signer, 'open agent paid DM');
 		const groupId = this.#messaging.derive.groupId({ uuid });
@@ -265,20 +404,33 @@ export class PaidMessagingClient {
 		return { digest, groupId, uuid, messageLogId };
 	}
 
-	async replyAndClaimSettled(options: ReplyAndClaimSettledOptions): Promise<{ digest: string }> {
-		const tx = new Transaction();
-		tx.add(
+	buildReplyAndClaimSettled(options: BuildReplyAndClaimSettledOptions): {
+		transaction: Transaction;
+	} {
+		const transaction = new Transaction();
+		transaction.add(
 			this.#messaging.call.replyToPaidMessageClaimSettled({
 				...options.groupRef,
 				paidMsgSeq: options.paidMsgSeq,
 				charCount: options.charCount,
-				dedupeKey: options.dedupeKey,
-				nonce: options.nonce,
+				dedupeKey: options.dedupeKey ?? randomDedupeKey(),
+				nonce: options.nonce ?? randomNonce(),
 				platformFeeRecipient: options.platformFeeRecipient,
-				ecosystemFeeRecipient: options.ecosystemFeeRecipient,
 			}),
 		);
-		return this.#execute(tx, options.signer, 'reply and claim settled paid escrow');
+		return { transaction };
+	}
+
+	async replyAndClaimSettled(options: ReplyAndClaimSettledOptions): Promise<{ digest: string }> {
+		const { transaction } = this.buildReplyAndClaimSettled({
+			groupRef: options.groupRef,
+			paidMsgSeq: options.paidMsgSeq,
+			charCount: options.charCount,
+			dedupeKey: options.dedupeKey,
+			nonce: options.nonce,
+			platformFeeRecipient: options.platformFeeRecipient,
+		});
+		return this.#execute(transaction, options.signer, 'reply and claim settled paid escrow');
 	}
 
 	async refundEscrow(options: RefundPaidEscrowOptions): Promise<{ digest: string }> {

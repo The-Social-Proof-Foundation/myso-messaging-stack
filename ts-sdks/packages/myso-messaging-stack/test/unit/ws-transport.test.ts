@@ -176,4 +176,122 @@ describe('WSRelayerTransport', () => {
 			},
 		});
 	});
+
+	it('yields typing start/stop and presence frames on the group feed', async () => {
+		const keypair = Ed25519Keypair.generate();
+		const transport = new WSRelayerTransport({
+			relayerUrl: MOCK_RELAYER_URL,
+			apiPrefix: '/v1',
+			WebSocket: MockWebSocket as unknown as typeof WebSocket,
+			maxReconnectAttempts: 0,
+		});
+
+		const controller = new AbortController();
+		const subscribePromise = (async () => {
+			const events = [];
+			for await (const event of transport.subscribe({
+				signer: keypair,
+				groupId: GROUP_ID,
+				signal: controller.signal,
+			})) {
+				events.push(event);
+				if (events.length === 3) controller.abort();
+			}
+			return events;
+		})();
+
+		await vi.waitFor(() => {
+			expect(MockWebSocket.instances.length).toBe(1);
+		});
+
+		const socket = MockWebSocket.instances[0]!;
+		socket.emitMessage(
+			JSON.stringify({
+				type: 'typing.start',
+				group_id: GROUP_ID,
+				member: '0xa',
+				expires_at: 1_700_000_005,
+			}),
+		);
+		socket.emitMessage(
+			JSON.stringify({ type: 'typing.stop', group_id: GROUP_ID, member: '0xa' }),
+		);
+		socket.emitMessage(
+			JSON.stringify({
+				type: 'presence.updated',
+				group_id: GROUP_ID,
+				member: '0xb',
+				online: true,
+			}),
+		);
+
+		const events = await subscribePromise;
+		expect(events).toEqual([
+			{
+				type: 'typing.start',
+				typing: { groupId: GROUP_ID, member: '0xa', expiresAt: 1_700_000_005 },
+			},
+			{
+				type: 'typing.stop',
+				typing: { groupId: GROUP_ID, member: '0xa', expiresAt: undefined },
+			},
+			{
+				type: 'presence.updated',
+				presence: { groupId: GROUP_ID, member: '0xb', online: true },
+			},
+		]);
+	});
+
+	it('subscribeUserEvents connects to /v1/users/ws and yields user feed frames', async () => {
+		const keypair = Ed25519Keypair.generate();
+		const transport = new WSRelayerTransport({
+			relayerUrl: MOCK_RELAYER_URL,
+			apiPrefix: '/v1',
+			WebSocket: MockWebSocket as unknown as typeof WebSocket,
+			maxReconnectAttempts: 0,
+		});
+
+		const controller = new AbortController();
+		const subscribePromise = (async () => {
+			const events = [];
+			for await (const event of transport.subscribeUserEvents({
+				signer: keypair,
+				signal: controller.signal,
+			})) {
+				events.push(event);
+				if (events.length === 4) controller.abort();
+			}
+			return events;
+		})();
+
+		await vi.waitFor(() => {
+			expect(MockWebSocket.instances.length).toBe(1);
+		});
+
+		const socket = MockWebSocket.instances[0]!;
+		expect(socket.url).toContain('wss://relayer.example.com/v1/users/ws?');
+		expect(socket.url).toContain(
+			`sender_address=${encodeURIComponent(keypair.toMySoAddress())}`,
+		);
+		expect(socket.url).not.toContain('group_id=');
+
+		socket.emitMessage(
+			JSON.stringify({ type: 'group.activity', group_id: '0xg', latest_order: 12 }),
+		);
+		socket.emitMessage(
+			JSON.stringify({ type: 'read_state.updated', wallet: '0xme', blob_version: 3 }),
+		);
+		socket.emitMessage(
+			JSON.stringify({ type: 'group.discovered', group_id: '0xnew', reason: 'invited' }),
+		);
+		socket.emitMessage(JSON.stringify({ type: 'group.hidden', group_id: '0xold' }));
+
+		const events = await subscribePromise;
+		expect(events).toEqual([
+			{ type: 'group.activity', groupId: '0xg', latestOrder: 12 },
+			{ type: 'read_state.updated', blobVersion: 3 },
+			{ type: 'group.discovered', groupId: '0xnew', reason: 'invited' },
+			{ type: 'group.hidden', groupId: '0xold' },
+		]);
+	});
 });

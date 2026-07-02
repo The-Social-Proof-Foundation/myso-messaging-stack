@@ -4,7 +4,14 @@
 import { fromHex } from '@socialproof/myso/utils';
 
 import type { Attachment } from '../attachments/types.js';
-import type { RelayerMessage, RelayerReactionEvent, SyncStatus } from './types.js';
+import type {
+	RelayerMessage,
+	RelayerPresenceEvent,
+	RelayerReactionEvent,
+	RelayerTypingEvent,
+	RelayerUserEvent,
+	SyncStatus,
+} from './types.js';
 
 /** Raw attachment JSON shape from the relayer API (snake_case). */
 export interface WireAttachment {
@@ -51,6 +58,29 @@ export interface WireReactionUpdatedEvent {
 	reactors: string[];
 }
 
+/** `typing.start` / `typing.stop` WS frames (snake_case). */
+export interface WireTypingEvent {
+	type: 'typing.start' | 'typing.stop';
+	group_id: string;
+	member: string;
+	expires_at?: number;
+}
+
+/** `presence.updated` WS frame (snake_case). */
+export interface WirePresenceEvent {
+	type: 'presence.updated';
+	group_id: string;
+	member: string;
+	online: boolean;
+}
+
+/** User feed (`/v1/users/ws`) frames (snake_case). */
+export type WireUserFeedEvent =
+	| { type: 'group.activity'; group_id: string; latest_order: number }
+	| { type: 'read_state.updated'; wallet: string; blob_version: number }
+	| { type: 'group.discovered'; group_id: string; reason: string }
+	| { type: 'group.hidden'; group_id: string };
+
 export interface WireMessagesListResponse {
 	messages: WireMessageResponse[];
 	hasNext: boolean;
@@ -83,6 +113,47 @@ export function fromWireReactionEvent(wire: WireReactionUpdatedEvent): RelayerRe
 		count: wire.count,
 		reactors: wire.reactors ?? [],
 	};
+}
+
+/** Convert a typing wire frame to a RelayerTypingEvent domain object. */
+export function fromWireTypingEvent(wire: WireTypingEvent): RelayerTypingEvent {
+	return {
+		groupId: wire.group_id,
+		member: wire.member,
+		expiresAt: wire.expires_at,
+	};
+}
+
+/** Convert a `presence.updated` wire frame to a RelayerPresenceEvent domain object. */
+export function fromWirePresenceEvent(wire: WirePresenceEvent): RelayerPresenceEvent {
+	return {
+		groupId: wire.group_id,
+		member: wire.member,
+		online: wire.online,
+	};
+}
+
+/** Convert a user feed wire frame to a RelayerUserEvent, or null when unknown. */
+export function fromWireUserFeedEvent(wire: WireUserFeedEvent): RelayerUserEvent | null {
+	switch (wire.type) {
+		case 'group.activity':
+			return {
+				type: 'group.activity',
+				groupId: wire.group_id,
+				latestOrder: wire.latest_order,
+			};
+		case 'read_state.updated':
+			return { type: 'read_state.updated', blobVersion: wire.blob_version };
+		case 'group.discovered': {
+			const reason =
+				wire.reason === 'created' || wire.reason === 'joined' ? wire.reason : 'invited';
+			return { type: 'group.discovered', groupId: wire.group_id, reason };
+		}
+		case 'group.hidden':
+			return { type: 'group.hidden', groupId: wire.group_id };
+		default:
+			return null;
+	}
 }
 
 /** Convert a relayer JSON message to a RelayerMessage domain object. */

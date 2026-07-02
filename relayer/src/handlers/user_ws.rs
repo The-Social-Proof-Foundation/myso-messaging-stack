@@ -1,4 +1,13 @@
-//! WebSocket subscription for realtime encrypted message delivery.
+//! Wallet-scoped user feed — `GET /v1/users/ws`.
+//!
+//! One socket per wallet carries all user-scoped synchronization events:
+//! `group.activity` (a message landed in one of your groups),
+//! `read_state.updated` (your read-state blob changed on another device), and
+//! `group.discovered` / `group.hidden` (a conversation appeared or left).
+//! Frames are metadata only — clients re-fetch canonical state over REST.
+//!
+//! Events are broadcast on a single global hub channel and filtered per
+//! connection via [`UserFeedEvent::matches_wallet`].
 
 use std::time::Duration;
 
@@ -13,12 +22,11 @@ use axum::{
 use futures_util::{SinkExt, StreamExt};
 use tracing::{debug, warn};
 
-use crate::auth::ws_auth::{authenticate_ws_upgrade, WsAuthQuery};
+use crate::auth::ws_auth::{authenticate_user_ws_upgrade, WsAuthQuery};
 use crate::services::presence_sync;
-use crate::services::realtime::RealtimeEvent;
 use crate::state::AppState;
 
-pub async fn ws_handler(
+pub async fn user_ws_handler(
     ws: WebSocketUpgrade,
     Query(query): Query<WsAuthQuery>,
     State(state): State<AppState>,
@@ -32,72 +40,47 @@ pub async fn ws_handler(
             .into_response());
     }
 
-    let auth = authenticate_ws_upgrade(
-        &headers,
-        &query,
-        state.membership_store.as_ref(),
-        state.request_ttl_seconds,
-    )?;
-
-    let group_id = auth
-        .authorized_group
-        .clone()
-        .expect("ws auth sets authorized_group");
-    let after_order = query.after_order.unwrap_or(0);
-    let sender = auth.sender_address.clone();
+    let auth = authenticate_user_ws_upgrade(&headers, &query, state.request_ttl_seconds)?;
+    let wallet = auth.sender_address.clone();
     let ping_interval = Duration::from_secs(state.ws_ping_interval_secs);
 
-    Ok(ws.on_upgrade(move |socket| handle_socket(
-        socket,
-        state,
-        group_id,
-        sender,
-        after_order,
-        ping_interval,
-    )))
+    Ok(ws.on_upgrade(move |socket| handle_socket(socket, state, wallet, ping_interval)))
 }
 
 async fn handle_socket(
     socket: WebSocket,
     state: AppState,
-    group_id: String,
-    sender: String,
-    mut after_order: i64,
+    wallet: String,
     ping_interval: Duration,
 ) {
     let (mut ws_tx, mut ws_rx) = socket.split();
-    let mut hub_rx = state.realtime_hub.subscribe(&group_id);
+    let mut feed_rx = state.realtime_hub.subscribe_user_feed();
     let mut ping_tick = tokio::time::interval(ping_interval);
 
-    if let Err(err) = state.storage.update_presence(&sender).await {
-        warn!("ws presence update failed for {}: {}", sender, err);
+    if let Err(err) = state.storage.update_presence(&wallet).await {
+        warn!("user ws presence update failed for {}: {}", wallet, err);
     }
-    presence_sync::note_connect(&state, &sender).await;
+    presence_sync::note_connect(&state, &wallet).await;
 
     loop {
         tokio::select! {
-            event = hub_rx.recv() => {
+            event = feed_rx.recv() => {
                 match event {
                     Ok(event) => {
-                        // Messages are deduplicated by order; reaction events carry
-                        // absolute state and are forwarded as-is.
-                        if let RealtimeEvent::MessageCreated(ref wire) = event {
-                            if wire.message.order <= after_order {
-                                continue;
-                            }
-                            after_order = wire.message.order;
+                        if !event.matches_wallet(&wallet, state.membership_store.as_ref()) {
+                            continue;
                         }
-                        match serde_json::to_string(&event) {
+                        match serde_json::to_string(&event.wire_frame()) {
                             Ok(json) => {
                                 if ws_tx.send(Message::Text(json.into())).await.is_err() {
                                     break;
                                 }
                             }
-                            Err(err) => warn!("ws serialize failed: {}", err),
+                            Err(err) => warn!("user ws serialize failed: {}", err),
                         }
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
-                        debug!("ws client lagged, skipped {} events", skipped);
+                        debug!("user ws client lagged, skipped {} events", skipped);
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 }
@@ -110,7 +93,7 @@ async fn handle_socket(
                                 let _ = ws_tx.send(Message::Text(
                                     r#"{"type":"pong"}"#.into(),
                                 )).await;
-                                let _ = state.storage.update_presence(&sender).await;
+                                let _ = state.storage.update_presence(&wallet).await;
                             }
                         }
                     }
@@ -119,18 +102,18 @@ async fn handle_socket(
                     }
                     Some(Ok(Message::Close(_))) | None => break,
                     Some(Err(err)) => {
-                        debug!("ws read error: {}", err);
+                        debug!("user ws read error: {}", err);
                         break;
                     }
                     _ => {}
                 }
             }
             _ = ping_tick.tick() => {
-                let _ = state.storage.update_presence(&sender).await;
+                let _ = state.storage.update_presence(&wallet).await;
             }
         }
     }
 
-    debug!("ws disconnected for {} in group {}", sender, group_id);
-    presence_sync::note_disconnect(state, sender);
+    debug!("user ws disconnected for {}", wallet);
+    presence_sync::note_disconnect(state, wallet);
 }

@@ -1129,7 +1129,7 @@ export interface ReplyToPaidMessageClaimSettledArguments {
 	dedupeKey: RawTransactionArgument<number[]>;
 	nonce: RawTransactionArgument<number | bigint>;
 	platformFeeRecipient: RawTransactionArgument<string>;
-	ecosystemFeeRecipient: RawTransactionArgument<string>;
+	ecosystemTreasury: RawTransactionArgument<string>;
 }
 export interface ReplyToPaidMessageClaimSettledOptions {
 	package?: string;
@@ -1145,14 +1145,14 @@ export interface ReplyToPaidMessageClaimSettledOptions {
 				dedupeKey: RawTransactionArgument<number[]>,
 				nonce: RawTransactionArgument<number | bigint>,
 				platformFeeRecipient: RawTransactionArgument<string>,
-				ecosystemFeeRecipient: RawTransactionArgument<string>,
+				ecosystemTreasury: RawTransactionArgument<string>,
 		  ];
 }
 /**
  * Reply and settle: same validation as [`reply_to_paid_message_claim_coin`], then
- * split escrow per paid-message BPS to `platform_fee_recipient` and
- * `ecosystem_fee_recipient` (typically addresses matching `Platform` treasury
- * policy and `EcosystemTreasury`), with net to the paid-message recipient.
+ * split escrow per paid-message BPS to `platform_fee_recipient` and the ecosystem
+ * treasury address from `ecosystem_treasury` (via `profile::get_treasury_address`),
+ * with net to the paid-message recipient.
  */
 export function replyToPaidMessageClaimSettled(options: ReplyToPaidMessageClaimSettledOptions) {
 	const packageAddress = options.package ?? '@local-pkg/messaging';
@@ -1167,7 +1167,7 @@ export function replyToPaidMessageClaimSettled(options: ReplyToPaidMessageClaimS
 		'u128',
 		'0x2::clock::Clock',
 		'address',
-		'address',
+		null,
 	] satisfies (string | null)[];
 	const parameterNames = [
 		'version',
@@ -1179,7 +1179,7 @@ export function replyToPaidMessageClaimSettled(options: ReplyToPaidMessageClaimS
 		'dedupeKey',
 		'nonce',
 		'platformFeeRecipient',
-		'ecosystemFeeRecipient',
+		'ecosystemTreasury',
 	];
 	return (tx: Transaction) =>
 		tx.moveCall({

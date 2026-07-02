@@ -10,9 +10,13 @@ import type {
 	FetchMessageParams,
 	FetchMessagesParams,
 	FetchMessagesResult,
+	FetchUnreadCountsParams,
+	GetGroupPresenceParams,
 	GetGroupReceiptsParams,
 	GetUserReadStateParams,
+	GroupPresenceEntry,
 	GroupReceiptState,
+	GroupUnreadCount,
 	ListGroupPinsParams,
 	ListGroupReactionsParams,
 	ListAgentConversationsParams,
@@ -22,14 +26,18 @@ import type {
 	PostPresenceParams,
 	PostPushTokenParams,
 	PutUserReadStateParams,
+	PutUserReadStateResult,
 	RelayerMessage,
 	RelayerReactionEntry,
 	RelayerSubscriptionEvent,
+	RelayerUserEvent,
 	RelayerAgentConversation,
 	SendMessageParams,
 	SendMessageResult,
+	SendTypingParams,
 	SetGroupPinParams,
 	SubscribeParams,
+	SubscribeUserEventsParams,
 	UpdateMessageParams,
 	UserReadStateWire,
 } from './types.js';
@@ -47,20 +55,41 @@ export interface RelayerTransport {
 	updateMessage(params: UpdateMessageParams): Promise<void>;
 	deleteMessage(params: DeleteMessageParams): Promise<void>;
 	/**
-	 * Subscribe to real-time messages and reaction updates as a single event
-	 * stream. Use afterOrder for message resumability.
+	 * Subscribe to a group's real-time events (messages, reactions, typing,
+	 * presence) as a single stream. Use afterOrder for message resumability.
 	 */
 	subscribe(params: SubscribeParams): AsyncIterable<RelayerSubscriptionEvent>;
+	/**
+	 * Subscribe to the wallet-scoped user feed (`/v1/users/ws`): group
+	 * activity, cross-device read-state updates, and group discovery. One
+	 * socket per wallet — metadata only, REST stays the source of truth.
+	 */
+	subscribeUserEvents(params: SubscribeUserEventsParams): AsyncIterable<RelayerUserEvent>;
+	/**
+	 * Batch per-group activity (`POST /v1/users/unread-counts`): exact unread
+	 * counts + latest order in one round trip. Groups the wallet cannot read
+	 * are omitted from the result.
+	 */
+	fetchUnreadCounts(params: FetchUnreadCountsParams): Promise<GroupUnreadCount[]>;
 	/** Off-chain reaction tallies (`/v1/groups/.../reactions`). */
 	listGroupReactions(params: ListGroupReactionsParams): Promise<RelayerReactionEntry[]>;
 	postGroupReaction(params: PostGroupReactionParams): Promise<void>;
+	/** Ephemeral typing indicator broadcast (`/v1/groups/.../typing`). */
+	sendTyping(params: SendTypingParams): Promise<void>;
+	/** Presence snapshot for a group's members (`/v1/groups/.../presence`). */
+	getGroupPresence(params: GetGroupPresenceParams): Promise<GroupPresenceEntry[]>;
 	/** Pinned `chain_seq` indices (`/v1/groups/.../pins`). */
 	listGroupPins(params: ListGroupPinsParams): Promise<number[]>;
 	setGroupPin(params: SetGroupPinParams): Promise<void>;
 	getGroupReceipts(params: GetGroupReceiptsParams): Promise<GroupReceiptState>;
 	postGroupReceipts(params: PostGroupReceiptsParams): Promise<void>;
 	getUserReadState(params: GetUserReadStateParams): Promise<UserReadStateWire>;
-	putUserReadState(params: PutUserReadStateParams): Promise<void>;
+	/**
+	 * Stores the encrypted read-state blob. Pass `expectedVersion` for
+	 * compare-and-set semantics; throws `ReadStateConflictError` (with the
+	 * current record) on mismatch. Returns the server-assigned version.
+	 */
+	putUserReadState(params: PutUserReadStateParams): Promise<PutUserReadStateResult>;
 	postPushToken(params: PostPushTokenParams): Promise<void>;
 	deletePushToken(params: DeletePushTokenParams): Promise<void>;
 	postPresence(params: PostPresenceParams): Promise<void>;

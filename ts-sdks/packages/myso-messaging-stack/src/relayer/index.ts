@@ -13,11 +13,18 @@ export type {
 	UpdateMessageParams,
 	DeleteMessageParams,
 	SubscribeParams,
+	SubscribeUserEventsParams,
 	RelayerReactionEntry,
 	RelayerReactionEvent,
 	RelayerSubscriptionEvent,
+	RelayerTypingEvent,
+	RelayerPresenceEvent,
+	RelayerUserEvent,
 	ListGroupReactionsParams,
 	PostGroupReactionParams,
+	SendTypingParams,
+	GetGroupPresenceParams,
+	GroupPresenceEntry,
 	ListGroupPinsParams,
 	SetGroupPinParams,
 	GroupReceiptState,
@@ -25,6 +32,10 @@ export type {
 	PostGroupReceiptsParams,
 	GetUserReadStateParams,
 	PutUserReadStateParams,
+	PutUserReadStateResult,
+	UnreadCountItem,
+	FetchUnreadCountsParams,
+	GroupUnreadCount,
 	UserReadStateWire,
 	PostPushTokenParams,
 	DeletePushTokenParams,
@@ -36,7 +47,7 @@ export type {
 	RelayerHTTPConfig,
 } from './types.js';
 
-export { PaymentRequiredError, RelayerTransportError } from './types.js';
+export { PaymentRequiredError, ReadStateConflictError, RelayerTransportError } from './types.js';
 
 export type { RelayerTransport } from './transport.js';
 

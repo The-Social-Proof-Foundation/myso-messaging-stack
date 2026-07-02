@@ -8,7 +8,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { Attachment } from '../../src/attachments/types.js';
 import { HTTPRelayerTransport } from '../../src/relayer/http-transport.js';
-import { PaymentRequiredError, RelayerTransportError } from '../../src/relayer/types.js';
+import {
+	PaymentRequiredError,
+	ReadStateConflictError,
+	RelayerTransportError,
+} from '../../src/relayer/types.js';
 
 const MOCK_RELAYER_URL = 'https://relayer.example.com';
 
@@ -799,7 +803,7 @@ describe('HTTPRelayerTransport', () => {
 			})) {
 				if (event.type === 'message.created') {
 					events.push(`message:${event.message.messageId}`);
-				} else {
+				} else if (event.type === 'reaction.updated') {
 					events.push(
 						`reaction:${event.reaction.chainSeq}:${event.reaction.emoji}:${event.reaction.count}:${event.reaction.reactors.join('|')}`,
 					);
@@ -935,6 +939,195 @@ describe('HTTPRelayerTransport', () => {
 			const body = JSON.parse(mockFetch.mock.calls[0][1]?.body as string);
 			expect(body.delivered_upto).toBe(12);
 			expect(body.read_upto).toBe(7);
+		});
+	});
+
+	describe('batch unread counts', () => {
+		it('POST /v1/users/unread-counts with signed body and snake_case mapping', async () => {
+			const transport = new HTTPRelayerTransport({
+				relayerUrl: MOCK_RELAYER_URL,
+				apiPrefix: '/v1',
+				fetch: mockFetch,
+			});
+			mockFetch.mockResolvedValueOnce(
+				new Response(
+					JSON.stringify({
+						items: [{ group_id: '0xa', latest_order: 12, unread_count: 4 }],
+					}),
+					{ status: 200 },
+				),
+			);
+
+			const rows = await transport.fetchUnreadCounts({
+				signer: defaultKeypair,
+				items: [
+					{ groupId: '0xa', afterOrder: 8 },
+					{ groupId: '0xb', afterOrder: 0 },
+				],
+			});
+
+			expect(rows).toEqual([{ groupId: '0xa', latestOrder: 12, unreadCount: 4 }]);
+
+			const [url, init] = mockFetch.mock.calls[0];
+			expect(url).toBe(`${MOCK_RELAYER_URL}/v1/users/unread-counts`);
+			expect(init?.method).toBe('POST');
+			const body = JSON.parse(init?.body as string);
+			expect(body.items).toEqual([
+				{ group_id: '0xa', after_order: 8 },
+				{ group_id: '0xb', after_order: 0 },
+			]);
+			expect(body.sender_address).toBe(defaultKeypair.toMySoAddress());
+		});
+	});
+
+	describe('read-state CAS', () => {
+		it('PUT sends expected_version and returns the server-assigned version', async () => {
+			const transport = new HTTPRelayerTransport({
+				relayerUrl: MOCK_RELAYER_URL,
+				apiPrefix: '/v1',
+				fetch: mockFetch,
+			});
+			mockFetch.mockResolvedValueOnce(
+				new Response(JSON.stringify({ ok: true, blob_version: 5 }), { status: 200 }),
+			);
+
+			const result = await transport.putUserReadState({
+				signer: defaultKeypair,
+				encryptedBlob: new Uint8Array([1, 2, 3]),
+				blobVersion: 123,
+				expectedVersion: 4,
+			});
+
+			expect(result.blobVersion).toBe(5);
+			const body = JSON.parse(mockFetch.mock.calls[0][1]?.body as string);
+			expect(body.expected_version).toBe(4);
+			expect(body.encrypted_blob).toBe('010203');
+		});
+
+		it('maps 409 READ_STATE_CONFLICT to ReadStateConflictError with the current blob', async () => {
+			const transport = new HTTPRelayerTransport({
+				relayerUrl: MOCK_RELAYER_URL,
+				apiPrefix: '/v1',
+				fetch: mockFetch,
+			});
+			mockFetch.mockResolvedValueOnce(
+				new Response(
+					JSON.stringify({
+						error: 'Read state was modified by another client',
+						code: 'READ_STATE_CONFLICT',
+						current: {
+							encrypted_blob: 'aabb',
+							blob_version: 7,
+							updated_at: '2026-01-01T00:00:00Z',
+						},
+					}),
+					{ status: 409 },
+				),
+			);
+
+			const error = await transport
+				.putUserReadState({
+					signer: defaultKeypair,
+					encryptedBlob: new Uint8Array([1]),
+					blobVersion: 1,
+					expectedVersion: 6,
+				})
+				.catch((e) => e);
+
+			expect(error).toBeInstanceOf(ReadStateConflictError);
+			expect(error.current.blobVersion).toBe(7);
+			expect(error.current.encryptedBlob).toEqual(new Uint8Array([0xaa, 0xbb]));
+		});
+	});
+
+	describe('typing and presence', () => {
+		it('POST /v1/groups/:id/typing with the typing flag', async () => {
+			const transport = new HTTPRelayerTransport({
+				relayerUrl: MOCK_RELAYER_URL,
+				apiPrefix: '/v1',
+				fetch: mockFetch,
+			});
+			mockFetch.mockResolvedValueOnce(
+				new Response(JSON.stringify({ ok: true, broadcast: true }), { status: 200 }),
+			);
+
+			await transport.sendTyping({
+				signer: defaultKeypair,
+				groupId: '0x' + 'ab'.repeat(32),
+				typing: true,
+			});
+
+			const [url, init] = mockFetch.mock.calls[0];
+			expect(url).toBe(`${MOCK_RELAYER_URL}/v1/groups/0x${'ab'.repeat(32)}/typing`);
+			const body = JSON.parse(init?.body as string);
+			expect(body.typing).toBe(true);
+			expect(body.group_id).toBe('0x' + 'ab'.repeat(32));
+			expect(body.sender_address).toBe(defaultKeypair.toMySoAddress());
+			expect(typeof body.timestamp).toBe('number');
+		});
+
+		it('GET /v1/groups/:id/presence maps snake_case entries', async () => {
+			const transport = new HTTPRelayerTransport({
+				relayerUrl: MOCK_RELAYER_URL,
+				apiPrefix: '/v1',
+				fetch: mockFetch,
+			});
+			mockFetch.mockResolvedValueOnce(
+				new Response(
+					JSON.stringify([
+						{ member: '0xa', last_seen: '2026-01-01T00:00:00Z', online: true },
+						{ member: '0xb', online: false },
+					]),
+					{ status: 200 },
+				),
+			);
+
+			const rows = await transport.getGroupPresence({
+				signer: defaultKeypair,
+				groupId: '0x' + 'cd'.repeat(32),
+			});
+
+			expect(rows).toEqual([
+				{ member: '0xa', lastSeen: '2026-01-01T00:00:00Z', online: true },
+				{ member: '0xb', lastSeen: undefined, online: false },
+			]);
+		});
+	});
+
+	describe('subscribeUserEvents (polling fallback)', () => {
+		it('diffs batch unread counts into synthetic group.activity events', async () => {
+			const transport = new HTTPRelayerTransport({
+				relayerUrl: MOCK_RELAYER_URL,
+				apiPrefix: '/v1',
+				pollingIntervalMs: 1,
+				fetch: mockFetch,
+			});
+			const controller = new AbortController();
+
+			let poll = 0;
+			mockFetch.mockImplementation(async () => {
+				poll += 1;
+				// Poll 1: baseline. Poll 2: group 0xa advances.
+				const latest = poll === 1 ? 5 : 9;
+				return new Response(
+					JSON.stringify({
+						items: [{ group_id: '0xa', latest_order: latest, unread_count: latest }],
+					}),
+					{ status: 200 },
+				);
+			});
+
+			const events = [];
+			for await (const event of transport.subscribeUserEvents({
+				signer: defaultKeypair,
+				groupIds: ['0xa'],
+				signal: controller.signal,
+			})) {
+				events.push(event);
+				controller.abort();
+			}
+
+			expect(events).toEqual([{ type: 'group.activity', groupId: '0xa', latestOrder: 9 }]);
 		});
 	});
 });

@@ -1,10 +1,11 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef, useMemo } from 'react';
 import { Sidebar } from './Sidebar';
 import { ChatArea } from './ChatArea';
 import { CreateGroupModal } from './CreateGroupModal';
 import { useGroupDiscovery } from '../hooks/useGroupDiscovery';
 import { usePaidDmRequests } from '../hooks/usePaidDmRequests';
-import { useUnreadCounts } from '../hooks/useUnreadCounts';
+import { useGroupActivityOrder } from '../hooks/useGroupActivityOrder';
+import { useUserFeed } from '../hooks/useUserFeed';
 import { useAuthenticatedAddress, useMySocialAuth } from '../contexts/MySocialAuthContext';
 import { AgentConversationsPanel } from './AgentConversationsPanel';
 import { PaidMessagingSettings } from './PaidMessagingSettings';
@@ -27,13 +28,59 @@ export function AuthenticatedApp({
     groups,
     loading: discoveryLoading,
     refresh: refreshGroups,
+    handleDiscovered,
+    handleHidden,
   } = useGroupDiscovery(address);
 
-  const unreadCounts = useUnreadCounts(groups);
-  const paidDmGroupIds = usePaidDmRequests(groups, unreadCounts);
+  const activity = useGroupActivityOrder(groups);
+  const paidDmGroupIds = usePaidDmRequests(groups, activity.counts);
+
+  const sortedGroups = useMemo(
+    () =>
+      [...groups].sort((a, b) => {
+        const ao = activity.latestOrders[a.groupId] ?? 0;
+        const bo = activity.latestOrders[b.groupId] ?? 0;
+        if (bo !== ao) return bo - ao;
+        return (b.createdAt ?? 0) - (a.createdAt ?? 0);
+      }),
+    [groups, activity.latestOrders],
+  );
 
   const [selectedUuid, setSelectedUuid] = useState<string | null>(null);
   const [showCreateModal, setShowCreateModal] = useState(false);
+
+  const selectedGroup =
+    groups.find(
+      (g) => g.uuid === selectedUuid || g.groupId === selectedUuid,
+    ) ?? null;
+
+  // Stable view of the active conversation for user-feed handlers.
+  const selectedGroupIdRef = useRef<string | null>(null);
+  selectedGroupIdRef.current = selectedGroup?.groupId ?? null;
+
+  // One user-feed socket per wallet drives sidebar badges, cross-device
+  // read-state sync, and group discovery. Polling remains as reconciliation.
+  useUserFeed(groups, {
+    onGroupActivity: (groupId, latestOrder) => {
+      activity.recordActivity(groupId, latestOrder);
+      if (groupId !== selectedGroupIdRef.current) {
+        activity.bump(groupId);
+      }
+    },
+    onReadStateUpdated: () => {
+      activity.refresh();
+    },
+    onGroupDiscovered: (groupId) => {
+      handleDiscovered(groupId);
+      activity.refresh();
+    },
+    onGroupHidden: (groupId) => {
+      handleHidden(groupId);
+      if (selectedGroupIdRef.current === groupId) {
+        setSelectedUuid(null);
+      }
+    },
+  });
 
   const handleGroupCreated = useCallback(
     (uuid: string) => {
@@ -48,11 +95,6 @@ export function AuthenticatedApp({
     refreshGroups();
   }, [refreshGroups]);
 
-  const selectedGroup =
-    groups.find(
-      (g) => g.uuid === selectedUuid || g.groupId === selectedUuid,
-    ) ?? null;
-
   return (
     <>
       {isUsingDevMessengerSigner && (
@@ -64,9 +106,9 @@ export function AuthenticatedApp({
       )}
       <div className="flex flex-1 overflow-hidden">
         <Sidebar
-          groups={groups}
+          groups={sortedGroups}
           selectedUuid={selectedUuid}
-          unreadCounts={unreadCounts}
+          unreadCounts={activity.counts}
           paidDmGroupIds={paidDmGroupIds}
           onSelectGroup={setSelectedUuid}
           onCreateGroup={() => setShowCreateModal(true)}
@@ -87,6 +129,12 @@ export function AuthenticatedApp({
         <ChatArea
           selectedGroup={selectedGroup}
           onLeaveGroup={handleLeaveGroup}
+          onReadStateChanged={activity.markRead}
+          onGroupActivity={
+            selectedGroup
+              ? (order) => activity.recordActivity(selectedGroup.groupId, order)
+              : undefined
+          }
           devAgentPanel={
             keypair && selectedGroup ? (
               <AgentDevSendPanel

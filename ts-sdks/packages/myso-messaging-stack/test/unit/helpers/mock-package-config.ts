@@ -7,6 +7,7 @@ export const MOCK_VERSION_ID = '0x' + '11'.repeat(32);
 export const MOCK_BLOCK_LIST_ID = '0x' + '22'.repeat(32);
 export const MOCK_SOCIAL_GRAPH_ID = '0x' + '33'.repeat(32);
 export const MOCK_MEMORY_REGISTRY_ID = '0x' + '44'.repeat(32);
+export const MOCK_ECOSYSTEM_TREASURY_ID = '0x' + '55'.repeat(32);
 
 export const MOCK_PACKAGE_CONFIG = {
 	originalPackageId: MOCK_PACKAGE_ID,
@@ -16,4 +17,5 @@ export const MOCK_PACKAGE_CONFIG = {
 	blockListRegistryId: MOCK_BLOCK_LIST_ID,
 	socialGraphId: MOCK_SOCIAL_GRAPH_ID,
 	memoryRegistryId: MOCK_MEMORY_REGISTRY_ID,
+	ecosystemTreasuryId: MOCK_ECOSYSTEM_TREASURY_ID,
 };

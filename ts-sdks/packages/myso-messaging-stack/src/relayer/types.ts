@@ -135,10 +135,70 @@ export interface RelayerReactionEvent {
 	reactors: string[];
 }
 
+/** Ephemeral typing indicator on the group feed. */
+export interface RelayerTypingEvent {
+	groupId: string;
+	member: string;
+	/**
+	 * Unix seconds after which a `typing.start` should be discarded if no
+	 * `typing.stop` arrived — the TTL is the recovery mechanism.
+	 */
+	expiresAt?: number;
+}
+
+/** Wallet-scoped presence on the group feed (one online state per wallet). */
+export interface RelayerPresenceEvent {
+	groupId: string;
+	member: string;
+	online: boolean;
+}
+
 /** Union of realtime events yielded by `subscribe()`. */
 export type RelayerSubscriptionEvent =
 	| { type: 'message.created'; message: RelayerMessage }
-	| { type: 'reaction.updated'; reaction: RelayerReactionEvent };
+	| { type: 'reaction.updated'; reaction: RelayerReactionEvent }
+	| { type: 'typing.start'; typing: RelayerTypingEvent }
+	| { type: 'typing.stop'; typing: RelayerTypingEvent }
+	| { type: 'presence.updated'; presence: RelayerPresenceEvent };
+
+/**
+ * Wallet-scoped events from the user feed (`/v1/users/ws`). Metadata only —
+ * the WebSocket is a notification mechanism; REST stays the source of truth.
+ */
+export type RelayerUserEvent =
+	| {
+			/** A message landed in one of your groups. */
+			type: 'group.activity';
+			groupId: string;
+			latestOrder: number;
+	  }
+	| {
+			/** Your read-state blob changed (another device/tab). */
+			type: 'read_state.updated';
+			blobVersion: number;
+	  }
+	| {
+			/** A conversation appeared — re-fetch canonical group state over REST. */
+			type: 'group.discovered';
+			groupId: string;
+			reason: 'created' | 'invited' | 'joined';
+	  }
+	| {
+			/** A conversation should leave the sidebar. */
+			type: 'group.hidden';
+			groupId: string;
+	  };
+
+export interface SubscribeUserEventsParams {
+	signer: Signer;
+	signal?: AbortSignal;
+	/**
+	 * Group ids used by the HTTP polling fallback to synthesize
+	 * `group.activity` events by diffing batch unread counts. Ignored by the
+	 * WebSocket path (the relayer filters by membership server-side).
+	 */
+	groupIds?: string[];
+}
 
 export interface ListGroupReactionsParams {
 	signer: Signer;
@@ -200,7 +260,64 @@ export interface GetUserReadStateParams {
 export interface PutUserReadStateParams {
 	signer: Signer;
 	encryptedBlob: Uint8Array;
+	/**
+	 * Legacy client-proposed version — ignored by relayers that assign
+	 * versions server-side. Kept for backward compatibility.
+	 */
 	blobVersion: number;
+	/**
+	 * Compare-and-set: the write only succeeds when this matches the stored
+	 * version; on mismatch the transport throws {@link ReadStateConflictError}.
+	 * Omit for legacy last-writer-wins behavior.
+	 */
+	expectedVersion?: number;
+}
+
+/** Result of a successful read-state PUT (server-assigned version). */
+export interface PutUserReadStateResult {
+	/** Monotonic server-assigned version of the stored blob. */
+	blobVersion: number;
+}
+
+/** One request item for the batch unread-counts endpoint. */
+export interface UnreadCountItem {
+	groupId: string;
+	/** The client's read watermark (relayer `order`, exclusive). */
+	afterOrder: number;
+}
+
+export interface FetchUnreadCountsParams {
+	signer: Signer;
+	items: UnreadCountItem[];
+}
+
+/** Per-group activity from `POST /v1/users/unread-counts`. */
+export interface GroupUnreadCount {
+	groupId: string;
+	/** Highest assigned order in the group (includes soft-deleted rows). */
+	latestOrder: number;
+	/** Exact count of non-deleted messages after the watermark. */
+	unreadCount: number;
+}
+
+export interface SendTypingParams {
+	signer: Signer;
+	groupId: string;
+	/** `true` broadcasts `typing.start`; `false` broadcasts `typing.stop`. */
+	typing: boolean;
+}
+
+export interface GetGroupPresenceParams {
+	signer: Signer;
+	groupId: string;
+}
+
+/** One member row from `GET /v1/groups/:group_id/presence`. */
+export interface GroupPresenceEntry {
+	member: string;
+	/** RFC3339 last-seen timestamp, when known. */
+	lastSeen?: string;
+	online: boolean;
 }
 
 export interface PostPushTokenParams {
@@ -296,12 +413,31 @@ export interface DmGateResult {
 export class RelayerTransportError extends Error {
 	readonly status: number;
 	readonly code?: string;
+	/** Parsed JSON error body, when the response carried one. */
+	readonly body?: unknown;
 
-	constructor(message: string, status: number, code?: string) {
+	constructor(message: string, status: number, code?: string, body?: unknown) {
 		super(message);
 		this.name = 'RelayerTransportError';
 		this.status = status;
 		this.code = code;
+		this.body = body;
+	}
+}
+
+/**
+ * The read-state blob was modified by another client between your GET and PUT
+ * (`409 READ_STATE_CONFLICT`). Carries the server's current record so callers
+ * can merge and retry without another GET.
+ */
+export class ReadStateConflictError extends RelayerTransportError {
+	/** The record currently stored on the relayer. */
+	readonly current: UserReadStateWire;
+
+	constructor(message: string, current: UserReadStateWire) {
+		super(message, 409, 'READ_STATE_CONFLICT');
+		this.name = 'ReadStateConflictError';
+		this.current = current;
 	}
 }
 

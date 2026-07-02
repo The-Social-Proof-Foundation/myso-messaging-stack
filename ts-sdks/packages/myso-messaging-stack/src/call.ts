@@ -16,6 +16,7 @@ import type {
 	ClearGroupHandleCallOptions,
 	CreateGroupCallOptions,
 	CreateAgentGroupCallOptions,
+	GroupAndMessageLogArgs,
 	GroupAndMessageLogRef,
 	InsertGroupDataCallOptions,
 	LeaveCallOptions,
@@ -191,6 +192,41 @@ export class MySoMessagingStackCall {
 				messaging.createAndShareWalletGroup({
 					package: this.#packageConfig.latestPackageId,
 					arguments: commonArgs,
+				}),
+			);
+		};
+	}
+
+	/**
+	 * Creates a messaging group on behalf of a sub-agent without sharing.
+	 * Returns a `(PermissionedGroup<Messaging>, EncryptionHistory, MessageLog)`
+	 * tuple result; compose with `shareGroup` after any same-transaction uses
+	 * (e.g. `sendAgentPaidMessageDigest` borrowing the created values).
+	 */
+	createAgentGroup(options: CreateAgentGroupCallOptions) {
+		return async (tx: Transaction) => {
+			const { uuid, encryptedDek } = await this.#encryption.generateGroupDEK(options?.uuid);
+			const initialMembers = this.#buildAddressVecSet(tx, options?.initialMembers ?? []);
+			const groupManagerId = this.#derive.groupManagerId();
+			const groupLeaverId = this.#derive.groupLeaverId();
+
+			return tx.add(
+				messaging.createAgentGroup({
+					package: this.#packageConfig.latestPackageId,
+					arguments: {
+						version: this.#packageConfig.versionId,
+						namespace: this.#packageConfig.namespaceId,
+						groupManager: groupManagerId,
+						groupLeaver: groupLeaverId,
+						blockList: this.#packageConfig.blockListRegistryId,
+						platform: options.platformId,
+						creatorMemoryAccount: options.creatorMemoryAccountId,
+						crossPrincipalPeerAccount: options.crossPrincipalPeerMemoryAccountId,
+						name: options.name,
+						uuid,
+						initialEncryptedDek: Array.from(encryptedDek),
+						initialMembers,
+					},
 				}),
 			);
 		};
@@ -455,12 +491,28 @@ export class MySoMessagingStackCall {
 		return { groupId: resolved.groupId, messageLogId };
 	}
 
+	/**
+	 * Resolves a {@link GroupAndMessageLogArgs} to binding-ready arguments:
+	 * same-transaction results pass through as-is; id/uuid refs resolve to the
+	 * existing shared-object ids.
+	 */
+	#resolveGroupAndLogArgs(ref: GroupAndMessageLogArgs): {
+		group: string | TransactionArgument;
+		log: string | TransactionArgument;
+	} {
+		if ('group' in ref) {
+			return { group: ref.group, log: ref.messageLog };
+		}
+		const { groupId, messageLogId } = this.#resolveGroupAndLog(ref);
+		return { group: groupId, log: messageLogId };
+	}
+
 	#byteVec(v: Uint8Array | number[]): number[] {
 		return Array.from(v instanceof Uint8Array ? v : v);
 	}
 
 	sendPaidMessageDigest(
-		options: GroupAndMessageLogRef & {
+		options: GroupAndMessageLogArgs & {
 			recipient: string;
 			/** Coin object ID, or a `TransactionArgument` (e.g. a gas split). */
 			payment: string | TransactionArgument;
@@ -470,14 +522,14 @@ export class MySoMessagingStackCall {
 		},
 	) {
 		return (tx: Transaction) => {
-			const { groupId, messageLogId } = this.#resolveGroupAndLog(options);
+			const { group, log } = this.#resolveGroupAndLogArgs(options);
 			return tx.add(
 				messaging.sendPaidMessageDigest({
 					package: this.#packageConfig.latestPackageId,
 					arguments: {
 						version: this.#packageConfig.versionId,
-						group: groupId,
-						log: messageLogId,
+						group,
+						log,
 						paidRegistry: this.#derive.paidMessagingRegistryId(),
 						socialGraph: this.#packageConfig.socialGraphId,
 						blockList: this.#packageConfig.blockListRegistryId,
@@ -494,7 +546,7 @@ export class MySoMessagingStackCall {
 	}
 
 	sendAgentPaidMessageDigest(
-		options: GroupAndMessageLogRef & {
+		options: GroupAndMessageLogArgs & {
 			platformId: string;
 			memoryAccountId: string;
 			recipient: string;
@@ -506,14 +558,14 @@ export class MySoMessagingStackCall {
 		},
 	) {
 		return (tx: Transaction) => {
-			const { groupId, messageLogId } = this.#resolveGroupAndLog(options);
+			const { group, log } = this.#resolveGroupAndLogArgs(options);
 			return tx.add(
 				messaging.sendAgentPaidMessageDigest({
 					package: this.#packageConfig.latestPackageId,
 					arguments: {
 						version: this.#packageConfig.versionId,
-						group: groupId,
-						log: messageLogId,
+						group,
+						log,
 						paidRegistry: this.#derive.paidMessagingRegistryId(),
 						socialGraph: this.#packageConfig.socialGraphId,
 						blockList: this.#packageConfig.blockListRegistryId,
@@ -580,7 +632,6 @@ export class MySoMessagingStackCall {
 			dedupeKey: Uint8Array | number[];
 			nonce: number | bigint;
 			platformFeeRecipient: string;
-			ecosystemFeeRecipient: string;
 		},
 	) {
 		return (tx: Transaction) => {
@@ -598,7 +649,7 @@ export class MySoMessagingStackCall {
 						dedupeKey: this.#byteVec(options.dedupeKey),
 						nonce: options.nonce,
 						platformFeeRecipient: options.platformFeeRecipient,
-						ecosystemFeeRecipient: options.ecosystemFeeRecipient,
+						ecosystemTreasury: this.#packageConfig.ecosystemTreasuryId,
 					},
 				}),
 			);

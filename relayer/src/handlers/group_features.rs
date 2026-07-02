@@ -1,14 +1,16 @@
-//! `/v1/groups/...` endpoints: off-chain mirrors for reactions, pins, and receipts.
+//! `/v1/groups/...` endpoints: off-chain mirrors for reactions, pins, and
+//! receipts, plus ephemeral typing/presence (never persisted).
 
 use axum::extract::{Path, Query, State};
 use axum::Extension;
 use axum::Json;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+use tracing::warn;
 
 use crate::auth::AuthContext;
 use crate::handlers::messages::error::ApiError;
 use crate::models::{ReactionEntry, ReceiptStateResponse};
-use crate::services::realtime::ReactionUpdatedEvent;
+use crate::services::realtime::{ReactionUpdatedEvent, TypingEvent};
 use crate::state::AppState;
 
 #[derive(Debug, Deserialize)]
@@ -121,6 +123,99 @@ pub async fn list_reactions(
         .await
         .map_err(ApiError::from)?;
     Ok(Json(rows))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PostTypingBody {
+    /// `true` -> broadcast `typing.start`, `false` -> `typing.stop`.
+    pub typing: bool,
+}
+
+/// Ephemeral typing indicator — broadcast only, zero storage writes.
+///
+/// `typing.start` is rate-limited per (wallet, group); `typing.stop` always
+/// passes so a stop is never dropped. The event's TTL (`expires_at`) is the
+/// recovery mechanism when a stop never arrives.
+pub async fn post_typing(
+    State(state): State<AppState>,
+    Path(group_id): Path<String>,
+    Extension(auth): Extension<AuthContext>,
+    Json(body): Json<PostTypingBody>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    ensure_group(&auth, &group_id)?;
+
+    if !state.realtime_enabled {
+        return Ok(Json(serde_json::json!({ "ok": true, "broadcast": false })));
+    }
+
+    if body.typing && !state.typing_rate.allow_start(&auth.sender_address, &group_id) {
+        return Ok(Json(serde_json::json!({ "ok": true, "broadcast": false })));
+    }
+
+    let event = if body.typing {
+        TypingEvent::start(group_id.clone(), auth.sender_address.clone())
+    } else {
+        TypingEvent::stop(group_id.clone(), auth.sender_address.clone())
+    };
+
+    if state.inline_realtime_publish {
+        state.realtime_hub.publish_typing(&group_id, event);
+    } else {
+        // Postgres mode: one NOTIFY; every instance (including this one)
+        // delivers via its LISTEN worker.
+        match serde_json::to_string(&event) {
+            Ok(payload) => {
+                if let Err(err) = state.storage.notify_realtime_event(&payload).await {
+                    warn!("typing notify failed for group {}: {}", group_id, err);
+                }
+            }
+            Err(err) => warn!("typing event serialize failed: {}", err),
+        }
+    }
+
+    Ok(Json(serde_json::json!({ "ok": true, "broadcast": true })))
+}
+
+#[derive(Debug, Serialize)]
+pub struct PresenceEntry {
+    pub member: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_seen: Option<String>,
+    pub online: bool,
+}
+
+/// Seconds since last heartbeat within which a member counts as online.
+const PRESENCE_ONLINE_WINDOW_SECS: i64 = 60;
+
+/// Presence snapshot for initial render — storage-backed (shared heartbeat
+/// table), so it is correct across relayer instances. Live transitions arrive
+/// as `presence.updated` events on the group WebSocket.
+pub async fn get_group_presence(
+    State(state): State<AppState>,
+    Path(group_id): Path<String>,
+    Extension(auth): Extension<AuthContext>,
+) -> Result<Json<Vec<PresenceEntry>>, ApiError> {
+    ensure_group(&auth, &group_id)?;
+
+    let now = chrono::Utc::now();
+    let mut entries = Vec::new();
+    for member in state.membership_store.list_member_addresses(&group_id) {
+        let last_seen = state
+            .storage
+            .get_presence_last_seen(&member)
+            .await
+            .map_err(ApiError::from)?;
+        let online = last_seen
+            .map(|t| (now - t).num_seconds() < PRESENCE_ONLINE_WINDOW_SECS)
+            .unwrap_or(false);
+        entries.push(PresenceEntry {
+            member,
+            last_seen: last_seen.map(|t| t.to_rfc3339()),
+            online,
+        });
+    }
+
+    Ok(Json(entries))
 }
 
 pub async fn set_pin(

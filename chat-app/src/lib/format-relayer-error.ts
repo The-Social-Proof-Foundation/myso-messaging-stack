@@ -1,5 +1,6 @@
 import {
   PaymentRequiredError,
+  PAID_DM_MIN_REPLY_CHARS,
   RelayerTransportError,
 } from '@socialproof/myso-messaging-stack';
 
@@ -50,6 +51,23 @@ export function formatRelayerError(err: unknown): string {
   }
 
   return 'Request failed.';
+}
+
+export function formatPaidClaimError(err: unknown): string {
+  if (err instanceof Error) {
+    const msg = err.message;
+    if (msg.includes('EReplyTooShort') || msg.includes('reply too short')) {
+      return `Reply must be at least ${PAID_DM_MIN_REPLY_CHARS} characters to claim the escrow.`;
+    }
+    if (msg.includes('EPaymentClaimed') || msg.includes('already claimed')) {
+      return 'This escrow has already been claimed.';
+    }
+    if (msg.includes('EForbidden') || msg.includes('not permitted')) {
+      return 'You are not allowed to claim this escrow.';
+    }
+    return msg;
+  }
+  return 'Failed to claim paid-message escrow.';
 }
 
 export function formatSendError(

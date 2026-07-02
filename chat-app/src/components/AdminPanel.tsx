@@ -26,6 +26,8 @@ interface AdminPanelProps {
   onPermissionsChanged?: () => void;
   onGroupRenamed?: (newName: string) => void;
   onGroupArchived?: () => void;
+  /** Presence per member (snapshot + live events) for the online dots. */
+  onlineMembers?: Map<string, boolean>;
 }
 
 export function AdminPanel({
@@ -38,6 +40,7 @@ export function AdminPanel({
   onPermissionsChanged,
   onGroupRenamed,
   onGroupArchived,
+  onlineMembers,
 }: Readonly<AdminPanelProps>) {
   const { client, signer } = useRequiredMessagingClient();
 
@@ -331,6 +334,7 @@ export function AdminPanel({
           onRemoveMember={handleRemoveMember}
           onRemoveAndRotate={handleRemoveAndRotate}
           onTogglePermission={handleTogglePermission}
+          onlineMembers={onlineMembers}
         />
 
         {permissions.isAdmin && (

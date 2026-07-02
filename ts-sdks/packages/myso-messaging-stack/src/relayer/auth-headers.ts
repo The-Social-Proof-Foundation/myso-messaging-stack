@@ -97,3 +97,15 @@ export async function createWsAuthQuery(
 	}
 	return params.toString();
 }
+
+/** Query-string wallet auth for the user feed WebSocket (`/v1/users/ws`). */
+export async function createUserWsAuthQuery(signer: Signer): Promise<string> {
+	const headers = await createWalletHeaderAuth(signer);
+	const params = new URLSearchParams({
+		sender_address: headers['x-sender-address'],
+		timestamp: headers['x-timestamp'],
+		signature: headers['x-signature'],
+		public_key: headers['x-public-key'],
+	});
+	return params.toString();
+}

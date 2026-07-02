@@ -26,10 +26,14 @@ The relayer is an indexer — it only reflects what is on-chain. It never makes 
 - **Ownership enforcement** — only the original sender can edit or delete their message
 - **DM block enforcement** — optional `SOCIAL_SERVER_URL` + `BlockCheckService` returns `403` code `BLOCKED` for 1:1 DMs
 - **Paid-DM gate** — enforces on-chain paid messaging for 1:1 DMs: the first outbound message from a non-follower to a recipient with paid messaging enabled returns `402` code `PAYMENT_REQUIRED` (with `min_cost` and `recipient`) until the checkpoint indexer sees the sender's `message_log::PaidMessageSent` escrow. Replies are always free (mirrors on-chain `next_seq == 0` semantics): once the peer has paid the sender or has any stored message in the group, the gate never charges — replying is how the recipient claims the escrow. Follow/policy lookups hit the social server (TTL-cached, eagerly refreshed from `FollowEvent`/`UnfollowEvent`/`PaidMessagingPolicyUpdated` checkpoint events). Advisory pre-check: `GET /v1/messaging/dm-gate?recipient=0x…[&group_id=0x…]` (wallet auth) returns `{ allowed, reason, blocked, following, paid, first_outbound, peer_paid, peer_escrow_amount, min_cost, recipient }` — `peer_paid` + `first_outbound` drive "reply to claim" UX (amounts are MIST)
-- **Encrypted read-state** — opaque `GET/PUT /v1/users/read-state` per wallet (see `docs/myso-messaging-stack/ReadState.md`)
+- **Encrypted read-state** — opaque `GET/PUT /v1/users/read-state` per wallet with server-assigned versions and optional compare-and-set (`expected_version` → `409 READ_STATE_CONFLICT` with the current blob); see `docs/myso-messaging-stack/ReadState.md`
+- **Batch unread counts** — `POST /v1/users/unread-counts` returns exact per-group `latest_order` + `unread_count` (soft-deleted excluded) in one round trip
+- **User feed WebSocket** — `GET /v1/users/ws` (wallet auth): one socket per wallet for `group.activity`, `read_state.updated` (cross-device sync), and `group.discovered`/`group.hidden` (conversations appear/leave without refresh); metadata only, REST stays canonical
 - **Optional push** — `POST /v1/devices/push-tokens`, `POST /v1/devices/presence`, env-gated APNs delivery on new messages (see `docs/myso-messaging-stack/ClientSide-iOS.md`)
-- **WebSocket realtime** — `GET /v1/ws` pushes full encrypted `MessageResponse` JSON plus `reaction.updated` events; Postgres `LISTEN/NOTIFY` coordinates cross-instance delivery (metadata only on NOTIFY for messages)
+- **WebSocket realtime** — `GET /v1/ws` pushes full encrypted `MessageResponse` JSON plus `reaction.updated`, `typing.start`/`typing.stop`, and `presence.updated` events; Postgres `LISTEN/NOTIFY` coordinates cross-instance delivery (metadata only on NOTIFY for messages)
 - **Message reactions** — per-user emoji reactions via `GET/POST /v1/groups/:id/reactions` (canonical Unicode emoji strings, idempotent add/remove, live `reaction.updated` broadcast)
+- **Typing indicators** — ephemeral `POST /v1/groups/:id/typing` `{ typing: bool }` broadcasts start/stop (rate-limited, TTL as recovery); never persisted
+- **Wallet-scoped presence** — connection registry refcounts sockets per wallet; only online/offline transitions broadcast `presence.updated` to the wallet's groups (offline debounced); snapshot via `GET /v1/groups/:id/presence`
 
 **Deprecated:** plaintext `GET/POST /v1/groups/:id/receipts` — use encrypted read-state instead.
 
@@ -316,9 +320,50 @@ Per-user emoji reactions on messages, keyed by the message's relayer-assigned `o
 
 ---
 
-### `GET /v1/ws` (WebSocket)
+### `POST /v1/users/unread-counts`
 
-Live message + reaction subscription for group members. The relayer **never decrypts** message content — WebSocket frames carry the same encrypted wire JSON as `GET /messages`.
+Batch per-group activity for sidebar badges: exact unread counts + latest order in one wallet-authenticated round trip (no per-group message paging).
+
+**Signed body:** `{ "sender_address": "...", "timestamp": 1700000000, "items": [{ "group_id": "0x...", "after_order": 42 }] }` — max 100 items; `after_order` is the client's read watermark (exclusive).
+
+**Response (200):**
+```json
+{
+  "items": [
+    { "group_id": "0x...", "latest_order": 57, "unread_count": 15 }
+  ]
+}
+```
+
+- `unread_count` excludes soft-deleted messages; `latest_order` includes them (order assignment is monotonic).
+- Groups the wallet cannot read (`MessagingReader`) are silently omitted.
+
+---
+
+### `PUT /v1/users/read-state` versioning
+
+The server assigns `blob_version` (monotonic increment per write); client-proposed values are ignored. Send optional `expected_version` (from your last GET/PUT) for compare-and-set:
+
+- Match or omitted → `200 { "ok": true, "blob_version": 8 }`
+- Mismatch → `409` with `code: "READ_STATE_CONFLICT"` and `current: { encrypted_blob, blob_version, updated_at }` so the client merges and retries without another GET
+
+Successful writes broadcast `read_state.updated` on the user feed for cross-device sync.
+
+---
+
+### `POST /v1/groups/:group_id/typing` / `GET /v1/groups/:group_id/presence`
+
+Ephemeral state — broadcast only, zero database writes.
+
+**Typing:** signed body `{ "typing": true | false }` broadcasts `typing.start` (rate-limited per wallet+group, min 2s between starts; carries `expires_at` = now+5s as the recovery TTL) or `typing.stop` (never throttled) to the group WebSocket. Response: `{ "ok": true, "broadcast": bool }`.
+
+**Presence snapshot** (GET, `MessagingReader`): `[{ "member": "0x...", "last_seen": "RFC3339", "online": true }]` — online = heartbeat within 60s, storage-backed so it is correct across instances. Live transitions arrive as `presence.updated` events; presence is **wallet-scoped** (one online state per wallet, broadcast to its groups only on online/offline transitions, offline debounced ~10s).
+
+---
+
+### `GET /v1/ws` (WebSocket, per group)
+
+Live message + reaction + typing + presence subscription for group members. The relayer **never decrypts** message content — WebSocket frames carry the same encrypted wire JSON as `GET /messages`.
 
 **Auth:** Same canonical string as GET messages: `"timestamp:sender_address:group_id"`. Browsers cannot set custom headers on WebSocket upgrade, so pass auth as query parameters: `group_id`, `sender_address`, `timestamp`, `signature`, `public_key`. Optional `after_order` filters events server-side.
 
@@ -350,13 +395,40 @@ Live message + reaction subscription for group members. The relayer **never decr
 }
 ```
 
-`reaction.updated` carries **absolute state** (full count + reactor list), so duplicate delivery is harmless — clients apply it idempotently.
+```json
+{ "type": "typing.start", "group_id": "...", "member": "0xabc...", "expires_at": 1700000005 }
+{ "type": "typing.stop", "group_id": "...", "member": "0xabc..." }
+{ "type": "presence.updated", "group_id": "...", "member": "0xabc...", "online": true }
+```
 
-**Postgres cross-instance signal:** On `STORAGE_TYPE=postgres`, each message `INSERT` atomically emits `pg_notify('message_events', metadata_json)` where the payload contains only `message_id`, `group_id`, `order`, and `sender` — **not** ciphertext. Each relayer instance listens, loads the encrypted row from storage, and fans out the full wire frame to local WebSocket subscribers. Reaction changes NOTIFY on the same channel with the full (non-sensitive) `reaction.updated` payload, which is fanned out directly without a storage reload.
+`reaction.updated` carries **absolute state** (full count + reactor list), so duplicate delivery is harmless — clients apply it idempotently. Typing and presence are ephemeral and idempotent by the same design.
 
-**In-memory dev:** The create-message handler publishes directly to the in-process `RealtimeHub` (no NOTIFY).
+---
 
-The TypeScript SDK uses `HybridRelayerTransport` by default (WebSocket primary, HTTP polling fallback). Set `realtime: 'poll'` to force polling only.
+### `GET /v1/users/ws` (WebSocket, per wallet — the user feed)
+
+One socket per wallet for all user-scoped synchronization events: unread badges, cross-device read-state sync, and group discovery share this channel, so persistent connections don't grow with feature count. Frames are **metadata only** (never ciphertext, membership lists, or group contents) — the WebSocket is a notification mechanism; clients re-fetch canonical state over REST.
+
+**Auth:** wallet canonical string `"timestamp:sender_address"` as query parameters: `sender_address`, `timestamp`, `signature`, `public_key`. No group binding — events are filtered per connection.
+
+**Wire frames (server → client):**
+
+```json
+{ "type": "group.activity", "group_id": "0x...", "latest_order": 57 }
+{ "type": "read_state.updated", "wallet": "0x...", "blob_version": 8 }
+{ "type": "group.discovered", "group_id": "0x...", "reason": "invited" }
+{ "type": "group.hidden", "group_id": "0x..." }
+```
+
+- `group.activity` — a message was stored in one of your groups (delivered to connected members).
+- `read_state.updated` — your read-state blob changed on another device/tab (delivered only to your wallet).
+- `group.discovered` / `group.hidden` — a conversation appeared for you (`reason`: `created` | `invited` | `joined`) or should leave your sidebar. Published exclusively by the membership checkpoint indexer **after** membership persistence succeeds, so a follow-up REST fetch never races the underlying state. Delivered only to the affected wallet; the target wallet is stripped from the frame.
+
+**Postgres cross-instance signal:** On `STORAGE_TYPE=postgres`, each message `INSERT` atomically emits `pg_notify('message_events', metadata_json)` where the payload contains only `message_id`, `group_id`, `order`, and `sender` — **not** ciphertext. Each relayer instance listens, loads the encrypted row from storage, and fans out the full wire frame to local WebSocket subscribers. Reaction, read-state, typing, and presence changes NOTIFY on the same channel with their full (non-sensitive) payloads, fanned out directly without a storage reload. Discovery events need no NOTIFY — every instance runs its own checkpoint indexer and publishes locally.
+
+**In-memory dev:** Handlers publish directly to the in-process `RealtimeHub` (no NOTIFY).
+
+The TypeScript SDK uses `HybridRelayerTransport` by default (WebSocket primary, HTTP polling fallback — the user feed falls back to diffing batch unread counts). Set `realtime: 'poll'` to force polling only.
 
 ---
 

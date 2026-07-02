@@ -48,13 +48,14 @@ export {
 	type BlockGatingClientOptions,
 } from './block-gating.js';
 export {
+	MessagingSyncManager,
 	ReadStateManager,
 	encryptReadState,
 	decryptReadState,
 	createEmptyReadState,
 	mergeReadState,
 	type UserReadState,
-} from './read-state/index.js';
+} from './sync/index.js';
 export * from './types.js';
 export * from './encryption/index.js';
 export * from './relayer/index.js';
@@ -102,10 +103,16 @@ export {
 	createPaidMessagingClient,
 	createPaidMessagingClientWithGating,
 	PaidMessagingClient,
+	PAID_DM_MIN_REPLY_CHARS,
+	PAID_MSG_NO_PLATFORM_FEE_RECIPIENT,
 	type PaidMessagingClientOptions,
 	type OpenPaidDmOptions,
 	type OpenAgentPaidDmOptions,
 	type PayDmEscrowOptions,
+	type BuildOpenPaidDmOptions,
+	type BuildOpenPaidDmResult,
+	type BuildPayDmEscrowOptions,
+	type BuildReplyAndClaimSettledOptions,
 	type ReplyAndClaimSettledOptions,
 	type RefundPaidEscrowOptions,
 	type SetPaidPolicyOptions,

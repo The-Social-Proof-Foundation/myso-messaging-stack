@@ -1,9 +1,12 @@
-//! Integration tests for Postgres storage (reactions, pins, nonce dedup).
+//! Integration tests for Postgres storage (reactions, pins, nonce dedup,
+//! group activity, read-state CAS).
 //! Run with: DATABASE_URL=postgres://... cargo test --test storage_postgres_test -- --ignored
 
 use chrono::Utc;
 use messaging_relayer::models::{Message, MessageAttribution, PaidEscrowRecord, SyncStatus};
-use messaging_relayer::storage::{create_postgres_storage, StorageAdapter, StorageError};
+use messaging_relayer::storage::{
+    create_postgres_storage, PutUserReadStateResult, StorageAdapter, StorageError,
+};
 use uuid::Uuid;
 
 fn sample_message(group_id: &str, nonce: Vec<u8>) -> Message {
@@ -199,4 +202,86 @@ async fn postgres_paid_escrow_upsert_and_gate_lookups() {
         .has_message_from(&group_id, recipient)
         .await
         .unwrap());
+}
+
+#[tokio::test]
+#[ignore = "requires DATABASE_URL pointing at a test Postgres database"]
+async fn postgres_group_activity_counts_exclude_deleted() {
+    let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL required");
+    let group_id = format!("test-group-pg-activity-{}", Uuid::new_v4());
+
+    let storage = create_postgres_storage(&database_url).await.unwrap();
+
+    let mut ids = Vec::new();
+    for i in 0..3u8 {
+        let mut nonce = vec![0u8; 15];
+        nonce[0] = i;
+        nonce[1] = rand::random::<u8>();
+        nonce[2] = rand::random::<u8>();
+        let created = storage
+            .create_message(sample_message(&group_id, nonce))
+            .await
+            .unwrap();
+        ids.push(created.id);
+    }
+
+    let all = storage.get_group_activity(&group_id, 0).await.unwrap();
+    assert_eq!(all.latest_order, 3);
+    assert_eq!(all.unread_count, 3);
+
+    // after_order is exclusive.
+    let after = storage.get_group_activity(&group_id, 2).await.unwrap();
+    assert_eq!(after.unread_count, 1);
+
+    // Soft-deleted rows keep their order slot but never count as unread.
+    storage.delete_message(ids[2]).await.unwrap();
+    let after_delete = storage.get_group_activity(&group_id, 0).await.unwrap();
+    assert_eq!(after_delete.latest_order, 3);
+    assert_eq!(after_delete.unread_count, 2);
+}
+
+#[tokio::test]
+#[ignore = "requires DATABASE_URL pointing at a test Postgres database"]
+async fn postgres_read_state_cas_versions_and_conflicts() {
+    let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL required");
+    let wallet = format!("0xtest-read-state-{}", Uuid::new_v4());
+
+    let storage = create_postgres_storage(&database_url).await.unwrap();
+
+    // First write: server assigns version 1.
+    let first = storage
+        .put_user_read_state(&wallet, vec![1], None)
+        .await
+        .unwrap();
+    assert!(matches!(
+        first,
+        PutUserReadStateResult::Stored { blob_version: 1 }
+    ));
+
+    // CAS success bumps to 2.
+    let cas_ok = storage
+        .put_user_read_state(&wallet, vec![2], Some(1))
+        .await
+        .unwrap();
+    assert!(matches!(
+        cas_ok,
+        PutUserReadStateResult::Stored { blob_version: 2 }
+    ));
+
+    // Stale expectation conflicts and returns the current record unchanged.
+    let conflict = storage
+        .put_user_read_state(&wallet, vec![9], Some(1))
+        .await
+        .unwrap();
+    let PutUserReadStateResult::Conflict { current } = conflict else {
+        panic!("expected conflict");
+    };
+    assert_eq!(current.blob_version, 2);
+    assert_eq!(current.encrypted_blob, vec![2]);
+
+    // Survives reconnect with the CAS-protected value.
+    let storage2 = create_postgres_storage(&database_url).await.unwrap();
+    let stored = storage2.get_user_read_state(&wallet).await.unwrap().unwrap();
+    assert_eq!(stored.blob_version, 2);
+    assert_eq!(stored.encrypted_blob, vec![2]);
 }
