@@ -211,6 +211,240 @@ impl AiCreditApprovalEvent {
     }
 }
 
+/// `OrgMemoryPermissionGranted` / `OrgMemoryPermissionRevoked` from
+/// `social_contracts::memory`. Consumed by chain sync to close matching
+/// `memory_access_request` workflow items after an admin PTB.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OrgMemoryPermissionChainEvent {
+    Granted {
+        organization_id: String,
+        account_id: String,
+        group_id: String,
+        member: String,
+        permissions_mask: u64,
+        granted_by: String,
+        timestamp_ms: u64,
+    },
+    Revoked {
+        organization_id: String,
+        account_id: String,
+        group_id: String,
+        member: String,
+        permissions_mask: u64,
+        revoked_by: String,
+        timestamp_ms: u64,
+    },
+}
+
+impl OrgMemoryPermissionChainEvent {
+    pub fn organization_id(&self) -> &str {
+        match self {
+            Self::Granted { organization_id, .. } | Self::Revoked { organization_id, .. } => {
+                organization_id
+            }
+        }
+    }
+
+    pub fn member(&self) -> &str {
+        match self {
+            Self::Granted { member, .. } | Self::Revoked { member, .. } => member,
+        }
+    }
+
+    pub fn permissions_mask(&self) -> u64 {
+        match self {
+            Self::Granted { permissions_mask, .. } | Self::Revoked { permissions_mask, .. } => {
+                *permissions_mask
+            }
+        }
+    }
+
+    pub fn actor_address(&self) -> &str {
+        match self {
+            Self::Granted { granted_by, .. } => granted_by,
+            Self::Revoked { revoked_by, .. } => revoked_by,
+        }
+    }
+
+    pub fn workflow_payload_patch(&self) -> serde_json::Value {
+        match self {
+            Self::Granted {
+                organization_id,
+                account_id,
+                group_id,
+                member,
+                permissions_mask,
+                granted_by,
+                timestamp_ms,
+            } => serde_json::json!({
+                "chain_event": "org_memory_permission_granted",
+                "organization_id": organization_id,
+                "account_id": account_id,
+                "group_id": group_id,
+                "member": member,
+                "permissions_mask": permissions_mask,
+                "granted_mask": permissions_mask,
+                "granted_by": granted_by,
+                "timestamp_ms": timestamp_ms,
+            }),
+            Self::Revoked {
+                organization_id,
+                account_id,
+                group_id,
+                member,
+                permissions_mask,
+                revoked_by,
+                timestamp_ms,
+            } => serde_json::json!({
+                "chain_event": "org_memory_permission_revoked",
+                "organization_id": organization_id,
+                "account_id": account_id,
+                "group_id": group_id,
+                "member": member,
+                "permissions_mask": permissions_mask,
+                "revoked_by": revoked_by,
+                "timestamp_ms": timestamp_ms,
+            }),
+        }
+    }
+}
+
+/// Org invitation lifecycle from `social_contracts::memory` (social package).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OrgInvitationChainEvent {
+    Created {
+        organization_id: String,
+        account_id: String,
+        invitee: String,
+        role_name: Option<String>,
+        permissions_mask: u64,
+        invited_by: String,
+        expires_at_ms: Option<u64>,
+        timestamp_ms: u64,
+    },
+    Accepted {
+        organization_id: String,
+        account_id: String,
+        group_id: String,
+        invitee: String,
+        role_name: Option<String>,
+        permissions_mask: u64,
+        granted_mask: u64,
+        accepted_by: String,
+        timestamp_ms: u64,
+    },
+    Declined {
+        organization_id: String,
+        account_id: String,
+        invitee: String,
+        declined_by: String,
+        timestamp_ms: u64,
+    },
+}
+
+impl OrgInvitationChainEvent {
+    pub fn organization_id(&self) -> &str {
+        match self {
+            Self::Created { organization_id, .. }
+            | Self::Accepted { organization_id, .. }
+            | Self::Declined { organization_id, .. } => organization_id,
+        }
+    }
+
+    pub fn account_id(&self) -> &str {
+        match self {
+            Self::Created { account_id, .. }
+            | Self::Accepted { account_id, .. }
+            | Self::Declined { account_id, .. } => account_id,
+        }
+    }
+
+    pub fn invitee(&self) -> &str {
+        match self {
+            Self::Created { invitee, .. }
+            | Self::Accepted { invitee, .. }
+            | Self::Declined { invitee, .. } => invitee,
+        }
+    }
+
+    pub fn actor_address(&self) -> &str {
+        match self {
+            Self::Created { invited_by, .. } => invited_by,
+            Self::Accepted { accepted_by, .. } => accepted_by,
+            Self::Declined { declined_by, .. } => declined_by,
+        }
+    }
+
+    pub fn timestamp_ms(&self) -> u64 {
+        match self {
+            Self::Created { timestamp_ms, .. }
+            | Self::Accepted { timestamp_ms, .. }
+            | Self::Declined { timestamp_ms, .. } => *timestamp_ms,
+        }
+    }
+
+    pub fn workflow_payload_patch(&self) -> serde_json::Value {
+        match self {
+            Self::Created {
+                organization_id,
+                account_id,
+                invitee,
+                role_name,
+                permissions_mask,
+                invited_by,
+                expires_at_ms,
+                timestamp_ms,
+            } => serde_json::json!({
+                "chain_event": "org_invitation_created",
+                "organization_id": organization_id,
+                "account_id": account_id,
+                "invitee": invitee,
+                "role_name": role_name,
+                "permissions_mask": permissions_mask,
+                "invited_by": invited_by,
+                "expires_at_ms": expires_at_ms,
+                "timestamp_ms": timestamp_ms,
+            }),
+            Self::Accepted {
+                organization_id,
+                account_id,
+                group_id,
+                invitee,
+                role_name,
+                permissions_mask,
+                granted_mask,
+                accepted_by,
+                timestamp_ms,
+            } => serde_json::json!({
+                "chain_event": "org_invitation_accepted",
+                "organization_id": organization_id,
+                "account_id": account_id,
+                "group_id": group_id,
+                "invitee": invitee,
+                "role_name": role_name,
+                "permissions_mask": permissions_mask,
+                "granted_mask": granted_mask,
+                "accepted_by": accepted_by,
+                "timestamp_ms": timestamp_ms,
+            }),
+            Self::Declined {
+                organization_id,
+                account_id,
+                invitee,
+                declined_by,
+                timestamp_ms,
+            } => serde_json::json!({
+                "chain_event": "org_invitation_declined",
+                "organization_id": organization_id,
+                "account_id": account_id,
+                "invitee": invitee,
+                "declined_by": declined_by,
+                "timestamp_ms": timestamp_ms,
+            }),
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 struct MemberEventBcs {
     group_id: [u8; 32],
@@ -306,6 +540,52 @@ struct BcsAiCreditSpendApprovalConsumed {
     approval_nonce: u64,
     amount_mist: u64,
     approved_by: [u8; 32],
+    timestamp_ms: u64,
+}
+
+#[derive(Debug, Deserialize)]
+struct BcsOrgMemoryPermissionEvent {
+    organization_id: BcsMoveObjectId,
+    account_id: BcsMoveObjectId,
+    group_id: BcsMoveObjectId,
+    member: [u8; 32],
+    permissions_mask: u64,
+    /// `granted_by` on Granted, `revoked_by` on Revoked — same layout.
+    actor: [u8; 32],
+    timestamp_ms: u64,
+}
+
+#[derive(Debug, Deserialize)]
+struct BcsOrgInvitationCreated {
+    organization_id: BcsMoveObjectId,
+    account_id: BcsMoveObjectId,
+    invitee: [u8; 32],
+    role_name: Option<String>,
+    permissions_mask: u64,
+    invited_by: [u8; 32],
+    expires_at_ms: Option<u64>,
+    timestamp_ms: u64,
+}
+
+#[derive(Debug, Deserialize)]
+struct BcsOrgInvitationAccepted {
+    organization_id: BcsMoveObjectId,
+    account_id: BcsMoveObjectId,
+    group_id: BcsMoveObjectId,
+    invitee: [u8; 32],
+    role_name: Option<String>,
+    permissions_mask: u64,
+    granted_mask: u64,
+    accepted_by: [u8; 32],
+    timestamp_ms: u64,
+}
+
+#[derive(Debug, Deserialize)]
+struct BcsOrgInvitationDeclined {
+    organization_id: BcsMoveObjectId,
+    account_id: BcsMoveObjectId,
+    invitee: [u8; 32],
+    declined_by: [u8; 32],
     timestamp_ms: u64,
 }
 
@@ -581,6 +861,107 @@ pub fn parse_ai_credit_approval_event(
             approval_nonce: event_data.approval_nonce,
             amount_mist: event_data.amount_mist,
             approved_by: format_address(event_data.approved_by),
+            timestamp_ms: event_data.timestamp_ms,
+        });
+    }
+    None
+}
+
+/// Parses org memory permission grant/revoke events from the social package.
+pub fn parse_org_memory_permission_chain_event(
+    event: &Event,
+    social_package_id: &str,
+) -> Option<OrgMemoryPermissionChainEvent> {
+    let event_type = event.event_type.as_ref()?;
+    if !is_event_from_package(event_type, social_package_id) {
+        return None;
+    }
+    let contents = event.contents.as_ref()?;
+    let bcs_bytes = contents.value.as_ref()?;
+
+    if event_type.contains("::memory::OrgMemoryPermissionGranted") {
+        let event_data: BcsOrgMemoryPermissionEvent = bcs::from_bytes(bcs_bytes)
+            .map_err(|e| warn!("Failed to parse OrgMemoryPermissionGranted BCS: {}", e))
+            .ok()?;
+        return Some(OrgMemoryPermissionChainEvent::Granted {
+            organization_id: format_object_id(&event_data.organization_id),
+            account_id: format_object_id(&event_data.account_id),
+            group_id: format_object_id(&event_data.group_id),
+            member: format_address(event_data.member),
+            permissions_mask: event_data.permissions_mask,
+            granted_by: format_address(event_data.actor),
+            timestamp_ms: event_data.timestamp_ms,
+        });
+    }
+    if event_type.contains("::memory::OrgMemoryPermissionRevoked") {
+        let event_data: BcsOrgMemoryPermissionEvent = bcs::from_bytes(bcs_bytes)
+            .map_err(|e| warn!("Failed to parse OrgMemoryPermissionRevoked BCS: {}", e))
+            .ok()?;
+        return Some(OrgMemoryPermissionChainEvent::Revoked {
+            organization_id: format_object_id(&event_data.organization_id),
+            account_id: format_object_id(&event_data.account_id),
+            group_id: format_object_id(&event_data.group_id),
+            member: format_address(event_data.member),
+            permissions_mask: event_data.permissions_mask,
+            revoked_by: format_address(event_data.actor),
+            timestamp_ms: event_data.timestamp_ms,
+        });
+    }
+    None
+}
+
+/// Parses org invitation create/accept/decline events from the social package.
+pub fn parse_org_invitation_chain_event(
+    event: &Event,
+    social_package_id: &str,
+) -> Option<OrgInvitationChainEvent> {
+    let event_type = event.event_type.as_ref()?;
+    if !is_event_from_package(event_type, social_package_id) {
+        return None;
+    }
+    let contents = event.contents.as_ref()?;
+    let bcs_bytes = contents.value.as_ref()?;
+
+    if event_type.contains("::memory::OrgInvitationCreated") {
+        let event_data: BcsOrgInvitationCreated = bcs::from_bytes(bcs_bytes)
+            .map_err(|e| warn!("Failed to parse OrgInvitationCreated BCS: {}", e))
+            .ok()?;
+        return Some(OrgInvitationChainEvent::Created {
+            organization_id: format_object_id(&event_data.organization_id),
+            account_id: format_object_id(&event_data.account_id),
+            invitee: format_address(event_data.invitee),
+            role_name: event_data.role_name,
+            permissions_mask: event_data.permissions_mask,
+            invited_by: format_address(event_data.invited_by),
+            expires_at_ms: event_data.expires_at_ms,
+            timestamp_ms: event_data.timestamp_ms,
+        });
+    }
+    if event_type.contains("::memory::OrgInvitationAccepted") {
+        let event_data: BcsOrgInvitationAccepted = bcs::from_bytes(bcs_bytes)
+            .map_err(|e| warn!("Failed to parse OrgInvitationAccepted BCS: {}", e))
+            .ok()?;
+        return Some(OrgInvitationChainEvent::Accepted {
+            organization_id: format_object_id(&event_data.organization_id),
+            account_id: format_object_id(&event_data.account_id),
+            group_id: format_object_id(&event_data.group_id),
+            invitee: format_address(event_data.invitee),
+            role_name: event_data.role_name,
+            permissions_mask: event_data.permissions_mask,
+            granted_mask: event_data.granted_mask,
+            accepted_by: format_address(event_data.accepted_by),
+            timestamp_ms: event_data.timestamp_ms,
+        });
+    }
+    if event_type.contains("::memory::OrgInvitationDeclined") {
+        let event_data: BcsOrgInvitationDeclined = bcs::from_bytes(bcs_bytes)
+            .map_err(|e| warn!("Failed to parse OrgInvitationDeclined BCS: {}", e))
+            .ok()?;
+        return Some(OrgInvitationChainEvent::Declined {
+            organization_id: format_object_id(&event_data.organization_id),
+            account_id: format_object_id(&event_data.account_id),
+            invitee: format_address(event_data.invitee),
+            declined_by: format_address(event_data.declined_by),
             timestamp_ms: event_data.timestamp_ms,
         });
     }

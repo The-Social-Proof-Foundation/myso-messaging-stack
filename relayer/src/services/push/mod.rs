@@ -1,6 +1,8 @@
-//! Optional APNs push notifications (metadata-only payloads).
+//! Optional APNs / FCM / web push notifications (metadata-only payloads).
 
 mod apns;
+mod fcm;
+mod web_push;
 
 use std::sync::Arc;
 
@@ -12,12 +14,16 @@ use crate::config::Config;
 use crate::storage::StorageAdapter;
 
 pub use apns::{ApnsClient, ApnsEnvironment, ApnsSendError};
+pub use fcm::FcmClient;
+pub use web_push::WebPushClient;
 
 #[derive(Clone)]
 pub struct PushService {
     enabled: bool,
     presence_ttl_secs: u64,
     apns: Option<ApnsClient>,
+    fcm: Option<FcmClient>,
+    web_push: Option<WebPushClient>,
 }
 
 impl PushService {
@@ -27,13 +33,26 @@ impl PushService {
         } else {
             None
         };
-        if config.push_enabled && apns.is_none() {
-            warn!("PUSH_ENABLED but APNs credentials incomplete — push disabled");
+        let fcm = if config.push_enabled {
+            FcmClient::from_env()
+        } else {
+            None
+        };
+        let web_push = if config.push_enabled {
+            WebPushClient::from_env()
+        } else {
+            None
+        };
+        if config.push_enabled && apns.is_none() && fcm.is_none() && web_push.is_none() {
+            warn!("PUSH_ENABLED but no push credentials — push disabled");
         }
         Self {
-            enabled: config.push_enabled && apns.is_some(),
+            enabled: config.push_enabled
+                && (apns.is_some() || fcm.is_some() || web_push.is_some()),
             presence_ttl_secs: config.presence_ttl_secs,
             apns,
+            fcm,
+            web_push,
         }
     }
 
@@ -44,6 +63,8 @@ impl PushService {
             enabled: true,
             presence_ttl_secs,
             apns: Some(apns),
+            fcm: None,
+            web_push: None,
         }
     }
 
@@ -160,9 +181,6 @@ impl PushService {
         if !self.is_enabled() {
             return;
         }
-        let Some(apns) = self.apns.as_ref() else {
-            return;
-        };
         if self.is_recently_active(storage, recipient).await {
             debug!("skip workflow push for {recipient} — recently active");
             return;
@@ -175,18 +193,30 @@ impl PushService {
             }
         };
         for token in tokens {
-            if !ApnsClient::is_ios_token(&token) {
-                continue;
-            }
-            if !apns.token_environment_matches(&token) {
-                continue;
-            }
-            match apns.send_workflow_item(&token, item_type, item_id).await {
-                Ok(()) => {}
-                Err(ApnsSendError::Unregistered) => {
-                    let _ = storage.delete_push_token(recipient, &token.token).await;
+            if let Some(apns) = self.apns.as_ref() {
+                if ApnsClient::is_ios_token(&token) && apns.token_environment_matches(&token) {
+                    match apns.send_workflow_item(&token, item_type, item_id).await {
+                        Ok(()) => {}
+                        Err(ApnsSendError::Unregistered) => {
+                            let _ = storage.delete_push_token(recipient, &token.token).await;
+                        }
+                        Err(err) => warn!("workflow APNs send failed for {recipient}: {err}"),
+                    }
                 }
-                Err(err) => warn!("workflow APNs send failed for {recipient}: {err}"),
+            }
+            if let Some(fcm) = self.fcm.as_ref() {
+                if FcmClient::is_fcm_token(&token) {
+                    if let Err(err) = fcm.send_workflow_item(&token, item_type, item_id).await {
+                        warn!("workflow FCM send failed for {recipient}: {err}");
+                    }
+                }
+            }
+            if let Some(web) = self.web_push.as_ref() {
+                if WebPushClient::is_web_token(&token) {
+                    if let Err(err) = web.send_workflow_item(&token, item_type, item_id).await {
+                        warn!("workflow web push failed for {recipient}: {err}");
+                    }
+                }
             }
         }
     }

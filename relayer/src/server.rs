@@ -106,6 +106,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         }
     }
 
+    let sync_push_service = PushService::from_config(&config);
     let mut sync_service = MembershipSyncService::new(
         &config,
         membership_store.clone(),
@@ -115,6 +116,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         storage.clone(),
         message_gate,
         realtime_hub,
+        sync_push_service,
     );
     tokio::spawn(async move {
         sync_service.run().await;
@@ -125,6 +127,20 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     tokio::spawn(async move {
         file_storage_sync_service.run().await;
     });
+
+    if config.workflow_enabled {
+        let sweep_store = workflow_store.clone();
+        let sweep_interval_secs = config.workflow_expiry_sweep_interval_secs;
+        let sweep_max = config.workflow_expiry_sweep_max_rows;
+        tokio::spawn(async move {
+            crate::services::workflow_expiry::run_expiry_sweep(
+                sweep_store,
+                sweep_interval_secs,
+                sweep_max,
+            )
+            .await;
+        });
+    }
 
     let auth_state = AuthState {
         membership_store,

@@ -115,6 +115,10 @@ pub struct Config {
     pub workflow_enabled: bool,
     /// Shared secret for internal ingest routes (`x-internal-sync-secret`).
     pub internal_sync_secret: Option<String>,
+    /// Interval between workflow expiry sweeps (default: 300s).
+    pub workflow_expiry_sweep_interval_secs: u64,
+    /// Max items transitioned per expiry sweep tick (default: 500).
+    pub workflow_expiry_sweep_max_rows: i64,
 }
 
 impl Config {
@@ -262,6 +266,14 @@ impl Config {
             .map(|v| v == "true" || v == "1")
             .unwrap_or(false);
         let internal_sync_secret = env::var("INTERNAL_SYNC_SECRET").ok();
+        let workflow_expiry_sweep_interval_secs = env::var("WORKFLOW_EXPIRY_SWEEP_INTERVAL_SECS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(300);
+        let workflow_expiry_sweep_max_rows = env::var("WORKFLOW_EXPIRY_SWEEP_MAX_ROWS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(500);
 
         let config = Self {
             port,
@@ -298,6 +310,8 @@ impl Config {
             ws_ping_interval_secs,
             workflow_enabled,
             internal_sync_secret,
+            workflow_expiry_sweep_interval_secs,
+            workflow_expiry_sweep_max_rows,
         };
 
         info!("Configuration loaded: {:?}", config);
@@ -342,6 +356,8 @@ impl Default for Config {
             ws_ping_interval_secs: 30,
             workflow_enabled: false,
             internal_sync_secret: None,
+            workflow_expiry_sweep_interval_secs: 300,
+            workflow_expiry_sweep_max_rows: 500,
         }
     }
 }

@@ -14,6 +14,7 @@ pub mod file_storage_sync;
 pub mod presence_sync;
 pub mod push;
 pub mod realtime;
+pub mod workflow_expiry;
 
 pub use attribution_verify::AttributionVerifyService;
 pub use block_check::BlockCheckService;

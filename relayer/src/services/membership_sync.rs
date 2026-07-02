@@ -20,7 +20,9 @@ use tracing::{debug, error, info, warn};
 use crate::auth::MembershipStore;
 use crate::config::Config;
 use crate::models::workflow_item::{
-    approval_idempotency_key, WorkflowTransitionPatch, STATUS_ACTIONED, STATUS_EXPIRED,
+    approval_idempotency_key, memory_access_idempotency_key, org_invitation_idempotency_key,
+    WorkflowItemIngest, WorkflowTransitionPatch, ITEM_TYPE_ORG_INVITATION, STATUS_ACTIONED,
+    STATUS_DISMISSED, STATUS_EXPIRED,
 };
 use crate::models::PaidEscrowRecord;
 use crate::storage::{AgentGroupStore, StorageAdapter, WorkflowStore};
@@ -30,11 +32,16 @@ use super::agent_group_detector::{
 };
 use super::event_parser::{
     parse_agent_detection_event, parse_agent_group_created_event, parse_ai_credit_approval_event,
-    parse_follow_changed_event, parse_myso_event, parse_paid_message_sent_event,
+    parse_follow_changed_event, parse_myso_event, parse_org_invitation_chain_event,
+    parse_org_memory_permission_chain_event, parse_paid_message_sent_event,
     parse_paid_policy_updated_event, AgentDetectionEvent, AiCreditApprovalEvent, GroupsEvent,
+    OrgInvitationChainEvent, OrgMemoryPermissionChainEvent,
 };
 use super::message_gate::MessageGateService;
+use super::push::PushService;
 use super::realtime::{notify_user_feed_event, DiscoveryReason, RealtimeHub, UserFeedEvent};
+
+use crate::models::workflow_item::WorkflowItem;
 
 pub struct MembershipSyncService {
     myso_rpc_url: String,
@@ -51,6 +58,8 @@ pub struct MembershipSyncService {
     message_gate: MessageGateService,
     /// User-feed publisher: local on in-memory storage, NOTIFY-only on Postgres.
     realtime_hub: Arc<RealtimeHub>,
+    /// Push service — used to notify offline recipients on chain-driven transitions.
+    push_service: PushService,
     last_cursor: Option<u64>,
 }
 
@@ -64,6 +73,7 @@ impl MembershipSyncService {
         storage: Arc<dyn StorageAdapter>,
         message_gate: MessageGateService,
         realtime_hub: Arc<RealtimeHub>,
+        push_service: PushService,
     ) -> Self {
         let last_cursor = membership_store.get_last_checkpoint_cursor();
         info!(
@@ -86,8 +96,23 @@ impl MembershipSyncService {
             storage,
             message_gate,
             realtime_hub,
+            push_service,
             last_cursor,
         }
+    }
+
+    /// Notify the item's recipient about a chain-driven transition. Offline
+    /// clients (accept/decline/approve happening in a different tab, on chain,
+    /// or via a signer) would otherwise miss the update until they re-poll.
+    async fn push_workflow_transition(&self, item: &WorkflowItem) {
+        self.push_service
+            .notify_workflow_item(
+                &self.storage,
+                &item.recipient_address,
+                &item.item_type,
+                &item.id.to_string(),
+            )
+            .await;
     }
 
     async fn publish_user_feed(&self, event: UserFeedEvent) {
@@ -138,11 +163,161 @@ impl MembershipSyncService {
                     new_status,
                     "Workflow item transitioned via chain event"
                 );
+                self.push_workflow_transition(&item).await;
             }
             Ok(None) => {}
             Err(e) => warn!(
                 "Failed to transition workflow item {idempotency_key}: {e}"
             ),
+        }
+    }
+
+    async fn apply_org_invitation_chain_event(&self, event: OrgInvitationChainEvent) {
+        if !self.workflow_enabled {
+            return;
+        }
+        let idempotency_key =
+            org_invitation_idempotency_key(event.organization_id(), event.invitee());
+
+        if let OrgInvitationChainEvent::Created { .. } = &event {
+            // Chain-created invitations produce a workflow inbox item for the invitee.
+            // Ingest is idempotent (upsert on idempotency_key) so replayed events are safe.
+            let ingest = WorkflowItemIngest {
+                idempotency_key: idempotency_key.clone(),
+                recipient_address: event.invitee().to_string(),
+                item_type: ITEM_TYPE_ORG_INVITATION.to_string(),
+                title: "Organization invitation".to_string(),
+                body: Some(format!(
+                    "You've been invited to join organization {}",
+                    event.organization_id()
+                )),
+                payload: event.workflow_payload_patch(),
+                organization_id: Some(event.organization_id().to_string()),
+                account_id: Some(event.account_id().to_string()),
+                source_service: "membership_sync".to_string(),
+                action_deadline_ms: match &event {
+                    OrgInvitationChainEvent::Created { expires_at_ms, .. } => {
+                        expires_at_ms.map(|v| v as i64)
+                    }
+                    _ => None,
+                },
+                conversation_ref: None,
+            };
+            match self.workflow_store.upsert_ingest(&ingest).await {
+                Ok(item) => {
+                    info!(
+                        organization_id = event.organization_id(),
+                        invitee = event.invitee(),
+                        workflow_item_id = %item.id,
+                        "Org invitation workflow item created from chain event"
+                    );
+                    self.push_workflow_transition(&item).await;
+                }
+                Err(e) => warn!(
+                    "Failed to ingest org invitation workflow item {idempotency_key}: {e}"
+                ),
+            }
+            return;
+        }
+
+        let patch = WorkflowTransitionPatch {
+            payload_patch: Some(event.workflow_payload_patch()),
+            organization_id: Some(event.organization_id().to_string()),
+        };
+        let (new_status, actioned_by) = match &event {
+            OrgInvitationChainEvent::Accepted { .. } => {
+                (STATUS_ACTIONED, Some(event.actor_address().to_string()))
+            }
+            OrgInvitationChainEvent::Declined { .. } => {
+                (STATUS_DISMISSED, Some(event.actor_address().to_string()))
+            }
+            OrgInvitationChainEvent::Created { .. } => unreachable!("handled above"),
+        };
+        match self
+            .workflow_store
+            .transition_by_idempotency(
+                &idempotency_key,
+                new_status,
+                actioned_by.as_deref(),
+                patch,
+            )
+            .await
+        {
+            Ok(Some(item)) => {
+                info!(
+                    organization_id = event.organization_id(),
+                    invitee = event.invitee(),
+                    timestamp_ms = event.timestamp_ms(),
+                    workflow_item_id = %item.id,
+                    new_status,
+                    "Org invitation workflow item transitioned via chain event"
+                );
+                self.push_workflow_transition(&item).await;
+            }
+            Ok(None) => {}
+            Err(e) => warn!(
+                "Failed to transition org invitation workflow item {idempotency_key}: {e}"
+            ),
+        }
+    }
+
+    /// Chain sync for `OrgMemoryPermissionGranted` / `OrgMemoryPermissionRevoked`.
+    ///
+    /// Closes matching `memory_access_request` items when an admin grants (or
+    /// revokes) the requested permission bit. The producer's idempotency key is
+    /// `memory_access:{org}:{member}:{mask}`, so we transition every open item
+    /// that overlaps the chain event's mask.
+    async fn apply_org_memory_permission_chain_event(
+        &self,
+        event: OrgMemoryPermissionChainEvent,
+    ) {
+        if !self.workflow_enabled {
+            return;
+        }
+
+        let organization_id = event.organization_id().to_string();
+        let member = event.member().to_string();
+        let mask = event.permissions_mask();
+        let actor = event.actor_address().to_string();
+
+        // permissions_mask is a bitset — transition items whose idempotency mask
+        // is fully covered by this event's mask.
+        for bit_index in 0..64 {
+            let bit = 1u64 << bit_index;
+            if mask & bit == 0 {
+                continue;
+            }
+            let idempotency_key =
+                memory_access_idempotency_key(&organization_id, &member, bit as i64);
+            let new_status = match &event {
+                OrgMemoryPermissionChainEvent::Granted { .. } => STATUS_ACTIONED,
+                OrgMemoryPermissionChainEvent::Revoked { .. } => STATUS_DISMISSED,
+            };
+            let patch = WorkflowTransitionPatch {
+                payload_patch: Some(event.workflow_payload_patch()),
+                organization_id: Some(organization_id.clone()),
+            };
+            match self
+                .workflow_store
+                .transition_by_idempotency(&idempotency_key, new_status, Some(&actor), patch)
+                .await
+            {
+                Ok(Some(item)) => {
+                    info!(
+                        organization_id = %organization_id,
+                        member = %member,
+                        bit,
+                        workflow_item_id = %item.id,
+                        new_status,
+                        "memory_access_request workflow item transitioned via chain event"
+                    );
+                    self.push_workflow_transition(&item).await;
+                }
+                Ok(None) => {}
+                Err(e) => warn!(
+                    "Failed to transition memory_access_request item {idempotency_key}: {e}"
+                ),
+            }
         }
     }
 
@@ -327,6 +502,18 @@ impl MembershipSyncService {
                     parse_ai_credit_approval_event(event, &self.social_package_id)
                 {
                     self.apply_workflow_chain_event(approval_event).await;
+                }
+
+                if let Some(invitation_event) =
+                    parse_org_invitation_chain_event(event, &self.social_package_id)
+                {
+                    self.apply_org_invitation_chain_event(invitation_event).await;
+                }
+
+                if let Some(perm_event) =
+                    parse_org_memory_permission_chain_event(event, &self.social_package_id)
+                {
+                    self.apply_org_memory_permission_chain_event(perm_event).await;
                 }
             }
 

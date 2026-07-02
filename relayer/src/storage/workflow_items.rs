@@ -50,6 +50,16 @@ pub trait WorkflowStore: Send + Sync {
         actioned_by: Option<&str>,
         patch: WorkflowTransitionPatch,
     ) -> StorageResult<Option<WorkflowItem>>;
+
+    /// Transition every open item of `item_type` whose `action_deadline_ms` is
+    /// past `now_ms` to `expired`. Returns the number of items transitioned.
+    /// Callers cap `limit` to keep the sweep bounded per tick.
+    async fn sweep_expired(
+        &self,
+        item_type: &str,
+        now_ms: i64,
+        limit: i64,
+    ) -> StorageResult<u64>;
 }
 
 fn merge_json_payload(
@@ -117,6 +127,15 @@ impl WorkflowStore for NoOpWorkflowStore {
         _patch: WorkflowTransitionPatch,
     ) -> StorageResult<Option<WorkflowItem>> {
         Ok(None)
+    }
+
+    async fn sweep_expired(
+        &self,
+        _item_type: &str,
+        _now_ms: i64,
+        _limit: i64,
+    ) -> StorageResult<u64> {
+        Ok(0)
     }
 }
 
@@ -295,6 +314,36 @@ impl WorkflowStore for InMemoryWorkflowStore {
             merge_json_payload(&mut row.payload, &payload_patch);
         }
         Ok(Some(row.clone()))
+    }
+
+    async fn sweep_expired(
+        &self,
+        item_type: &str,
+        now_ms: i64,
+        limit: i64,
+    ) -> StorageResult<u64> {
+        let mut items = self.items.write().map_err(|e| {
+            StorageError::OperationFailed(format!("workflow store lock poisoned: {e}"))
+        })?;
+        let mut count = 0u64;
+        for row in items.values_mut() {
+            if count as i64 >= limit {
+                break;
+            }
+            if row.item_type != item_type || row.status != STATUS_OPEN {
+                continue;
+            }
+            let Some(deadline) = row.action_deadline_ms else {
+                continue;
+            };
+            if deadline >= now_ms {
+                continue;
+            }
+            row.status = crate::models::workflow_item::STATUS_EXPIRED.to_string();
+            row.updated_at = Utc::now();
+            count += 1;
+        }
+        Ok(count)
     }
 }
 
@@ -551,6 +600,48 @@ impl WorkflowStore for PostgresWorkflowStore {
             return Ok(Some(item));
         }
         Ok(None)
+    }
+
+    async fn sweep_expired(
+        &self,
+        item_type: &str,
+        now_ms: i64,
+        limit: i64,
+    ) -> StorageResult<u64> {
+        let rows: Vec<WorkflowItemRow> = sqlx::query_as(
+            r#"UPDATE workflow_items SET
+                status = 'expired',
+                updated_at = NOW()
+               WHERE id IN (
+                    SELECT id FROM workflow_items
+                     WHERE item_type = $1 AND status = 'open'
+                       AND action_deadline_ms IS NOT NULL AND action_deadline_ms < $2
+                     ORDER BY action_deadline_ms ASC
+                     LIMIT $3
+               )
+               RETURNING id, idempotency_key, recipient_address, item_type, status, title, body,
+                         payload, organization_id, account_id, source_service, action_deadline_ms,
+                         conversation_ref, created_at, updated_at, actioned_by, actioned_at"#,
+        )
+        .bind(item_type)
+        .bind(now_ms)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| StorageError::OperationFailed(e.to_string()))?;
+
+        let count = rows.len() as u64;
+        for row in rows {
+            let item = WorkflowItem::from(row);
+            if let Err(e) = self.notify_updated(&item).await {
+                tracing::warn!(
+                    workflow_item_id = %item.id,
+                    error = %e,
+                    "sweep_expired notify failed"
+                );
+            }
+        }
+        Ok(count)
     }
 }
 

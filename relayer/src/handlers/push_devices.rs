@@ -22,15 +22,18 @@ pub struct PostPushTokenBody {
 }
 
 fn validate_push_token_body(body: &PostPushTokenBody) -> Result<(), ApiError> {
-    if !body.platform.eq_ignore_ascii_case("ios") {
+    let platform = body.platform.to_ascii_lowercase();
+    if !matches!(platform.as_str(), "ios" | "android" | "fcm" | "web") {
         return Err(ApiError::BadRequest(
-            "platform must be 'ios'".to_string(),
+            "platform must be 'ios', 'android', 'fcm', or 'web'".to_string(),
         ));
     }
 
-    ApnsEnvironment::from_token_str(&body.environment).map_err(|err| {
-        ApiError::BadRequest(err)
-    })?;
+    if platform == "ios" {
+        ApnsEnvironment::from_token_str(&body.environment).map_err(|err| {
+            ApiError::BadRequest(err)
+        })?;
+    }
 
     let token = body.token.trim();
     if token.is_empty() {
@@ -113,9 +116,21 @@ mod tests {
     }
 
     #[test]
-    fn rejects_non_ios_platform() {
+    fn accepts_android_fcm_and_web_platforms() {
+        for platform in ["android", "fcm", "web"] {
+            let mut body = valid_body();
+            body.platform = platform.to_string();
+            assert!(
+                validate_push_token_body(&body).is_ok(),
+                "expected {platform} to be an accepted push platform"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_unknown_platform() {
         let mut body = valid_body();
-        body.platform = "android".to_string();
+        body.platform = "windows".to_string();
         assert!(validate_push_token_body(&body).is_err());
     }
 

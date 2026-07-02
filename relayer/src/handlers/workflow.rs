@@ -8,7 +8,10 @@ use uuid::Uuid;
 
 use crate::auth::AuthContext;
 use crate::handlers::messages::error::ApiError;
-use crate::models::workflow_item::{WorkflowItem, WorkflowItemIngest, STATUS_ACTIONED, STATUS_DISMISSED, STATUS_OPEN};
+use crate::models::workflow_item::{
+    is_allowed_workflow_item_type, WorkflowItem, WorkflowItemIngest, STATUS_ACTIONED,
+    STATUS_DISMISSED, STATUS_OPEN,
+};
 use crate::state::AppState;
 
 #[derive(Debug, Deserialize)]
@@ -159,6 +162,12 @@ pub async fn ingest_workflow_item_internal(
         return Err(ApiError::BadRequest(
             "recipient_address and idempotency_key required".into(),
         ));
+    }
+    if !is_allowed_workflow_item_type(&body.item_type) {
+        return Err(ApiError::BadRequest(format!(
+            "unsupported workflow item_type: {}",
+            body.item_type
+        )));
     }
     let row = state
         .workflow_store

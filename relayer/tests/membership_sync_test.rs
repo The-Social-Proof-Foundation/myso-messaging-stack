@@ -17,6 +17,7 @@ use tonic::{Request, Response, Status};
 use messaging_relayer::auth::{InMemoryMembershipStore, MembershipStore, MessagingPermission};
 use messaging_relayer::config::Config;
 use messaging_relayer::services::realtime::{DiscoveryReason, UserFeedEvent};
+use messaging_relayer::services::push::PushService;
 use messaging_relayer::services::{MembershipSyncService, MessageGateService, RealtimeHub};
 use messaging_relayer::storage::{InMemoryStorage, NoOpAgentGroupStore};
 
@@ -43,6 +44,7 @@ fn new_sync_service_with_hub(
         Arc::new(InMemoryStorage::new()),
         MessageGateService::from_config(config),
         hub,
+        PushService::from_config(config),
     )
 }
 
