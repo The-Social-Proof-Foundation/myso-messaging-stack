@@ -38,6 +38,8 @@ fn new_sync_service_with_hub(
         config,
         store,
         Arc::new(NoOpAgentGroupStore),
+        Arc::new(messaging_relayer::storage::NoOpWorkflowStore),
+        false,
         Arc::new(InMemoryStorage::new()),
         MessageGateService::from_config(config),
         hub,

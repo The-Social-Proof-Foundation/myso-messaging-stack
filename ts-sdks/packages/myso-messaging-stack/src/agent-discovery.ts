@@ -89,7 +89,7 @@ function fromRelayerConversation(conv: RelayerAgentConversation): AgentConversat
 async function fetchAgentConversationsFromRelayer(
 	options: FetchAgentConversationsOptions,
 ): Promise<AgentConversation[]> {
-	const fetchFn = options.fetch ?? fetch;
+	const fetchFn = options.fetch ?? globalThis.fetch.bind(globalThis);
 	const limit = options.limit ?? 100;
 	const headers = await createWalletHeaderAuth(options.signer);
 	const response = await fetchFn(
@@ -118,7 +118,7 @@ export async function fetchAgentConversations(
 export async function fetchGroupsForAgent(
 	options: FetchGroupsForAgentOptions,
 ): Promise<AgentConversation[]> {
-	const fetchFn = options.fetch ?? fetch;
+	const fetchFn = options.fetch ?? globalThis.fetch.bind(globalThis);
 	const limit = options.limit ?? 100;
 	const headers = await createWalletHeaderAuth(options.signer);
 	const encoded = encodeURIComponent(options.derivedAddress);

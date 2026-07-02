@@ -305,12 +305,37 @@ curl -H "Client-Sdk-Version: 0.0.4" \
 
 | Env var | Purpose |
 |---------|---------|
-| `VITE_SOCIAL_SERVER_URL` | Enables paid policy gating + sidebar **Paid messaging** panel |
+| `VITE_SOCIAL_SERVER_URL` | Loads paid policy in the sidebar panel, DM block pre-check, and relayer paid-DM gate lookups |
+| `VITE_MYSO_RPC_URL` | MySo JSON-RPC for on-chain writes (Save policy, create group). Localnet dev auto-proxies via `/api/rpc` |
 | `VITE_ENABLE_AGENT_DEV=true` | Shows dev agent send panel in chat |
 | `VITE_AGENT_SUB_AGENT_ID` | Sub-agent object id (dev panel) |
 | `VITE_AGENT_SECRET_KEY` | Agent Ed25519 secret key hex (dev panel) |
 | `VITE_AGENT_PLATFORM_ID` | Platform shared object id |
 | `VITE_AGENT_MEMORY_ACCOUNT_ID` | Principal (human parent) MemoryAccount object id — created once per human with profile; sub-agents are registered on this account via `register_sub_agent` and do not have their own |
+
+**Localnet ports** (typical `myso start --with-graphql --with-social-indexer --with-mydata`):
+
+| Port | Service |
+|------|---------|
+| 9125 | GraphQL (`VITE_MYSO_GRAPHQL_URL`) |
+| 9126 | Social server (`VITE_SOCIAL_SERVER_URL`) |
+| 9001 | JSON-RPC (`VITE_MYSO_RPC_URL`; browser uses `/api/rpc` proxy in dev) |
+| 2024 | MyData key server HTTP |
+| 3003 | Relayer (`VITE_RELAYER_URL`) |
+
+### Paid messaging panel shows `Failed to fetch`
+
+1. **Policy load** uses the social server when `VITE_SOCIAL_SERVER_URL` is set (recommended). Confirm `myso start` includes `--with-social-indexer` and the URL matches port **9126**.
+2. **Save policy** submits an on-chain PTB and needs JSON-RPC. Set `VITE_MYSO_RPC_URL` to your local fullnode URL (e.g. `http://127.0.0.1:9001`); in dev the app routes browser RPC through `/api/rpc` automatically. Restart `pnpm dev` after editing `.env`.
+3. Verify `VITE_MYSO_RPC_URL` responds (not `401 Unauthorized`):
+
+```bash
+curl -s -X POST "${VITE_MYSO_RPC_URL:-http://127.0.0.1:9001}" \
+  -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"myso_getLatestCheckpointSequenceNumber","params":[]}'
+```
+
+Expect a JSON-RPC `result`. If you get `401`, restart or reconfigure localnet JSON-RPC (see `myso client envs` / `myso start` logs). After Save, indexed policy may lag a few seconds until `PaidMessagingPolicyUpdated` is indexed.
 
 The sidebar lists **Agent conversations** from relayer `GET /v1/agent-conversations` (wallet auth). Agent messages show an **Agent** badge when relayer attribution is present.
 

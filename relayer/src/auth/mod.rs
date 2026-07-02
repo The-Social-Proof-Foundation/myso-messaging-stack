@@ -5,6 +5,7 @@
 //! - Membership store trait with in-memory implementation (synced from Groups SDK events)
 //! - Axum middleware for request authentication
 
+pub mod internal_sync;
 pub mod membership;
 pub mod membership_postgres;
 pub mod middleware;
@@ -20,6 +21,7 @@ pub use membership::{
     create_membership_store, create_membership_store_async, InMemoryMembershipStore,
     MembershipError, MembershipStore, MembershipStoreType,
 };
+pub use internal_sync::{internal_sync_middleware, InternalSyncState};
 pub use middleware::{auth_middleware, AuthState};
 pub use wallet_middleware::wallet_auth_middleware;
 pub use permissions::MessagingPermission;

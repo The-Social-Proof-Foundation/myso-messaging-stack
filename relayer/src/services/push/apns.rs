@@ -88,6 +88,14 @@ pub struct ApnsClient {
     backend: ApnsBackend,
 }
 
+pub fn workflow_item_payload_json(item_type: &str, item_id: &str) -> Value {
+    json!({
+        "aps": { "content-available": 1 },
+        "item_type": item_type,
+        "item_id": item_id,
+    })
+}
+
 pub fn new_message_payload_json(group_id: &str, attribution: &MessageAttribution) -> Value {
     let mut payload = json!({
         "aps": { "content-available": 1 },
@@ -201,6 +209,102 @@ impl ApnsClient {
                     .await
             }
         }
+    }
+
+    pub async fn send_workflow_item(
+        &self,
+        token: &PushTokenRecord,
+        item_type: &str,
+        item_id: &str,
+    ) -> Result<(), ApnsSendError> {
+        if !Self::is_ios_token(token) {
+            return Err(ApnsSendError::Other("non-ios platform".to_string()));
+        }
+
+        let token_environment = ApnsEnvironment::from_token_str(&token.environment)
+            .map_err(ApnsSendError::Other)?;
+        if token_environment != self.environment {
+            return Err(ApnsSendError::EnvironmentMismatch);
+        }
+
+        match &self.backend {
+            ApnsBackend::A2(client) => {
+                self.send_workflow_via_a2(client, token, item_type, item_id)
+                    .await
+            }
+            ApnsBackend::HttpTest { client, base_url } => {
+                self.send_workflow_via_http_test(client, base_url, token, item_type, item_id)
+                    .await
+            }
+        }
+    }
+
+    async fn send_workflow_via_a2(
+        &self,
+        client: &Client,
+        token: &PushTokenRecord,
+        item_type: &str,
+        item_id: &str,
+    ) -> Result<(), ApnsSendError> {
+        let mut payload = DefaultNotificationBuilder::new()
+            .set_content_available()
+            .build(
+                &token.token,
+                NotificationOptions {
+                    apns_topic: Some(&self.bundle_id),
+                    apns_push_type: Some(PushType::Background),
+                    apns_priority: Some(Priority::Normal),
+                    ..Default::default()
+                },
+            );
+        payload
+            .add_custom_data("item_type", &item_type)
+            .map_err(|err| ApnsSendError::Other(err.to_string()))?;
+        payload
+            .add_custom_data("item_id", &item_id)
+            .map_err(|err| ApnsSendError::Other(err.to_string()))?;
+
+        debug!(
+            "APNs workflow push: topic={} env={:?} token={} item_type={} item_id={}",
+            self.bundle_id, self.environment, token.token, item_type, item_id
+        );
+
+        match client.send(payload).await {
+            Ok(_) => Ok(()),
+            Err(A2Error::ResponseError(response)) => map_apns_status(response.code),
+            Err(A2Error::RequestTimeout(secs)) => Err(ApnsSendError::Transient(format!(
+                "request timeout after {secs}s"
+            ))),
+            Err(err) => classify_a2_error(err),
+        }
+    }
+
+    async fn send_workflow_via_http_test(
+        &self,
+        client: &reqwest::Client,
+        base_url: &str,
+        token: &PushTokenRecord,
+        item_type: &str,
+        item_id: &str,
+    ) -> Result<(), ApnsSendError> {
+        let url = format!(
+            "{}/3/device/{}",
+            base_url.trim_end_matches('/'),
+            token.token
+        );
+        let body = workflow_item_payload_json(item_type, item_id);
+
+        let response = client
+            .post(url)
+            .header("apns-topic", &self.bundle_id)
+            .header("apns-push-type", "background")
+            .header("apns-priority", "5")
+            .json(&body)
+            .send()
+            .await
+            .map_err(|err| ApnsSendError::Transient(err.to_string()))?;
+
+        map_apns_status(response.status().as_u16())
     }
 
     async fn send_via_a2(

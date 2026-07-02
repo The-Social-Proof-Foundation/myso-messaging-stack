@@ -42,6 +42,10 @@ impl PostgresStorage {
             receipt_mirror: InMemoryStorage::new(),
         })
     }
+
+    pub fn pool(&self) -> &PgPool {
+        &self.pool
+    }
 }
 
 fn map_db_error(e: sqlx::Error) -> StorageError {
@@ -99,6 +103,10 @@ impl StorageAdapter for PostgresStorage {
             .await
             .map_err(|e| StorageError::OperationFailed(e.to_string()))?;
         Ok(())
+    }
+
+    fn postgres_pool(&self) -> Option<&PgPool> {
+        Some(&self.pool)
     }
 
     async fn create_message(&self, mut message: Message) -> StorageResult<Message> {

@@ -19,19 +19,22 @@ use tracing::{debug, error, info, warn};
 
 use crate::auth::MembershipStore;
 use crate::config::Config;
+use crate::models::workflow_item::{
+    approval_idempotency_key, WorkflowTransitionPatch, STATUS_ACTIONED, STATUS_EXPIRED,
+};
 use crate::models::PaidEscrowRecord;
-use crate::storage::{AgentGroupStore, StorageAdapter};
+use crate::storage::{AgentGroupStore, StorageAdapter, WorkflowStore};
 
 use super::agent_group_detector::{
     agent_group_from_created_event, detect_agent_groups_in_transaction,
 };
 use super::event_parser::{
-    parse_agent_detection_event, parse_agent_group_created_event, parse_follow_changed_event,
-    parse_myso_event, parse_paid_message_sent_event, parse_paid_policy_updated_event,
-    AgentDetectionEvent, GroupsEvent,
+    parse_agent_detection_event, parse_agent_group_created_event, parse_ai_credit_approval_event,
+    parse_follow_changed_event, parse_myso_event, parse_paid_message_sent_event,
+    parse_paid_policy_updated_event, AgentDetectionEvent, AiCreditApprovalEvent, GroupsEvent,
 };
 use super::message_gate::MessageGateService;
-use super::realtime::{DiscoveryReason, RealtimeHub, UserFeedEvent};
+use super::realtime::{notify_user_feed_event, DiscoveryReason, RealtimeHub, UserFeedEvent};
 
 pub struct MembershipSyncService {
     myso_rpc_url: String,
@@ -40,14 +43,13 @@ pub struct MembershipSyncService {
     social_package_id: String,
     membership_store: Arc<dyn MembershipStore>,
     agent_group_store: Arc<dyn AgentGroupStore>,
+    workflow_store: Arc<dyn WorkflowStore>,
+    workflow_enabled: bool,
     /// Paid DM escrow index (PaidMessageSent events) lives in message storage.
     storage: Arc<dyn StorageAdapter>,
     /// Shared with HTTP handlers — checkpoint events refresh its follow/policy caches.
     message_gate: MessageGateService,
-    /// Sole publisher of `group.discovered` / `group.hidden` user-feed events.
-    /// Every relayer instance runs its own sync service against the same
-    /// checkpoint stream, so a local publish reaches that instance's user-feed
-    /// connections without a cross-instance NOTIFY.
+    /// User-feed publisher: local on in-memory storage, NOTIFY-only on Postgres.
     realtime_hub: Arc<RealtimeHub>,
     last_cursor: Option<u64>,
 }
@@ -57,6 +59,8 @@ impl MembershipSyncService {
         config: &Config,
         membership_store: Arc<dyn MembershipStore>,
         agent_group_store: Arc<dyn AgentGroupStore>,
+        workflow_store: Arc<dyn WorkflowStore>,
+        workflow_enabled: bool,
         storage: Arc<dyn StorageAdapter>,
         message_gate: MessageGateService,
         realtime_hub: Arc<RealtimeHub>,
@@ -77,10 +81,68 @@ impl MembershipSyncService {
             social_package_id: config.social_package_id.clone(),
             membership_store,
             agent_group_store,
+            workflow_store,
+            workflow_enabled,
             storage,
             message_gate,
             realtime_hub,
             last_cursor,
+        }
+    }
+
+    async fn publish_user_feed(&self, event: UserFeedEvent) {
+        if let Some(pool) = self.storage.postgres_pool() {
+            if let Err(e) = notify_user_feed_event(pool, &event).await {
+                warn!("NOTIFY user feed event failed: {e}");
+            }
+        } else {
+            self.realtime_hub.publish_user_event(event);
+        }
+    }
+
+    async fn apply_workflow_chain_event(&self, event: AiCreditApprovalEvent) {
+        if !self.workflow_enabled {
+            return;
+        }
+        let idempotency_key = approval_idempotency_key(event.balance_id(), event.agent_object_id());
+        let patch = WorkflowTransitionPatch {
+            payload_patch: Some(event.workflow_payload_patch()),
+            organization_id: event.organization_id().map(str::to_string),
+        };
+        let (new_status, actioned_by) = match &event {
+            AiCreditApprovalEvent::SpendApproved { .. }
+            | AiCreditApprovalEvent::SpendApprovalConsumed { .. } => {
+                (STATUS_ACTIONED, Some(event.actor_address().to_string()))
+            }
+            AiCreditApprovalEvent::SpendApprovalRevoked { .. } => {
+                (STATUS_EXPIRED, Some(event.actor_address().to_string()))
+            }
+        };
+        match self
+            .workflow_store
+            .transition_by_idempotency(
+                &idempotency_key,
+                new_status,
+                actioned_by.as_deref(),
+                patch,
+            )
+            .await
+        {
+            Ok(Some(item)) => {
+                info!(
+                    balance_id = event.balance_id(),
+                    agent_object_id = event.agent_object_id(),
+                    approval_nonce = event.approval_nonce(),
+                    timestamp_ms = event.timestamp_ms(),
+                    workflow_item_id = %item.id,
+                    new_status,
+                    "Workflow item transitioned via chain event"
+                );
+            }
+            Ok(None) => {}
+            Err(e) => warn!(
+                "Failed to transition workflow item {idempotency_key}: {e}"
+            ),
         }
     }
 
@@ -192,7 +254,7 @@ impl MembershipSyncService {
 
             for event in events {
                 if let Some(groups_event) = parse_myso_event(event, &self.groups_package_id) {
-                    self.apply_event(&groups_event, &creators_in_tx);
+                    self.apply_event(&groups_event, &creators_in_tx).await;
                     events_processed += 1;
                 }
 
@@ -260,6 +322,12 @@ impl MembershipSyncService {
                         follow.following,
                     );
                 }
+
+                if let Some(approval_event) =
+                    parse_ai_credit_approval_event(event, &self.social_package_id)
+                {
+                    self.apply_workflow_chain_event(approval_event).await;
+                }
             }
 
             for created in agent_group_created_map.values() {
@@ -273,12 +341,12 @@ impl MembershipSyncService {
                 }
                 // The principal is often not an on-chain member of an agent
                 // group; notify them directly so the conversation appears.
-                self.realtime_hub
-                    .publish_user_event(UserFeedEvent::GroupDiscovered {
-                        wallet: created.creator_principal.clone(),
-                        group_id: created.group_id.clone(),
-                        reason: DiscoveryReason::Created,
-                    });
+                self.publish_user_feed(UserFeedEvent::GroupDiscovered {
+                    wallet: created.creator_principal.clone(),
+                    group_id: created.group_id.clone(),
+                    reason: DiscoveryReason::Created,
+                })
+                .await;
             }
 
             let indexed_group_ids: HashSet<_> =
@@ -315,7 +383,7 @@ impl MembershipSyncService {
     /// Discovery user-feed events are published here — and only here — AFTER
     /// the membership store update succeeds, so a client's follow-up REST
     /// fetch can never race the underlying state.
-    fn apply_event(&self, event: &GroupsEvent, creators_in_tx: &HashMap<String, String>) {
+    async fn apply_event(&self, event: &GroupsEvent, creators_in_tx: &HashMap<String, String>) {
         match event {
             GroupsEvent::MemberAdded { group_id, member } => {
                 info!("MemberAdded: {} -> {}", member, group_id);
@@ -326,23 +394,23 @@ impl MembershipSyncService {
                 } else {
                     DiscoveryReason::Invited
                 };
-                self.realtime_hub
-                    .publish_user_event(UserFeedEvent::GroupDiscovered {
-                        wallet: member.clone(),
-                        group_id: group_id.clone(),
-                        reason,
-                    });
+                self.publish_user_feed(UserFeedEvent::GroupDiscovered {
+                    wallet: member.clone(),
+                    group_id: group_id.clone(),
+                    reason,
+                })
+                .await;
             }
 
             GroupsEvent::MemberRemoved { group_id, member } => {
                 info!("MemberRemoved: {} from {}", member, group_id);
                 self.membership_store.remove_member(group_id, member);
 
-                self.realtime_hub
-                    .publish_user_event(UserFeedEvent::GroupHidden {
-                        wallet: member.clone(),
-                        group_id: group_id.clone(),
-                    });
+                self.publish_user_feed(UserFeedEvent::GroupHidden {
+                    wallet: member.clone(),
+                    group_id: group_id.clone(),
+                })
+                .await;
             }
 
             GroupsEvent::PermissionsGranted {

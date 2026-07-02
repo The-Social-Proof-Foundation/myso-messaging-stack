@@ -6,6 +6,12 @@ use std::sync::Arc;
 
 pub mod adapter;
 pub mod agent_groups;
+pub mod workflow_items;
+
+pub use workflow_items::{
+    create_workflow_store_async, InMemoryWorkflowStore, NoOpWorkflowStore, PostgresWorkflowStore,
+    WorkflowStore,
+};
 pub mod memory;
 pub mod migrations;
 pub mod postgres;

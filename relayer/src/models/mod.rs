@@ -12,6 +12,7 @@ pub mod agent_messaging_group;
 pub mod paid_escrow;
 pub mod push_device;
 pub mod user_read_state;
+pub mod workflow_item;
 
 // Re-export commonly used types
 pub use attachment::Attachment;

@@ -25,6 +25,8 @@ pub const GROUP_ACTIVITY_EVENT_TYPE: &str = "group.activity";
 pub const READ_STATE_UPDATED_EVENT_TYPE: &str = "read_state.updated";
 pub const GROUP_DISCOVERED_EVENT_TYPE: &str = "group.discovered";
 pub const GROUP_HIDDEN_EVENT_TYPE: &str = "group.hidden";
+pub const WORKFLOW_ITEM_CREATED_EVENT_TYPE: &str = "workflow.item.created";
+pub const WORKFLOW_ITEM_UPDATED_EVENT_TYPE: &str = "workflow.item.updated";
 pub const TYPING_START_EVENT_TYPE: &str = "typing.start";
 pub const TYPING_STOP_EVENT_TYPE: &str = "typing.stop";
 pub const PRESENCE_UPDATED_EVENT_TYPE: &str = "presence.updated";
@@ -107,6 +109,111 @@ impl ReadStateUpdatedEvent {
     }
 }
 
+/// NOTIFY payload for workflow inbox item creation.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WorkflowItemWireEvent {
+    #[serde(rename = "type")]
+    pub event_type: String,
+    pub wallet: String,
+    pub item_id: Uuid,
+    pub item_type: String,
+    pub status: String,
+}
+
+/// NOTIFY payload for workflow inbox item updates.
+pub type WorkflowItemUpdatedEvent = WorkflowItemWireEvent;
+
+/// NOTIFY payload for wallet-scoped group discovery (includes routing wallet).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GroupDiscoveredNotifyEvent {
+    #[serde(rename = "type")]
+    pub event_type: String,
+    pub wallet: String,
+    pub group_id: String,
+    pub reason: DiscoveryReason,
+}
+
+/// NOTIFY payload for wallet-scoped group hiding (includes routing wallet).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GroupHiddenNotifyEvent {
+    #[serde(rename = "type")]
+    pub event_type: String,
+    pub wallet: String,
+    pub group_id: String,
+}
+
+pub async fn notify_workflow_item_event(
+    pool: &sqlx::PgPool,
+    event: WorkflowItemWireEvent,
+) -> Result<(), String> {
+    let payload = serde_json::to_string(&event).map_err(|e| e.to_string())?;
+    sqlx::query("SELECT pg_notify($1, $2)")
+        .bind(MESSAGE_EVENTS_CHANNEL)
+        .bind(payload)
+        .execute(pool)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Cross-instance user-feed delivery for discovery/hide events on Postgres.
+pub async fn notify_user_feed_event(pool: &sqlx::PgPool, event: &UserFeedEvent) -> Result<(), String> {
+    let payload = match event {
+        UserFeedEvent::GroupDiscovered {
+            wallet,
+            group_id,
+            reason,
+        } => serde_json::to_string(&GroupDiscoveredNotifyEvent {
+            event_type: GROUP_DISCOVERED_EVENT_TYPE.to_string(),
+            wallet: wallet.clone(),
+            group_id: group_id.clone(),
+            reason: *reason,
+        }),
+        UserFeedEvent::GroupHidden { wallet, group_id } => {
+            serde_json::to_string(&GroupHiddenNotifyEvent {
+                event_type: GROUP_HIDDEN_EVENT_TYPE.to_string(),
+                wallet: wallet.clone(),
+                group_id: group_id.clone(),
+            })
+        }
+        UserFeedEvent::WorkflowItemCreated {
+            wallet,
+            item_id,
+            item_type,
+            status,
+        } => serde_json::to_string(&WorkflowItemWireEvent {
+            event_type: WORKFLOW_ITEM_CREATED_EVENT_TYPE.to_string(),
+            wallet: wallet.clone(),
+            item_id: *item_id,
+            item_type: item_type.clone(),
+            status: status.clone(),
+        }),
+        UserFeedEvent::WorkflowItemUpdated {
+            wallet,
+            item_id,
+            item_type,
+            status,
+        } => serde_json::to_string(&WorkflowItemWireEvent {
+            event_type: WORKFLOW_ITEM_UPDATED_EVENT_TYPE.to_string(),
+            wallet: wallet.clone(),
+            item_id: *item_id,
+            item_type: item_type.clone(),
+            status: status.clone(),
+        }),
+        UserFeedEvent::GroupActivity { .. } | UserFeedEvent::ReadStateUpdated { .. } => {
+            return Ok(());
+        }
+    }
+    .map_err(|e| e.to_string())?;
+    sqlx::query("SELECT pg_notify($1, $2)")
+        .bind(MESSAGE_EVENTS_CHANNEL)
+        .bind(payload)
+        .execute(pool)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 /// Wallet-scoped user-feed events (`/v1/users/ws`).
 ///
 /// The internal envelope carries routing data (the target wallet) used for
@@ -132,6 +239,20 @@ pub enum UserFeedEvent {
     /// A conversation should leave `wallet`'s sidebar (membership removed
     /// today; archived/blocked/workflow hiding tomorrow).
     GroupHidden { wallet: String, group_id: String },
+    /// A workflow inbox item was created for `wallet`.
+    WorkflowItemCreated {
+        wallet: String,
+        item_id: Uuid,
+        item_type: String,
+        status: String,
+    },
+    /// A workflow inbox item changed status for `wallet`.
+    WorkflowItemUpdated {
+        wallet: String,
+        item_id: Uuid,
+        item_type: String,
+        status: String,
+    },
 }
 
 /// Best-effort provenance for `group.discovered`.
@@ -157,6 +278,8 @@ impl UserFeedEvent {
             UserFeedEvent::ReadStateUpdated { wallet: target, .. } => target == wallet,
             UserFeedEvent::GroupDiscovered { wallet: target, .. } => target == wallet,
             UserFeedEvent::GroupHidden { wallet: target, .. } => target == wallet,
+            UserFeedEvent::WorkflowItemCreated { wallet: target, .. } => target == wallet,
+            UserFeedEvent::WorkflowItemUpdated { wallet: target, .. } => target == wallet,
         }
     }
 
@@ -188,6 +311,28 @@ impl UserFeedEvent {
             UserFeedEvent::GroupHidden { group_id, .. } => serde_json::json!({
                 "type": GROUP_HIDDEN_EVENT_TYPE,
                 "group_id": group_id,
+            }),
+            UserFeedEvent::WorkflowItemCreated {
+                item_id,
+                item_type,
+                status,
+                ..
+            } => serde_json::json!({
+                "type": WORKFLOW_ITEM_CREATED_EVENT_TYPE,
+                "item_id": item_id,
+                "item_type": item_type,
+                "status": status,
+            }),
+            UserFeedEvent::WorkflowItemUpdated {
+                item_id,
+                item_type,
+                status,
+                ..
+            } => serde_json::json!({
+                "type": WORKFLOW_ITEM_UPDATED_EVENT_TYPE,
+                "item_id": item_id,
+                "item_type": item_type,
+                "status": status,
             }),
         }
     }

@@ -8,4 +8,5 @@ pub mod push_devices;
 pub mod unread_counts;
 pub mod user_read_state;
 pub mod user_ws;
+pub mod workflow;
 pub mod ws;

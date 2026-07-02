@@ -149,6 +149,48 @@ impl PushService {
         );
     }
 
+    /// Notify an offline wallet about a new workflow inbox item (metadata-only).
+    pub async fn notify_workflow_item(
+        &self,
+        storage: &Arc<dyn StorageAdapter>,
+        recipient: &str,
+        item_type: &str,
+        item_id: &str,
+    ) {
+        if !self.is_enabled() {
+            return;
+        }
+        let Some(apns) = self.apns.as_ref() else {
+            return;
+        };
+        if self.is_recently_active(storage, recipient).await {
+            debug!("skip workflow push for {recipient} — recently active");
+            return;
+        }
+        let tokens = match storage.list_push_tokens_for_wallet(recipient).await {
+            Ok(tokens) => tokens,
+            Err(err) => {
+                warn!("list push tokens for {recipient} failed: {err}");
+                return;
+            }
+        };
+        for token in tokens {
+            if !ApnsClient::is_ios_token(&token) {
+                continue;
+            }
+            if !apns.token_environment_matches(&token) {
+                continue;
+            }
+            match apns.send_workflow_item(&token, item_type, item_id).await {
+                Ok(()) => {}
+                Err(ApnsSendError::Unregistered) => {
+                    let _ = storage.delete_push_token(recipient, &token.token).await;
+                }
+                Err(err) => warn!("workflow APNs send failed for {recipient}: {err}"),
+            }
+        }
+    }
+
     async fn is_recently_active(
         &self,
         storage: &Arc<dyn StorageAdapter>,

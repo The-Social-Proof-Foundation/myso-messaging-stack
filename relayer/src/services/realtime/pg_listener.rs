@@ -7,10 +7,13 @@ use sqlx::postgres::PgListener;
 use tracing::{info, warn};
 
 use super::{
-    MessageCreatedEvent, PresenceChangedSignal, PresenceUpdatedEvent, ReactionUpdatedEvent,
-    ReadStateUpdatedEvent, RealtimeHub, TypingEvent, UserFeedEvent, MESSAGE_CREATED_EVENT_TYPE,
-    MESSAGE_EVENTS_CHANNEL, PRESENCE_CHANGED_SIGNAL_TYPE, READ_STATE_UPDATED_EVENT_TYPE,
-    REACTION_UPDATED_EVENT_TYPE, TYPING_START_EVENT_TYPE, TYPING_STOP_EVENT_TYPE,
+    GroupDiscoveredNotifyEvent, GroupHiddenNotifyEvent, MessageCreatedEvent,
+    PresenceChangedSignal, PresenceUpdatedEvent, ReactionUpdatedEvent, ReadStateUpdatedEvent,
+    RealtimeHub, TypingEvent, UserFeedEvent, WorkflowItemWireEvent, GROUP_DISCOVERED_EVENT_TYPE,
+    GROUP_HIDDEN_EVENT_TYPE, MESSAGE_CREATED_EVENT_TYPE, MESSAGE_EVENTS_CHANNEL,
+    PRESENCE_CHANGED_SIGNAL_TYPE, READ_STATE_UPDATED_EVENT_TYPE, REACTION_UPDATED_EVENT_TYPE,
+    TYPING_START_EVENT_TYPE, TYPING_STOP_EVENT_TYPE, WORKFLOW_ITEM_CREATED_EVENT_TYPE,
+    WORKFLOW_ITEM_UPDATED_EVENT_TYPE,
 };
 use crate::auth::MembershipStore;
 use crate::storage::StorageAdapter;
@@ -138,6 +141,63 @@ impl PgListenerService {
                             ),
                         );
                     }
+                }
+                Some(WORKFLOW_ITEM_CREATED_EVENT_TYPE) => {
+                    let event: WorkflowItemWireEvent = match serde_json::from_str(payload) {
+                        Ok(event) => event,
+                        Err(err) => {
+                            warn!("invalid NOTIFY payload on {MESSAGE_EVENTS_CHANNEL}: {err}");
+                            continue;
+                        }
+                    };
+                    self.hub.publish_user_event(UserFeedEvent::WorkflowItemCreated {
+                        wallet: event.wallet,
+                        item_id: event.item_id,
+                        item_type: event.item_type,
+                        status: event.status,
+                    });
+                }
+                Some(WORKFLOW_ITEM_UPDATED_EVENT_TYPE) => {
+                    let event: WorkflowItemWireEvent = match serde_json::from_str(payload) {
+                        Ok(event) => event,
+                        Err(err) => {
+                            warn!("invalid NOTIFY payload on {MESSAGE_EVENTS_CHANNEL}: {err}");
+                            continue;
+                        }
+                    };
+                    self.hub.publish_user_event(UserFeedEvent::WorkflowItemUpdated {
+                        wallet: event.wallet,
+                        item_id: event.item_id,
+                        item_type: event.item_type,
+                        status: event.status,
+                    });
+                }
+                Some(GROUP_DISCOVERED_EVENT_TYPE) => {
+                    let event: GroupDiscoveredNotifyEvent = match serde_json::from_str(payload) {
+                        Ok(event) => event,
+                        Err(err) => {
+                            warn!("invalid NOTIFY payload on {MESSAGE_EVENTS_CHANNEL}: {err}");
+                            continue;
+                        }
+                    };
+                    self.hub.publish_user_event(UserFeedEvent::GroupDiscovered {
+                        wallet: event.wallet,
+                        group_id: event.group_id,
+                        reason: event.reason,
+                    });
+                }
+                Some(GROUP_HIDDEN_EVENT_TYPE) => {
+                    let event: GroupHiddenNotifyEvent = match serde_json::from_str(payload) {
+                        Ok(event) => event,
+                        Err(err) => {
+                            warn!("invalid NOTIFY payload on {MESSAGE_EVENTS_CHANNEL}: {err}");
+                            continue;
+                        }
+                    };
+                    self.hub.publish_user_event(UserFeedEvent::GroupHidden {
+                        wallet: event.wallet,
+                        group_id: event.group_id,
+                    });
                 }
                 other => {
                     warn!(

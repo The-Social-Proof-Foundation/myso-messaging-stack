@@ -14,7 +14,7 @@ use crate::services::presence_sync::PresenceRegistry;
 use crate::services::push::PushService;
 use crate::services::realtime::RealtimeHub;
 use crate::services::AttributionVerifyService;
-use crate::storage::{AgentGroupStore, StorageAdapter};
+use crate::storage::{AgentGroupStore, StorageAdapter, WorkflowStore};
 
 /// Per `(wallet, group)` throttle for `typing.start` broadcasts so keystroke
 /// storms stay cheap. `typing.stop` is never throttled.
@@ -59,6 +59,8 @@ pub struct AppState {
     pub sync_notifier: mpsc::UnboundedSender<()>,
     pub membership_store: Arc<dyn MembershipStore>,
     pub agent_group_store: Arc<dyn AgentGroupStore>,
+    pub workflow_store: Arc<dyn WorkflowStore>,
+    pub workflow_enabled: bool,
     pub attribution_verify: AttributionVerifyService,
     pub block_check: BlockCheckService,
     pub message_gate: MessageGateService,
@@ -81,6 +83,8 @@ impl AppState {
         sync_notifier: mpsc::UnboundedSender<()>,
         membership_store: Arc<dyn MembershipStore>,
         agent_group_store: Arc<dyn AgentGroupStore>,
+        workflow_store: Arc<dyn WorkflowStore>,
+        workflow_enabled: bool,
         attribution_verify: AttributionVerifyService,
         block_check: BlockCheckService,
         message_gate: MessageGateService,
@@ -96,6 +100,8 @@ impl AppState {
             sync_notifier,
             membership_store,
             agent_group_store,
+            workflow_store,
+            workflow_enabled,
             attribution_verify,
             block_check,
             message_gate,
@@ -123,6 +129,8 @@ impl AppState {
             sync_notifier,
             membership_store,
             Arc::new(crate::storage::NoOpAgentGroupStore),
+            Arc::new(crate::storage::NoOpWorkflowStore),
+            false,
             AttributionVerifyService::from_config(&Config::default()),
             block_check,
             MessageGateService::from_config(&Config::default()),
@@ -149,6 +157,8 @@ impl AppState {
             sync_notifier,
             membership_store,
             Arc::new(crate::storage::NoOpAgentGroupStore),
+            Arc::new(crate::storage::NoOpWorkflowStore),
+            false,
             AttributionVerifyService::from_config(&Config::default()),
             block_check,
             message_gate,

@@ -11,6 +11,7 @@ import type {
 	RelayerTypingEvent,
 	RelayerUserEvent,
 	SyncStatus,
+	WorkflowItem,
 } from './types.js';
 
 /** Raw attachment JSON shape from the relayer API (snake_case). */
@@ -79,7 +80,35 @@ export type WireUserFeedEvent =
 	| { type: 'group.activity'; group_id: string; latest_order: number }
 	| { type: 'read_state.updated'; wallet: string; blob_version: number }
 	| { type: 'group.discovered'; group_id: string; reason: string }
-	| { type: 'group.hidden'; group_id: string };
+	| { type: 'group.hidden'; group_id: string }
+	| { type: 'workflow.item.created'; item_id: string; item_type: string; status: string }
+	| { type: 'workflow.item.updated'; item_id: string; item_type: string; status: string };
+
+/** Workflow inbox item from REST (snake_case). */
+export interface WireWorkflowItem {
+	id: string;
+	idempotency_key: string;
+	item_type: string;
+	status: string;
+	title: string;
+	body?: string | null;
+	payload: unknown;
+	organization_id?: string | null;
+	account_id?: string | null;
+	source_service: string;
+	action_deadline_ms?: number | null;
+	conversation_ref?: string | null;
+	created_at: string;
+	updated_at: string;
+}
+
+export interface WireListWorkflowResponse {
+	items: WireWorkflowItem[];
+}
+
+export interface WireWorkflowBadgeResponse {
+	open_count: number;
+}
 
 export interface WireMessagesListResponse {
 	messages: WireMessageResponse[];
@@ -151,9 +180,43 @@ export function fromWireUserFeedEvent(wire: WireUserFeedEvent): RelayerUserEvent
 		}
 		case 'group.hidden':
 			return { type: 'group.hidden', groupId: wire.group_id };
+		case 'workflow.item.created':
+			return {
+				type: 'workflow.item.created',
+				itemId: wire.item_id,
+				itemType: wire.item_type,
+				status: wire.status,
+			};
+		case 'workflow.item.updated':
+			return {
+				type: 'workflow.item.updated',
+				itemId: wire.item_id,
+				itemType: wire.item_type,
+				status: wire.status,
+			};
 		default:
 			return null;
 	}
+}
+
+/** Convert a workflow inbox REST row to a domain object. */
+export function fromWireWorkflowItem(wire: WireWorkflowItem): WorkflowItem {
+	return {
+		id: wire.id,
+		idempotencyKey: wire.idempotency_key,
+		itemType: wire.item_type,
+		status: wire.status,
+		title: wire.title,
+		body: wire.body ?? undefined,
+		payload: wire.payload,
+		organizationId: wire.organization_id ?? undefined,
+		accountId: wire.account_id ?? undefined,
+		sourceService: wire.source_service,
+		actionDeadlineMs: wire.action_deadline_ms ?? undefined,
+		conversationRef: wire.conversation_ref ?? undefined,
+		createdAt: wire.created_at,
+		updatedAt: wire.updated_at,
+	};
 }
 
 /** Convert a relayer JSON message to a RelayerMessage domain object. */

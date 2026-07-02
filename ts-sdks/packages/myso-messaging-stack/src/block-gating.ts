@@ -22,7 +22,7 @@ export class BlockGatingClient {
 
 	constructor(options: BlockGatingClientOptions) {
 		this.#baseUrl = options.socialServerUrl.replace(/\/$/, '');
-		this.#fetch = options.fetch ?? fetch;
+		this.#fetch = options.fetch ?? globalThis.fetch.bind(globalThis);
 	}
 
 	async checkEitherBlocked(a: string, b: string, options?: BlockCheckOptions): Promise<boolean> {

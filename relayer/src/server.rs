@@ -11,7 +11,8 @@ use tower_http::cors::{Any, CorsLayer};
 use tracing::info;
 
 use crate::auth::{
-    auth_middleware, create_membership_store_async, wallet_auth_middleware, AuthState,
+    auth_middleware, create_membership_store_async, internal_sync_middleware, wallet_auth_middleware,
+    AuthState, InternalSyncState,
 };
 use crate::config::Config;
 use crate::file_storage::FileStorageClient;
@@ -25,13 +26,17 @@ use crate::handlers::push_devices::{delete_push_token, post_push_token};
 use crate::handlers::unread_counts::post_unread_counts;
 use crate::handlers::user_read_state::{get_read_state, put_read_state};
 use crate::handlers::user_ws::user_ws_handler;
+use crate::handlers::workflow::{
+    ack_workflow_item, dismiss_workflow_item, ingest_workflow_item_internal, list_workflow_items,
+    workflow_badge,
+};
 use crate::handlers::ws::ws_handler;
 use crate::services::{
     AttributionVerifyService, BlockCheckService, FileStorageSyncService, MembershipSyncService,
     MessageGateService, PgListenerService, PushService, RealtimeHub,
 };
 use crate::state::AppState;
-use crate::storage::{create_agent_group_store_async, create_storage_async};
+use crate::storage::{create_agent_group_store_async, create_storage_async, create_workflow_store_async};
 
 pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     dotenvy::dotenv().ok();
@@ -58,6 +63,12 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         database_url.as_deref(),
     )
     .await;
+    let workflow_store = create_workflow_store_async(
+        config.membership_store_type.clone(),
+        database_url.as_deref(),
+        config.workflow_enabled,
+    )
+    .await;
     let block_check = BlockCheckService::from_config(&config);
     let message_gate = MessageGateService::from_config(&config);
     let push_service = PushService::from_config(&config);
@@ -68,6 +79,8 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         sync_tx,
         membership_store.clone(),
         agent_group_store.clone(),
+        workflow_store.clone(),
+        config.workflow_enabled,
         AttributionVerifyService::from_config(&config),
         block_check,
         message_gate.clone(),
@@ -97,6 +110,8 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         &config,
         membership_store.clone(),
         agent_group_store.clone(),
+        workflow_store.clone(),
+        config.workflow_enabled,
         storage.clone(),
         message_gate,
         realtime_hub,
@@ -159,7 +174,11 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .route(
             "/agent-conversations/by-agent/:derived_address",
             get(agent_groups::list_groups_for_agent),
-        );
+        )
+        .route("/workflow/items", get(list_workflow_items))
+        .route("/workflow/items/:id/ack", post(ack_workflow_item))
+        .route("/workflow/items/:id/dismiss", post(dismiss_workflow_item))
+        .route("/workflow/badge", get(workflow_badge));
 
     let realtime_routes = Router::new()
         .route("/ws", get(ws_handler))
@@ -190,7 +209,17 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     let public_routes = Router::new()
         .route("/health_check", get(health_check))
-        .with_state(app_state);
+        .with_state(app_state.clone());
+
+    let internal_routes = Router::new()
+        .route("/internal/workflow/items", post(ingest_workflow_item_internal))
+        .layer(middleware::from_fn_with_state(
+            InternalSyncState {
+                config: config.clone(),
+            },
+            internal_sync_middleware,
+        ))
+        .with_state(app_state.clone());
 
     // WARNING: This permissive CORS configuration is for development/demo purposes only.
     // In production, restrict allow_origin to specific trusted domains.
@@ -201,6 +230,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     let app = Router::new()
         .merge(public_routes)
+        .merge(internal_routes)
         .merge(authenticated_routes)
         .layer(cors);
 

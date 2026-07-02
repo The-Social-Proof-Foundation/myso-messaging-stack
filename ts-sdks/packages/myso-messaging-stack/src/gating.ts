@@ -27,7 +27,7 @@ export class MessagingGatingClient {
 
 	constructor(options: MessagingGatingClientOptions) {
 		this.#baseUrl = options.socialServerUrl.replace(/\/$/, '');
-		this.#fetch = options.fetch ?? fetch;
+		this.#fetch = options.fetch ?? globalThis.fetch.bind(globalThis);
 	}
 
 	async getWalletMessagingPolicy(wallet: string): Promise<WalletMessagingPolicy | null> {

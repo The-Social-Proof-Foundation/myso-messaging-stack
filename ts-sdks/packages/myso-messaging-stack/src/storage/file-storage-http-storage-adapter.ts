@@ -66,7 +66,7 @@ export class FileStorageHttpStorageAdapter implements StorageAdapter {
 		this.#publisherUrl = config.publisherUrl.replace(/\/+$/, '');
 		this.#aggregatorUrl = config.aggregatorUrl.replace(/\/+$/, '');
 		this.#epochs = config.epochs;
-		this.#fetch = config.fetch ?? globalThis.fetch;
+		this.#fetch = config.fetch ?? globalThis.fetch.bind(globalThis);
 		this.#timeout = config.timeout ?? DEFAULT_HTTP_TIMEOUT;
 		this.#onError = config.onError;
 	}

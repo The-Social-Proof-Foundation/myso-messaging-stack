@@ -110,6 +110,11 @@ pub struct Config {
     pub realtime_enabled: bool,
     /// WebSocket presence refresh interval in seconds (default: 30).
     pub ws_ping_interval_secs: u64,
+
+    /// Enable workflow inbox domain (default: false until producers deploy).
+    pub workflow_enabled: bool,
+    /// Shared secret for internal ingest routes (`x-internal-sync-secret`).
+    pub internal_sync_secret: Option<String>,
 }
 
 impl Config {
@@ -252,6 +257,11 @@ impl Config {
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(30);
+        let workflow_enabled = env::var("WORKFLOW_ENABLED")
+            .ok()
+            .map(|v| v == "true" || v == "1")
+            .unwrap_or(false);
+        let internal_sync_secret = env::var("INTERNAL_SYNC_SECRET").ok();
 
         let config = Self {
             port,
@@ -286,6 +296,8 @@ impl Config {
             apns_environment,
             realtime_enabled,
             ws_ping_interval_secs,
+            workflow_enabled,
+            internal_sync_secret,
         };
 
         info!("Configuration loaded: {:?}", config);
@@ -328,6 +340,8 @@ impl Default for Config {
             apns_environment: "sandbox".to_string(),
             realtime_enabled: true,
             ws_ping_interval_secs: 30,
+            workflow_enabled: false,
+            internal_sync_secret: None,
         }
     }
 }

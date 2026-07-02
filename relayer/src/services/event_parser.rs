@@ -88,6 +88,129 @@ pub struct FollowChangedEvent {
     pub following: bool,
 }
 
+/// Spend approval lifecycle from `social_contracts::ai_credit` (social package).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AiCreditApprovalEvent {
+    SpendApproved {
+        balance_id: String,
+        agent_object_id: String,
+        approval_nonce: u64,
+        max_amount_mist: u64,
+        expires_at_ms: u64,
+        approved_by: String,
+        approved_by_agent_id: Option<String>,
+        organization_id: Option<String>,
+        timestamp_ms: u64,
+    },
+    SpendApprovalRevoked {
+        balance_id: String,
+        agent_object_id: String,
+        approval_nonce: u64,
+        revoked_by: String,
+        timestamp_ms: u64,
+    },
+    SpendApprovalConsumed {
+        balance_id: String,
+        agent_object_id: String,
+        approval_nonce: u64,
+        amount_mist: u64,
+        approved_by: String,
+        timestamp_ms: u64,
+    },
+}
+
+impl AiCreditApprovalEvent {
+    pub fn balance_id(&self) -> &str {
+        match self {
+            Self::SpendApproved { balance_id, .. }
+            | Self::SpendApprovalRevoked { balance_id, .. }
+            | Self::SpendApprovalConsumed { balance_id, .. } => balance_id,
+        }
+    }
+
+    pub fn agent_object_id(&self) -> &str {
+        match self {
+            Self::SpendApproved { agent_object_id, .. }
+            | Self::SpendApprovalRevoked { agent_object_id, .. }
+            | Self::SpendApprovalConsumed { agent_object_id, .. } => agent_object_id,
+        }
+    }
+
+    pub fn actor_address(&self) -> &str {
+        match self {
+            Self::SpendApproved { approved_by, .. }
+            | Self::SpendApprovalConsumed { approved_by, .. } => approved_by,
+            Self::SpendApprovalRevoked { revoked_by, .. } => revoked_by,
+        }
+    }
+
+    pub fn organization_id(&self) -> Option<&str> {
+        match self {
+            Self::SpendApproved { organization_id, .. } => organization_id.as_deref(),
+            Self::SpendApprovalRevoked { .. } | Self::SpendApprovalConsumed { .. } => None,
+        }
+    }
+
+    pub fn timestamp_ms(&self) -> u64 {
+        match self {
+            Self::SpendApproved { timestamp_ms, .. }
+            | Self::SpendApprovalRevoked { timestamp_ms, .. }
+            | Self::SpendApprovalConsumed { timestamp_ms, .. } => *timestamp_ms,
+        }
+    }
+
+    pub fn approval_nonce(&self) -> u64 {
+        match self {
+            Self::SpendApproved { approval_nonce, .. }
+            | Self::SpendApprovalRevoked { approval_nonce, .. }
+            | Self::SpendApprovalConsumed { approval_nonce, .. } => *approval_nonce,
+        }
+    }
+
+    /// JSON merged into the workflow item payload when chain sync transitions the row.
+    pub fn workflow_payload_patch(&self) -> serde_json::Value {
+        match self {
+            Self::SpendApproved {
+                approval_nonce,
+                max_amount_mist,
+                expires_at_ms,
+                approved_by_agent_id,
+                organization_id,
+                timestamp_ms,
+                ..
+            } => serde_json::json!({
+                "chain_event": "spend_approved",
+                "approval_nonce": approval_nonce,
+                "max_amount_mist": max_amount_mist,
+                "expires_at_ms": expires_at_ms,
+                "approved_by_agent_id": approved_by_agent_id,
+                "organization_id": organization_id,
+                "timestamp_ms": timestamp_ms,
+            }),
+            Self::SpendApprovalRevoked {
+                approval_nonce,
+                timestamp_ms,
+                ..
+            } => serde_json::json!({
+                "chain_event": "spend_approval_revoked",
+                "approval_nonce": approval_nonce,
+                "timestamp_ms": timestamp_ms,
+            }),
+            Self::SpendApprovalConsumed {
+                approval_nonce,
+                amount_mist,
+                timestamp_ms,
+                ..
+            } => serde_json::json!({
+                "chain_event": "spend_approval_consumed",
+                "approval_nonce": approval_nonce,
+                "amount_mist": amount_mist,
+                "timestamp_ms": timestamp_ms,
+            }),
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 struct MemberEventBcs {
     group_id: [u8; 32],
@@ -152,6 +275,38 @@ struct BcsFollowChanged {
     follower: [u8; 32],
     /// `following` on FollowEvent, `unfollowed` on UnfollowEvent — same layout.
     followee: [u8; 32],
+}
+
+#[derive(Debug, Deserialize)]
+struct BcsAiCreditSpendApproved {
+    balance_id: BcsMoveObjectId,
+    agent_object_id: BcsMoveObjectId,
+    approval_nonce: u64,
+    max_amount_mist: u64,
+    expires_at_ms: u64,
+    approved_by: [u8; 32],
+    approved_by_agent_id: Option<BcsMoveObjectId>,
+    organization_id: Option<BcsMoveObjectId>,
+    timestamp_ms: u64,
+}
+
+#[derive(Debug, Deserialize)]
+struct BcsAiCreditSpendApprovalRevoked {
+    balance_id: BcsMoveObjectId,
+    agent_object_id: BcsMoveObjectId,
+    approval_nonce: u64,
+    revoked_by: [u8; 32],
+    timestamp_ms: u64,
+}
+
+#[derive(Debug, Deserialize)]
+struct BcsAiCreditSpendApprovalConsumed {
+    balance_id: BcsMoveObjectId,
+    agent_object_id: BcsMoveObjectId,
+    approval_nonce: u64,
+    amount_mist: u64,
+    approved_by: [u8; 32],
+    timestamp_ms: u64,
 }
 
 /// Returns true when the event type uses the messaging witness generic.
@@ -370,6 +525,68 @@ pub fn parse_follow_changed_event(
     })
 }
 
+/// Parses ai_credit spend approval lifecycle events from the social package.
+pub fn parse_ai_credit_approval_event(
+    event: &Event,
+    social_package_id: &str,
+) -> Option<AiCreditApprovalEvent> {
+    let event_type = event.event_type.as_ref()?;
+    if !is_event_from_package(event_type, social_package_id) {
+        return None;
+    }
+    let contents = event.contents.as_ref()?;
+    let bcs_bytes = contents.value.as_ref()?;
+
+    if event_type.contains("::ai_credit::AiCreditSpendApproved") {
+        let event_data: BcsAiCreditSpendApproved = bcs::from_bytes(bcs_bytes)
+            .map_err(|e| warn!("Failed to parse AiCreditSpendApproved BCS: {}", e))
+            .ok()?;
+        return Some(AiCreditApprovalEvent::SpendApproved {
+            balance_id: format_object_id(&event_data.balance_id),
+            agent_object_id: format_object_id(&event_data.agent_object_id),
+            approval_nonce: event_data.approval_nonce,
+            max_amount_mist: event_data.max_amount_mist,
+            expires_at_ms: event_data.expires_at_ms,
+            approved_by: format_address(event_data.approved_by),
+            approved_by_agent_id: event_data
+                .approved_by_agent_id
+                .as_ref()
+                .map(format_object_id),
+            organization_id: event_data
+                .organization_id
+                .as_ref()
+                .map(format_object_id),
+            timestamp_ms: event_data.timestamp_ms,
+        });
+    }
+    if event_type.contains("::ai_credit::AiCreditSpendApprovalRevoked") {
+        let event_data: BcsAiCreditSpendApprovalRevoked = bcs::from_bytes(bcs_bytes)
+            .map_err(|e| warn!("Failed to parse AiCreditSpendApprovalRevoked BCS: {}", e))
+            .ok()?;
+        return Some(AiCreditApprovalEvent::SpendApprovalRevoked {
+            balance_id: format_object_id(&event_data.balance_id),
+            agent_object_id: format_object_id(&event_data.agent_object_id),
+            approval_nonce: event_data.approval_nonce,
+            revoked_by: format_address(event_data.revoked_by),
+            timestamp_ms: event_data.timestamp_ms,
+        });
+    }
+    if event_type.contains("::ai_credit::AiCreditSpendApprovalConsumed") {
+        let event_data: BcsAiCreditSpendApprovalConsumed = bcs::from_bytes(bcs_bytes)
+            .map_err(|e| warn!("Failed to parse AiCreditSpendApprovalConsumed BCS: {}", e))
+            .ok()?;
+        return Some(AiCreditApprovalEvent::SpendApprovalConsumed {
+            balance_id: format_object_id(&event_data.balance_id),
+            agent_object_id: format_object_id(&event_data.agent_object_id),
+            approval_nonce: event_data.approval_nonce,
+            amount_mist: event_data.amount_mist,
+            approved_by: format_address(event_data.approved_by),
+            timestamp_ms: event_data.timestamp_ms,
+        });
+    }
+    None
+}
+
 fn is_groups_package_event(event_type: &str, groups_package_id: &str) -> bool {
     let normalized_pkg = groups_package_id.trim_start_matches("0x").to_lowercase();
     let event_type_lower = event_type.to_lowercase();
@@ -581,5 +798,62 @@ mod tests {
             Some(format!("0x{}", hex::encode(org_id)))
         );
         assert_eq!(parsed.creator_identity_class, 1);
+    }
+
+    #[test]
+    fn parse_ai_credit_spend_approved_event() {
+        #[derive(serde::Serialize)]
+        struct BcsApproved {
+            balance_id: BcsMoveObjectId,
+            agent_object_id: BcsMoveObjectId,
+            approval_nonce: u64,
+            max_amount_mist: u64,
+            expires_at_ms: u64,
+            approved_by: [u8; 32],
+            approved_by_agent_id: Option<BcsMoveObjectId>,
+            organization_id: Option<BcsMoveObjectId>,
+            timestamp_ms: u64,
+        }
+
+        let balance = [0x11u8; 32];
+        let agent = [0x22u8; 32];
+        let approver = [0x33u8; 32];
+        let bcs = bcs::to_bytes(&BcsApproved {
+            balance_id: BcsMoveObjectId { bytes: balance },
+            agent_object_id: BcsMoveObjectId { bytes: agent },
+            approval_nonce: 1,
+            max_amount_mist: 1_000,
+            expires_at_ms: 9_999_999,
+            approved_by: approver,
+            approved_by_agent_id: None,
+            organization_id: None,
+            timestamp_ms: 1,
+        })
+        .unwrap();
+
+        let mut bcs_msg = myso_rpc::proto::myso::rpc::v2::Bcs::default();
+        bcs_msg.value = Some(bcs.into());
+        let mut event = myso_rpc::proto::myso::rpc::v2::Event::default();
+        event.event_type = Some("0x50c1::ai_credit::AiCreditSpendApproved".to_string());
+        event.contents = Some(bcs_msg);
+
+        let parsed = parse_ai_credit_approval_event(&event, "0x50c1")
+            .expect("approval event should parse");
+        assert_eq!(
+            parsed,
+            AiCreditApprovalEvent::SpendApproved {
+                balance_id: format!("0x{}", hex::encode(balance)),
+                agent_object_id: format!("0x{}", hex::encode(agent)),
+                approval_nonce: 1,
+                max_amount_mist: 1_000,
+                expires_at_ms: 9_999_999,
+                approved_by: format!("0x{}", hex::encode(approver)),
+                approved_by_agent_id: None,
+                organization_id: None,
+                timestamp_ms: 1,
+            }
+        );
+        assert_eq!(parsed.approval_nonce(), 1);
+        assert_eq!(parsed.workflow_payload_patch()["max_amount_mist"], 1_000);
     }
 }

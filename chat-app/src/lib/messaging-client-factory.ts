@@ -5,6 +5,7 @@ import {
 } from '@socialproof/myso-messaging-stack';
 import type { Signer } from '@socialproof/myso/cryptography';
 import {
+  JsonRpcHTTPTransport,
   MySoJsonRpcClient,
   getJsonRpcFullnodeUrl,
 } from '@socialproof/myso/jsonRpc';
@@ -38,10 +39,18 @@ export function getMessagingNetwork(): string {
 }
 
 export function getMessagingRpcUrl(): string {
-  return (
-    import.meta.env.VITE_MYSO_RPC_URL ||
-    getJsonRpcFullnodeUrl(KNOWN_RPC_NETWORK)
-  );
+  const envUrl = import.meta.env.VITE_MYSO_RPC_URL;
+
+  if (import.meta.env.DEV && NETWORK_RAW === 'localnet' && envUrl?.startsWith('http')) {
+    // Same-origin Vite proxy avoids CORS; target is VITE_MYSO_RPC_URL (see vite.config.ts).
+    return '/api/rpc';
+  }
+
+  if (envUrl) {
+    return envUrl;
+  }
+
+  return getJsonRpcFullnodeUrl(KNOWN_RPC_NETWORK);
 }
 
 export function getGenesisGraphqlUrl(): string | undefined {
@@ -95,10 +104,17 @@ function buildAttachmentsConfig():
 
 const attachmentsConfig = buildAttachmentsConfig();
 
+/** Bound fetch for browser SDK clients (avoids "Illegal invocation" when stored as a method). */
+const browserFetch: typeof fetch = (...args) => fetch(...args);
+
 export function createBaseMySoRpcClient(): MySoJsonRpcClient {
+  const url = getMessagingRpcUrl();
   return new MySoJsonRpcClient({
-    url: getMessagingRpcUrl(),
     network: NETWORK_RAW,
+    transport: new JsonRpcHTTPTransport({
+      url,
+      fetch: browserFetch,
+    }),
   });
 }
 

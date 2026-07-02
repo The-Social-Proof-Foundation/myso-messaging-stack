@@ -308,6 +308,11 @@ pub trait StorageAdapter: Send + Sync {
 
     async fn get_presence_last_seen(&self, wallet: &str) -> StorageResult<Option<chrono::DateTime<chrono::Utc>>>;
 
+    /// Postgres pool for cross-instance NOTIFY when this backend uses Postgres.
+    fn postgres_pool(&self) -> Option<&sqlx::PgPool> {
+        None
+    }
+
     // === Cross-instance realtime signal (ephemeral events) ===
 
     /// Broadcasts a pre-serialized realtime payload to all relayer instances.

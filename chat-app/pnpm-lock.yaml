@@ -24,8 +24,8 @@ importers:
         specifier: ^0.0.1
         version: 0.0.1(@socialproof/bcs@0.0.2)(@socialproof/myso@0.0.4(typescript@5.8.3))
       '@socialproof/myso-messaging-stack':
-        specifier: ^0.0.8
-        version: 0.0.8(@socialproof/bcs@0.0.2)(@socialproof/mydata@0.0.4(@socialproof/myso@0.0.4(typescript@5.8.3)))(@socialproof/myso-groups@0.0.1(@socialproof/bcs@0.0.2)(@socialproof/myso@0.0.4(typescript@5.8.3)))(@socialproof/myso@0.0.4(typescript@5.8.3))
+        specifier: ./../ts-sdks/packages/myso-messaging-stack
+        version: link:../ts-sdks/packages/myso-messaging-stack
       '@socialproof/mysocial-auth':
         specifier: ^0.12.4
         version: 0.12.4
@@ -524,14 +524,6 @@ packages:
     peerDependencies:
       '@socialproof/bcs': ^0.0.2
       '@socialproof/myso': ^0.0.4
-
-  '@socialproof/myso-messaging-stack@0.0.8':
-    resolution: {integrity: sha512-0aHmBzCcDBqTdbLcmAsHZgSeTYwPPRJSDHw9XJuZNGRAu7Y7qOS5PKaeHKQEd3gxdvlLbz6d1JRtMoKmYrvQ7Q==}
-    peerDependencies:
-      '@socialproof/bcs': ^0.0.2
-      '@socialproof/mydata': ^0.0.4
-      '@socialproof/myso': ^0.0.4
-      '@socialproof/myso-groups': ^0.0.1
 
   '@socialproof/myso@0.0.4':
     resolution: {integrity: sha512-3SbHrYfv9JdoFQuKAcdWXPUc7viVeMtkmm2/fnQiK7lvg0kmFKt00JEt1apDlG1T0ltPv/uMYUv3hL+cerRDyQ==}
@@ -1330,13 +1322,6 @@ snapshots:
     dependencies:
       '@socialproof/bcs': 0.0.2
       '@socialproof/myso': 0.0.4(typescript@5.8.3)
-
-  '@socialproof/myso-messaging-stack@0.0.8(@socialproof/bcs@0.0.2)(@socialproof/mydata@0.0.4(@socialproof/myso@0.0.4(typescript@5.8.3)))(@socialproof/myso-groups@0.0.1(@socialproof/bcs@0.0.2)(@socialproof/myso@0.0.4(typescript@5.8.3)))(@socialproof/myso@0.0.4(typescript@5.8.3))':
-    dependencies:
-      '@socialproof/bcs': 0.0.2
-      '@socialproof/mydata': 0.0.4(@socialproof/myso@0.0.4(typescript@5.8.3))
-      '@socialproof/myso': 0.0.4(typescript@5.8.3)
-      '@socialproof/myso-groups': 0.0.1(@socialproof/bcs@0.0.2)(@socialproof/myso@0.0.4(typescript@5.8.3))
 
   '@socialproof/myso@0.0.4(typescript@5.8.3)':
     dependencies:

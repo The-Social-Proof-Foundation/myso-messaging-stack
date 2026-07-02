@@ -187,7 +187,61 @@ export type RelayerUserEvent =
 			/** A conversation should leave the sidebar. */
 			type: 'group.hidden';
 			groupId: string;
+	  }
+	| {
+			/** A workflow inbox item was created for this wallet. */
+			type: 'workflow.item.created';
+			itemId: string;
+			itemType: string;
+			status: string;
+	  }
+	| {
+			/** A workflow inbox item changed status. */
+			type: 'workflow.item.updated';
+			itemId: string;
+			itemType: string;
+			status: string;
 	  };
+
+/** Metadata-only workflow inbox item (not E2E chat). */
+export interface WorkflowItem {
+	id: string;
+	idempotencyKey: string;
+	itemType: string;
+	status: string;
+	title: string;
+	body?: string;
+	payload: unknown;
+	organizationId?: string;
+	accountId?: string;
+	sourceService: string;
+	actionDeadlineMs?: number;
+	conversationRef?: string;
+	createdAt: string;
+	updatedAt: string;
+}
+
+export interface ListWorkflowItemsParams {
+	signer: Signer;
+	status?: string;
+	itemType?: string;
+	cursor?: string;
+	limit?: number;
+}
+
+export interface AckWorkflowItemParams {
+	signer: Signer;
+	itemId: string;
+}
+
+export interface DismissWorkflowItemParams {
+	signer: Signer;
+	itemId: string;
+}
+
+export interface WorkflowBadgeParams {
+	signer: Signer;
+}
 
 export interface SubscribeUserEventsParams {
 	signer: Signer;

@@ -22,6 +22,14 @@ export default defineConfig(({ mode }) => {
           changeOrigin: true,
           rewrite: (path) => path.replace(/^\/api\/graphql/, '/graphql'),
         },
+        '/api/rpc': {
+          target:
+            env.VITE_MYSO_RPC_URL?.startsWith('http')
+              ? env.VITE_MYSO_RPC_URL
+              : 'http://127.0.0.1:9001',
+          changeOrigin: true,
+          rewrite: (path) => path.replace(/^\/api\/rpc/, ''),
+        },
       },
     },
   };
