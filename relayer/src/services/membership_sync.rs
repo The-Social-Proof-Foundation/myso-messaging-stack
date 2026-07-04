@@ -33,11 +33,12 @@ use super::agent_group_detector::{
 use super::event_parser::{
     parse_agent_detection_event, parse_agent_group_created_event, parse_ai_credit_approval_event,
     parse_follow_changed_event, parse_myso_event, parse_org_invitation_chain_event,
-    parse_org_memory_permission_chain_event, parse_paid_message_sent_event,
-    parse_paid_policy_updated_event, AgentDetectionEvent, AiCreditApprovalEvent, GroupsEvent,
+    parse_org_memory_permission_chain_event,     parse_paid_message_sent_event, parse_paid_policy_updated_event,
+    parse_messaging_config_updated_event, AgentDetectionEvent, AiCreditApprovalEvent, GroupsEvent,
     OrgInvitationChainEvent, OrgMemoryPermissionChainEvent,
 };
 use super::message_gate::MessageGateService;
+use super::messaging_config::{MessagingConfigCache, MessagingConfigSnapshot};
 use super::push::PushService;
 use super::realtime::{notify_user_feed_event, DiscoveryReason, RealtimeHub, UserFeedEvent};
 
@@ -56,6 +57,8 @@ pub struct MembershipSyncService {
     storage: Arc<dyn StorageAdapter>,
     /// Shared with HTTP handlers — checkpoint events refresh its follow/policy caches.
     message_gate: MessageGateService,
+    /// Hot-reloadable on-chain MessagingConfig singleton.
+    messaging_config: MessagingConfigCache,
     /// User-feed publisher: local on in-memory storage, NOTIFY-only on Postgres.
     realtime_hub: Arc<RealtimeHub>,
     /// Push service — used to notify offline recipients on chain-driven transitions.
@@ -72,6 +75,7 @@ impl MembershipSyncService {
         workflow_enabled: bool,
         storage: Arc<dyn StorageAdapter>,
         message_gate: MessageGateService,
+        messaging_config: MessagingConfigCache,
         realtime_hub: Arc<RealtimeHub>,
         push_service: PushService,
     ) -> Self {
@@ -95,6 +99,7 @@ impl MembershipSyncService {
             workflow_enabled,
             storage,
             message_gate,
+            messaging_config,
             realtime_hub,
             push_service,
             last_cursor,
@@ -484,6 +489,22 @@ impl MembershipSyncService {
                     );
                     self.message_gate
                         .apply_policy_update(&policy.wallet, policy.enabled, policy.min_cost);
+                }
+
+                if let Some(config_event) =
+                    parse_messaging_config_updated_event(event, &self.messaging_package_id)
+                {
+                    debug!(
+                        "MessagingConfigUpdated: min_reply_chars={} payment_expiration_ms={}",
+                        config_event.min_reply_chars, config_event.payment_expiration_ms
+                    );
+                    self.messaging_config.apply_update(MessagingConfigSnapshot {
+                        paid_msg_platform_fee_bps: config_event.paid_msg_platform_fee_bps,
+                        paid_msg_treasury_fee_bps: config_event.paid_msg_treasury_fee_bps,
+                        payment_expiration_ms: config_event.payment_expiration_ms,
+                        min_reply_chars: config_event.min_reply_chars,
+                        max_dedupe_key_bytes: config_event.max_dedupe_key_bytes,
+                    });
                 }
 
                 if let Some(follow) = parse_follow_changed_event(event, &self.social_package_id) {

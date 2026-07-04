@@ -11,13 +11,16 @@ import { Transaction } from '@socialproof/myso/transactions';
 import { describe, expect, it } from 'vitest';
 
 import { mysoMessagingStack } from '../../src/client.js';
-import { createPaidMessagingClient, PAID_MSG_NO_PLATFORM_FEE_RECIPIENT } from '../../src/paid-messaging.js';
+import {
+	createPaidMessagingClient,
+	PAID_MSG_NO_PLATFORM_FEE_RECIPIENT,
+} from '../../src/paid-messaging.js';
 import type { MySoMessagingStackEncryptionOptions } from '../../src/types.js';
 import { createMockMyDataClient } from './helpers/mock-mydata-client.js';
 import {
-  MOCK_ECOSYSTEM_TREASURY_ID,
-  MOCK_PACKAGE_CONFIG,
-  MOCK_PACKAGE_ID,
+	MOCK_ECOSYSTEM_TREASURY_ID,
+	MOCK_PACKAGE_CONFIG,
+	MOCK_PACKAGE_ID,
 } from './helpers/mock-package-config.js';
 
 const MOCK_PERMISSIONED_GROUPS_PACKAGE_ID = '0x' + 'ff'.repeat(32);
@@ -94,14 +97,14 @@ function commandsOf(transaction: Transaction): CommandLike[] {
 	return transaction.getData().commands as CommandLike[];
 }
 
-function findMoveCall(
-	transaction: Transaction,
-	fn: string,
-): CommandLike['MoveCall'] | undefined {
+function findMoveCall(transaction: Transaction, fn: string): CommandLike['MoveCall'] | undefined {
 	return commandsOf(transaction).find((cmd) => cmd.MoveCall?.function === fn)?.MoveCall;
 }
 
-function objectInputId(transaction: Transaction, arg: ArgumentLike | undefined): string | undefined {
+function objectInputId(
+	transaction: Transaction,
+	arg: ArgumentLike | undefined,
+): string | undefined {
 	if (arg?.$kind !== 'Input' || typeof arg.Input !== 'number') {
 		return undefined;
 	}
@@ -146,7 +149,12 @@ describe('PaidMessagingClient builders', () => {
 
 	it('buildOpenPaidDm returns derive-consistent ids and a create -> escrow -> share PTB', () => {
 		const uuid = 'open-paid-dm-uuid';
-		const { transaction, uuid: outUuid, groupId, messageLogId } = paid.buildOpenPaidDm({
+		const {
+			transaction,
+			uuid: outUuid,
+			groupId,
+			messageLogId,
+		} = paid.buildOpenPaidDm({
 			sender: SENDER,
 			recipient: RECIPIENT,
 			escrowAmount: 10_000_000_000n,
@@ -162,9 +170,7 @@ describe('PaidMessagingClient builders', () => {
 		// Group creation is an async thunk (DEK generation + memory-account
 		// routing resolve at build time); the escrow MoveCall is added eagerly.
 		const commands = commandsOf(transaction);
-		expect(
-			commands.some((cmd) => cmd.$Intent?.name === 'AsyncTransactionThunk'),
-		).toBe(true);
+		expect(commands.some((cmd) => cmd.$Intent?.name === 'AsyncTransactionThunk')).toBe(true);
 
 		const escrowCall = findMoveCall(transaction, 'send_paid_message_digest');
 		expect(escrowCall).toBeDefined();
@@ -172,17 +178,15 @@ describe('PaidMessagingClient builders', () => {
 		// The group/log must be same-transaction results (NestedResult), never
 		// object inputs: the derived ids do not exist on-chain until this
 		// transaction executes ("input objects invalid" otherwise).
-		// send_paid_message_digest args: [version, group, log, ...].
-		const groupArg = escrowCall?.arguments?.[1];
-		const logArg = escrowCall?.arguments?.[2];
+		// send_paid_message_digest args: [version, config, group, log, ...].
+		const groupArg = escrowCall?.arguments?.[2];
+		const logArg = escrowCall?.arguments?.[3];
 		expect(groupArg?.$kind).toBe('NestedResult');
 		expect(logArg?.$kind).toBe('NestedResult');
 
 		// The create thunk placeholder precedes the escrow call, preserving
 		// on-chain ordering (group must exist before the paid send).
-		const thunkIndex = commands.findIndex(
-			(cmd) => cmd.$Intent?.name === 'AsyncTransactionThunk',
-		);
+		const thunkIndex = commands.findIndex((cmd) => cmd.$Intent?.name === 'AsyncTransactionThunk');
 		const escrowIndex = commands.findIndex(
 			(cmd) => cmd.MoveCall?.function === 'send_paid_message_digest',
 		);
@@ -193,8 +197,7 @@ describe('PaidMessagingClient builders', () => {
 		// three transfer::public_share_object calls following the escrow call.
 		const shareIndexes = commands
 			.map((cmd, idx) =>
-				cmd.MoveCall?.module === 'transfer' &&
-				cmd.MoveCall.function === 'public_share_object'
+				cmd.MoveCall?.module === 'transfer' && cmd.MoveCall.function === 'public_share_object'
 					? idx
 					: -1,
 			)

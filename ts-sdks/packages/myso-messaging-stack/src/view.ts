@@ -16,6 +16,7 @@ import { METADATA_SCHEMA_VERSION, metadataKeyType } from './constants.js';
 import { GENESIS_PACKAGE_IDS } from './genesis.js';
 import type { MySoMessagingStackDerive } from './derive.js';
 import { requiresPaymentFrom } from './contracts/messaging/paid_messaging_policy.js';
+import { MessagingConfig } from './contracts/messaging/messaging_config.js';
 import { MySoMessagingStackClientError } from './error.js';
 import type {
 	EncryptedKeyViewOptions,
@@ -23,6 +24,14 @@ import type {
 	LookupGroupByHandleViewOptions,
 	MySoMessagingStackPackageConfig,
 } from './types.js';
+
+export interface MessagingConfigView {
+	paidMsgPlatformFeeBps: number;
+	paidMsgTreasuryFeeBps: number;
+	paymentExpirationMs: number;
+	minReplyChars: number;
+	maxDedupeKeyBytes: number;
+}
 
 export interface MySoMessagingStackViewOptions {
 	packageConfig: MySoMessagingStackPackageConfig;
@@ -334,6 +343,29 @@ export class MySoMessagingStackView {
 		return {
 			enabled: minCost !== null,
 			minCost,
+		};
+	}
+
+	/**
+	 * Reads the on-chain `MessagingConfig` singleton (fees, reply rules, dedupe limits).
+	 */
+	async getMessagingConfig(): Promise<MessagingConfigView> {
+		const { object } = await this.#client.core.getObject({
+			objectId: this.#packageConfig.messagingConfigId,
+			include: { content: true },
+		});
+		if (!object.content) {
+			throw new MySoMessagingStackClientError(
+				`MessagingConfig object ${this.#packageConfig.messagingConfigId} has no content`,
+			);
+		}
+		const parsed = MessagingConfig.parse(object.content);
+		return {
+			paidMsgPlatformFeeBps: Number(parsed.paid_msg_platform_fee_bps),
+			paidMsgTreasuryFeeBps: Number(parsed.paid_msg_treasury_fee_bps),
+			paymentExpirationMs: Number(parsed.payment_expiration_ms),
+			minReplyChars: Number(parsed.min_reply_chars),
+			maxDedupeKeyBytes: Number(parsed.max_dedupe_key_bytes),
 		};
 	}
 

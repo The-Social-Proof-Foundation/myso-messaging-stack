@@ -254,7 +254,7 @@ fn escrow(group_id: &str, seq: i64, payer: &str, recipient: &str, amount: i64) -
         payer: payer.to_string(),
         recipient: recipient.to_string(),
         amount,
-        created_at_ms: 0,
+        created_at_ms: chrono::Utc::now().timestamp_millis(),
     }
 }
 

@@ -176,6 +176,7 @@ export interface MydataApproveAgentReaderArguments {
 	group: RawTransactionArgument<string>;
 	encryptionHistory: RawTransactionArgument<string>;
 	platform: RawTransactionArgument<string>;
+	memoryConfig: RawTransactionArgument<string>;
 	memoryAccount: RawTransactionArgument<string>;
 }
 export interface MydataApproveAgentReaderOptions {
@@ -188,6 +189,7 @@ export interface MydataApproveAgentReaderOptions {
 				group: RawTransactionArgument<string>,
 				encryptionHistory: RawTransactionArgument<string>,
 				platform: RawTransactionArgument<string>,
+				memoryConfig: RawTransactionArgument<string>,
 				memoryAccount: RawTransactionArgument<string>,
 		  ];
 }
@@ -204,6 +206,7 @@ export function mydataApproveAgentReader(options: MydataApproveAgentReaderOption
 		null,
 		null,
 		null,
+		null,
 		'0x2::clock::Clock',
 	] satisfies (string | null)[];
 	const parameterNames = [
@@ -212,6 +215,7 @@ export function mydataApproveAgentReader(options: MydataApproveAgentReaderOption
 		'group',
 		'encryptionHistory',
 		'platform',
+		'memoryConfig',
 		'memoryAccount',
 	];
 	return (tx: Transaction) =>

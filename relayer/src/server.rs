@@ -34,6 +34,7 @@ use crate::handlers::ws::ws_handler;
 use crate::services::{
     AttributionVerifyService, BlockCheckService, FileStorageSyncService, MembershipSyncService,
     MessageGateService, PgListenerService, PushService, RealtimeHub,
+    bootstrap_messaging_config_cache, fallback_messaging_config_cache,
 };
 use crate::state::AppState;
 use crate::storage::{create_agent_group_store_async, create_storage_async, create_workflow_store_async};
@@ -71,6 +72,13 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     .await;
     let block_check = BlockCheckService::from_config(&config);
     let message_gate = MessageGateService::from_config(&config);
+    let messaging_config = match bootstrap_messaging_config_cache(&config).await {
+        Ok(cache) => cache,
+        Err(e) => {
+            tracing::warn!("Failed to bootstrap MessagingConfig: {e}; using defaults");
+            fallback_messaging_config_cache()
+        }
+    };
     let push_service = PushService::from_config(&config);
     let realtime_hub = Arc::new(RealtimeHub::new());
 
@@ -84,6 +92,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         AttributionVerifyService::from_config(&config),
         block_check,
         message_gate.clone(),
+        messaging_config.clone(),
         push_service,
         realtime_hub.clone(),
         config.realtime_enabled,
@@ -115,6 +124,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         config.workflow_enabled,
         storage.clone(),
         message_gate,
+        messaging_config,
         realtime_hub,
         sync_push_service,
     );

@@ -120,6 +120,7 @@ async fn org_invitation_chain_sync_visible_via_workflow_api() {
         AttributionVerifyService::from_config(&Config::default()),
         BlockCheckService::from_config(&Config::default()),
         MessageGateService::from_config(&Config::default()),
+        messaging_relayer::services::fallback_messaging_config_cache(),
         PushService::from_config(&Config::default()),
         Arc::new(RealtimeHub::new()),
         true,

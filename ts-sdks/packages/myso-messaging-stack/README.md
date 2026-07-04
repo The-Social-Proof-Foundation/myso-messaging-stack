@@ -135,23 +135,23 @@ implementation using the [Discovery Indexer](../../file-storage-discovery-indexe
 
 ### Client Methods
 
-| Method                  | Description                                                                      |
-| ----------------------- | -------------------------------------------------------------------------------- |
-| `sendMessage()`         | Encrypt and send a message to a group                                            |
-| `getMessages()`         | Fetch and decrypt messages for a group                                           |
-| `getMessage()`          | Fetch and decrypt a single message                                               |
-| `editMessage()`         | Re-encrypt and update an existing message                                        |
-| `deleteMessage()`       | Soft-delete a message                                                            |
-| `subscribe()`           | Group stream: decrypted messages, reactions, typing, presence                    |
-| `subscribeUserEvents()` | Wallet stream: group activity, cross-device read state, group discovery          |
-| `listReactions()`       | List reaction tallies (count + reactors) keyed by message `order`                |
-| `addReaction()`         | Add the signer's emoji reaction to a message (idempotent)                        |
-| `removeReaction()`      | Remove the signer's emoji reaction from a message (idempotent)                   |
-| `getReadState()`        | Fetch and decrypt the wallet-scoped read-state blob                              |
-| `updateReadState()`     | Advance a read watermark (CAS-protected; merges + retries on conflict)           |
-| `getUnreadCounts()`     | Exact unread counts for many groups — one batch request                          |
-| `sendTyping()`          | Broadcast the signer's typing start/stop (ephemeral, fire-and-forget)            |
-| `getGroupPresence()`    | Presence snapshot for a group's members (live updates arrive via `subscribe()`)  |
+| Method                  | Description                                                                     |
+| ----------------------- | ------------------------------------------------------------------------------- |
+| `sendMessage()`         | Encrypt and send a message to a group                                           |
+| `getMessages()`         | Fetch and decrypt messages for a group                                          |
+| `getMessage()`          | Fetch and decrypt a single message                                              |
+| `editMessage()`         | Re-encrypt and update an existing message                                       |
+| `deleteMessage()`       | Soft-delete a message                                                           |
+| `subscribe()`           | Group stream: decrypted messages, reactions, typing, presence                   |
+| `subscribeUserEvents()` | Wallet stream: group activity, cross-device read state, group discovery         |
+| `listReactions()`       | List reaction tallies (count + reactors) keyed by message `order`               |
+| `addReaction()`         | Add the signer's emoji reaction to a message (idempotent)                       |
+| `removeReaction()`      | Remove the signer's emoji reaction from a message (idempotent)                  |
+| `getReadState()`        | Fetch and decrypt the wallet-scoped read-state blob                             |
+| `updateReadState()`     | Advance a read watermark (CAS-protected; merges + retries on conflict)          |
+| `getUnreadCounts()`     | Exact unread counts for many groups — one batch request                         |
+| `sendTyping()`          | Broadcast the signer's typing start/stop (ephemeral, fire-and-forget)           |
+| `getGroupPresence()`    | Presence snapshot for a group's members (live updates arrive via `subscribe()`) |
 
 Reactions use canonical Unicode emoji strings (`👍`, `❤️`, `👨‍👩‍👧‍👦`, ...). Use the exported
 `emojiToStorage()` helper to NFC-normalize input before comparing against stored entries.
@@ -162,22 +162,22 @@ compare-and-set retries + cross-device invalidation via `read_state.updated` use
 
 ### Transport Interface (`RelayerTransport`)
 
-| Method                  | Description                                                  |
-| ----------------------- | ------------------------------------------------------------ |
-| `sendMessage()`         | Send an encrypted message to the backend                     |
-| `fetchMessages()`       | Fetch paginated messages for a group                         |
-| `fetchMessage()`        | Fetch a single message by ID                                 |
-| `updateMessage()`       | Update message content                                       |
-| `deleteMessage()`       | Soft-delete a message                                        |
-| `subscribe()`           | Stream group events (messages, reactions, typing, presence)  |
-| `subscribeUserEvents()` | Stream the wallet-scoped user feed (`/v1/users/ws`)          |
-| `fetchUnreadCounts()`   | Batch exact unread counts (`POST /v1/users/unread-counts`)   |
-| `listGroupReactions()`  | List per-message reaction entries                            |
-| `postGroupReaction()`   | Add/remove the signer's reaction (idempotent)                |
-| `sendTyping()`          | Broadcast an ephemeral typing start/stop                     |
-| `getGroupPresence()`    | Presence snapshot for a group's members                      |
+| Method                  | Description                                                                           |
+| ----------------------- | ------------------------------------------------------------------------------------- |
+| `sendMessage()`         | Send an encrypted message to the backend                                              |
+| `fetchMessages()`       | Fetch paginated messages for a group                                                  |
+| `fetchMessage()`        | Fetch a single message by ID                                                          |
+| `updateMessage()`       | Update message content                                                                |
+| `deleteMessage()`       | Soft-delete a message                                                                 |
+| `subscribe()`           | Stream group events (messages, reactions, typing, presence)                           |
+| `subscribeUserEvents()` | Stream the wallet-scoped user feed (`/v1/users/ws`)                                   |
+| `fetchUnreadCounts()`   | Batch exact unread counts (`POST /v1/users/unread-counts`)                            |
+| `listGroupReactions()`  | List per-message reaction entries                                                     |
+| `postGroupReaction()`   | Add/remove the signer's reaction (idempotent)                                         |
+| `sendTyping()`          | Broadcast an ephemeral typing start/stop                                              |
+| `getGroupPresence()`    | Presence snapshot for a group's members                                               |
 | `putUserReadState()`    | CAS write — throws `ReadStateConflictError` with the current blob on version mismatch |
-| `disconnect()`          | Clean up transport resources                                 |
+| `disconnect()`          | Clean up transport resources                                                          |
 
 ### Recovery Exports
 

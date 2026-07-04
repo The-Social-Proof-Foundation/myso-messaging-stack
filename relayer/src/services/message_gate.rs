@@ -3,6 +3,10 @@
 //! on-chain checkpoint events (`FollowEvent` / `UnfollowEvent` /
 //! `PaidMessagingPolicyUpdated`).
 //!
+//! Escrow expiry and minimum reply length for paid DMs come from the shared
+//! [`MessagingConfigCache`](crate::services::messaging_config::MessagingConfigCache)
+//! (see `dm_gate` and `AppState::messaging_config`).
+//!
 //! Today this backs the paid-DM gate; future gates (moderation, rate limits, …)
 //! should slot into this service rather than adding new one-off services.
 

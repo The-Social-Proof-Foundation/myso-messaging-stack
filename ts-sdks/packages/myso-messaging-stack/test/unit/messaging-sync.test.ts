@@ -15,11 +15,7 @@ import type {
 import { ReadStateConflictError, RelayerTransportError } from '../../src/relayer/types.js';
 import { MessagingSyncManager } from '../../src/sync/messaging-sync-manager.js';
 import { decryptReadState, encryptReadState } from '../../src/sync/read-state-crypto.js';
-import {
-	createEmptyReadState,
-	mergeReadState,
-	type UserReadState,
-} from '../../src/sync/types.js';
+import { createEmptyReadState, mergeReadState, type UserReadState } from '../../src/sync/types.js';
 
 const keypair = Ed25519Keypair.generate();
 

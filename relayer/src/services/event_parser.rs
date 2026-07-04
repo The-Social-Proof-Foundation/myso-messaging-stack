@@ -79,6 +79,16 @@ pub struct PaidPolicyUpdatedEvent {
     pub min_cost: Option<u64>,
 }
 
+/// Global paid-messaging parameters from `messaging::messaging_config::MessagingConfigUpdatedEvent`.
+#[derive(Debug, Clone, Copy)]
+pub struct MessagingConfigUpdatedEvent {
+    pub paid_msg_platform_fee_bps: u64,
+    pub paid_msg_treasury_fee_bps: u64,
+    pub payment_expiration_ms: u64,
+    pub min_reply_chars: u32,
+    pub max_dedupe_key_bytes: u64,
+}
+
 /// Directional follow edge change from `social_contracts::social_graph::FollowEvent` /
 /// `UnfollowEvent` (both share the same two-address BCS layout).
 #[derive(Debug, Clone)]
@@ -505,6 +515,19 @@ struct BcsPaidPolicyUpdated {
 }
 
 #[derive(Debug, Deserialize)]
+struct BcsMessagingConfigUpdated {
+    #[allow(dead_code)]
+    updated_by: [u8; 32],
+    #[allow(dead_code)]
+    timestamp: u64,
+    paid_msg_platform_fee_bps: u64,
+    paid_msg_treasury_fee_bps: u64,
+    payment_expiration_ms: u64,
+    min_reply_chars: u32,
+    max_dedupe_key_bytes: u64,
+}
+
+#[derive(Debug, Deserialize)]
 struct BcsFollowChanged {
     follower: [u8; 32],
     /// `following` on FollowEvent, `unfollowed` on UnfollowEvent — same layout.
@@ -773,6 +796,40 @@ pub fn parse_paid_policy_updated_event(
     let contents = event.contents.as_ref()?;
     let bcs_bytes = contents.value.as_ref()?;
     parse_paid_policy_updated_bcs(bcs_bytes)
+}
+
+/// Parses MessagingConfigUpdated from BCS bytes (gate cache refresh).
+pub fn parse_messaging_config_updated_bcs(
+    bcs_bytes: &[u8],
+) -> Option<MessagingConfigUpdatedEvent> {
+    let event_data: BcsMessagingConfigUpdated = bcs::from_bytes(bcs_bytes)
+        .map_err(|e| warn!("Failed to parse MessagingConfigUpdated BCS: {}", e))
+        .ok()?;
+
+    Some(MessagingConfigUpdatedEvent {
+        paid_msg_platform_fee_bps: event_data.paid_msg_platform_fee_bps,
+        paid_msg_treasury_fee_bps: event_data.paid_msg_treasury_fee_bps,
+        payment_expiration_ms: event_data.payment_expiration_ms,
+        min_reply_chars: event_data.min_reply_chars,
+        max_dedupe_key_bytes: event_data.max_dedupe_key_bytes,
+    })
+}
+
+/// Parses MessagingConfigUpdated from a MySo checkpoint event (messaging package).
+pub fn parse_messaging_config_updated_event(
+    event: &Event,
+    messaging_package_id: &str,
+) -> Option<MessagingConfigUpdatedEvent> {
+    let event_type = event.event_type.as_ref()?;
+    if !event_type.contains("::messaging_config::MessagingConfigUpdatedEvent") {
+        return None;
+    }
+    if !is_event_from_package(event_type, messaging_package_id) {
+        return None;
+    }
+    let contents = event.contents.as_ref()?;
+    let bcs_bytes = contents.value.as_ref()?;
+    parse_messaging_config_updated_bcs(bcs_bytes)
 }
 
 /// Parses FollowEvent / UnfollowEvent from a MySo checkpoint event (social package).

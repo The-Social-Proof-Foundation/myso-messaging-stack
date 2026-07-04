@@ -122,9 +122,7 @@ export class HybridRelayerTransport implements RelayerTransport {
 		}
 	}
 
-	async *subscribeUserEvents(
-		params: SubscribeUserEventsParams,
-	): AsyncIterable<RelayerUserEvent> {
+	async *subscribeUserEvents(params: SubscribeUserEventsParams): AsyncIterable<RelayerUserEvent> {
 		if (!this.#preferWebSocket) {
 			yield* this.#http.subscribeUserEvents(params);
 			return;

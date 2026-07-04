@@ -10,6 +10,7 @@ use crate::auth::MembershipStore;
 use crate::config::Config;
 use crate::services::block_check::BlockCheckService;
 use crate::services::message_gate::MessageGateService;
+use crate::services::messaging_config::{fallback_messaging_config_cache, MessagingConfigCache};
 use crate::services::presence_sync::PresenceRegistry;
 use crate::services::push::PushService;
 use crate::services::realtime::RealtimeHub;
@@ -64,6 +65,8 @@ pub struct AppState {
     pub attribution_verify: AttributionVerifyService,
     pub block_check: BlockCheckService,
     pub message_gate: MessageGateService,
+    /// Hot-reloadable on-chain MessagingConfig (fees, reply rules, escrow expiry).
+    pub messaging_config: MessagingConfigCache,
     pub push_service: PushService,
     pub realtime_hub: Arc<RealtimeHub>,
     pub realtime_enabled: bool,
@@ -88,6 +91,7 @@ impl AppState {
         attribution_verify: AttributionVerifyService,
         block_check: BlockCheckService,
         message_gate: MessageGateService,
+        messaging_config: MessagingConfigCache,
         push_service: PushService,
         realtime_hub: Arc<RealtimeHub>,
         realtime_enabled: bool,
@@ -105,6 +109,7 @@ impl AppState {
             attribution_verify,
             block_check,
             message_gate,
+            messaging_config,
             push_service,
             realtime_hub,
             realtime_enabled,
@@ -134,6 +139,7 @@ impl AppState {
             AttributionVerifyService::from_config(&Config::default()),
             block_check,
             MessageGateService::from_config(&Config::default()),
+            fallback_messaging_config_cache(),
             push_service,
             Arc::new(RealtimeHub::new()),
             true,
@@ -162,6 +168,7 @@ impl AppState {
             AttributionVerifyService::from_config(&Config::default()),
             block_check,
             message_gate,
+            fallback_messaging_config_cache(),
             push_service,
             Arc::new(RealtimeHub::new()),
             true,

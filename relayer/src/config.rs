@@ -41,6 +41,9 @@ pub struct Config {
     /// JSON-RPC URL for optional on-chain attribution verification.
     pub myso_json_rpc_url: Option<String>,
 
+    /// GraphQL URL for resolving genesis shared objects (MessagingConfig).
+    pub myso_graphql_url: Option<String>,
+
     /// When true, verify sub_agent_id object matches sender and principal on-chain.
     pub attribution_strict_verify: bool,
 
@@ -173,6 +176,7 @@ impl Config {
         let messaging_package_id = env::var("MESSAGING_PACKAGE_ID")
             .unwrap_or_else(|_| GENESIS_MESSAGING_PACKAGE_ID.to_string());
         let myso_json_rpc_url = env::var("MYSO_JSON_RPC_URL").ok();
+        let myso_graphql_url = env::var("MYSO_GRAPHQL_URL").ok();
         let attribution_strict_verify = env::var("ATTRIBUTION_STRICT_VERIFY")
             .ok()
             .map(|v| v == "true" || v == "1")
@@ -284,6 +288,7 @@ impl Config {
             groups_package_id,
             messaging_package_id,
             myso_json_rpc_url,
+            myso_graphql_url,
             attribution_strict_verify,
             file_storage_publisher_url,
             file_storage_aggregator_url,
@@ -330,6 +335,7 @@ impl Default for Config {
             groups_package_id: String::new(),
             messaging_package_id: GENESIS_MESSAGING_PACKAGE_ID.to_string(),
             myso_json_rpc_url: None,
+            myso_graphql_url: None,
             attribution_strict_verify: false,
             file_storage_publisher_url: DEFAULT_FILE_STORAGE_PUBLISHER_URL.to_string(),
             file_storage_aggregator_url: DEFAULT_FILE_STORAGE_AGGREGATOR_URL.to_string(),

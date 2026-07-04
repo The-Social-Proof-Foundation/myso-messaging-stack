@@ -77,6 +77,7 @@ impl SyncTestHarness {
             self.config.workflow_enabled,
             self.storage.clone(),
             MessageGateService::from_config(&self.config),
+            messaging_relayer::services::fallback_messaging_config_cache(),
             self.hub.clone(),
             self.push_service.clone(),
         )

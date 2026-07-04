@@ -12,7 +12,11 @@ import type { MySoMessagingStackView } from '../../src/view.js';
 import { MySoMessagingStackDerive } from '../../src/derive.js';
 import { EnvelopeEncryption, buildMessageAad } from '../../src/encryption/envelope-encryption.js';
 import { createMockMyDataClient } from './helpers/mock-mydata-client.js';
-import { MOCK_PACKAGE_CONFIG, MOCK_PACKAGE_ID, MOCK_VERSION_ID } from './helpers/mock-package-config.js';
+import {
+	MOCK_PACKAGE_CONFIG,
+	MOCK_PACKAGE_ID,
+	MOCK_VERSION_ID,
+} from './helpers/mock-package-config.js';
 
 const MOCK_GROUP_ID = '0x' + 'ab'.repeat(32);
 const MOCK_SENDER = '0x' + 'cd'.repeat(32);

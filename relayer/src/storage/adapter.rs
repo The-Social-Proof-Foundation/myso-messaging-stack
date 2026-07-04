@@ -93,6 +93,19 @@ pub enum StorageError {
 /// Result type alias for storage operations.
 pub type StorageResult<T> = Result<T, StorageError>;
 
+/// Optional filter excluding escrows past `created_at_ms + payment_expiration_ms`.
+#[derive(Debug, Clone, Copy)]
+pub struct PaidEscrowValidityFilter {
+    pub now_ms: i64,
+    pub payment_expiration_ms: u64,
+}
+
+impl PaidEscrowValidityFilter {
+    pub fn is_valid(&self, created_at_ms: i64) -> bool {
+        created_at_ms.saturating_add(self.payment_expiration_ms as i64) > self.now_ms
+    }
+}
+
 #[async_trait]
 #[allow(dead_code)]
 #[allow(clippy::too_many_arguments)]
@@ -203,6 +216,7 @@ pub trait StorageAdapter: Send + Sync {
         payer: &str,
         recipient: &str,
         min_amount: i64,
+        validity: Option<PaidEscrowValidityFilter>,
     ) -> StorageResult<bool>;
 
     /// Latest (highest `seq`) escrowed amount from `payer` to `recipient` in this
@@ -213,6 +227,7 @@ pub trait StorageAdapter: Send + Sync {
         group_id: &str,
         payer: &str,
         recipient: &str,
+        validity: Option<PaidEscrowValidityFilter>,
     ) -> StorageResult<Option<i64>>;
 
     /// True when `sender` has at least one stored message in the group.

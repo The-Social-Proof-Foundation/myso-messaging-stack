@@ -353,20 +353,43 @@ impl StorageAdapter for PostgresStorage {
         payer: &str,
         recipient: &str,
         min_amount: i64,
+        validity: Option<crate::storage::PaidEscrowValidityFilter>,
     ) -> StorageResult<bool> {
-        let exists: bool = sqlx::query_scalar(
-            r#"SELECT EXISTS(
-                 SELECT 1 FROM paid_message_escrows
-                 WHERE group_id = $1 AND payer = $2 AND recipient = $3 AND amount >= $4
-               )"#,
-        )
-        .bind(group_id)
-        .bind(payer)
-        .bind(recipient)
-        .bind(min_amount)
-        .fetch_one(&self.pool)
-        .await
-        .map_err(|e| StorageError::OperationFailed(e.to_string()))?;
+        let exists: bool = match validity {
+            None => {
+                sqlx::query_scalar(
+                    r#"SELECT EXISTS(
+                         SELECT 1 FROM paid_message_escrows
+                         WHERE group_id = $1 AND payer = $2 AND recipient = $3 AND amount >= $4
+                       )"#,
+                )
+                .bind(group_id)
+                .bind(payer)
+                .bind(recipient)
+                .bind(min_amount)
+                .fetch_one(&self.pool)
+                .await
+                .map_err(|e| StorageError::OperationFailed(e.to_string()))?
+            }
+            Some(v) => {
+                sqlx::query_scalar(
+                    r#"SELECT EXISTS(
+                         SELECT 1 FROM paid_message_escrows
+                         WHERE group_id = $1 AND payer = $2 AND recipient = $3 AND amount >= $4
+                           AND created_at_ms + $5 > $6
+                       )"#,
+                )
+                .bind(group_id)
+                .bind(payer)
+                .bind(recipient)
+                .bind(min_amount)
+                .bind(v.payment_expiration_ms as i64)
+                .bind(v.now_ms)
+                .fetch_one(&self.pool)
+                .await
+                .map_err(|e| StorageError::OperationFailed(e.to_string()))?
+            }
+        };
         Ok(exists)
     }
 
@@ -375,19 +398,41 @@ impl StorageAdapter for PostgresStorage {
         group_id: &str,
         payer: &str,
         recipient: &str,
+        validity: Option<crate::storage::PaidEscrowValidityFilter>,
     ) -> StorageResult<Option<i64>> {
-        let amount: Option<i64> = sqlx::query_scalar(
-            r#"SELECT amount FROM paid_message_escrows
-               WHERE group_id = $1 AND payer = $2 AND recipient = $3
-               ORDER BY seq DESC
-               LIMIT 1"#,
-        )
-        .bind(group_id)
-        .bind(payer)
-        .bind(recipient)
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(|e| StorageError::OperationFailed(e.to_string()))?;
+        let amount: Option<i64> = match validity {
+            None => {
+                sqlx::query_scalar(
+                    r#"SELECT amount FROM paid_message_escrows
+                       WHERE group_id = $1 AND payer = $2 AND recipient = $3
+                       ORDER BY seq DESC
+                       LIMIT 1"#,
+                )
+                .bind(group_id)
+                .bind(payer)
+                .bind(recipient)
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(|e| StorageError::OperationFailed(e.to_string()))?
+            }
+            Some(v) => {
+                sqlx::query_scalar(
+                    r#"SELECT amount FROM paid_message_escrows
+                       WHERE group_id = $1 AND payer = $2 AND recipient = $3
+                         AND created_at_ms + $4 > $5
+                       ORDER BY seq DESC
+                       LIMIT 1"#,
+                )
+                .bind(group_id)
+                .bind(payer)
+                .bind(recipient)
+                .bind(v.payment_expiration_ms as i64)
+                .bind(v.now_ms)
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(|e| StorageError::OperationFailed(e.to_string()))?
+            }
+        };
         Ok(amount)
     }
 

@@ -16,7 +16,9 @@ pub mod memory;
 pub mod migrations;
 pub mod postgres;
 #[allow(unused_imports)]
-pub use adapter::{PutUserReadStateResult, StorageAdapter, StorageError, StorageResult};
+pub use adapter::{
+    PaidEscrowValidityFilter, PutUserReadStateResult, StorageAdapter, StorageError, StorageResult,
+};
 pub use agent_groups::{
     create_agent_group_store_async, AgentGroupStore, InMemoryAgentGroupStore, NoOpAgentGroupStore,
     PostgresAgentGroupStore,

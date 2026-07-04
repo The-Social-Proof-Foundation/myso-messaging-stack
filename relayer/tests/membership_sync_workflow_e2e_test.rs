@@ -382,7 +382,7 @@ async fn paid_message_sent_indexes_escrow() {
     assert!(
         harness
             .storage
-            .has_paid_escrow(&group_hex, &payer_hex, &recipient_hex, 0)
+            .has_paid_escrow(&group_hex, &payer_hex, &recipient_hex, 0, None)
             .await
             .unwrap()
     );
@@ -415,7 +415,7 @@ async fn paid_message_sent_replay_is_safe() {
     assert!(
         harness
             .storage
-            .has_paid_escrow(&group_hex, &payer_hex, &recipient_hex, 0)
+            .has_paid_escrow(&group_hex, &payer_hex, &recipient_hex, 0, None)
             .await
             .unwrap()
     );

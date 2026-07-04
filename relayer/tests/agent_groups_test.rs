@@ -117,6 +117,7 @@ fn create_test_app(agent_group_store: Arc<dyn AgentGroupStore>) -> Router {
         AttributionVerifyService::from_config(&config),
         BlockCheckService::from_config(&config),
         messaging_relayer::services::MessageGateService::from_config(&config),
+        messaging_relayer::services::fallback_messaging_config_cache(),
         PushService::from_config(&config),
         Arc::new(messaging_relayer::services::RealtimeHub::new()),
         true,

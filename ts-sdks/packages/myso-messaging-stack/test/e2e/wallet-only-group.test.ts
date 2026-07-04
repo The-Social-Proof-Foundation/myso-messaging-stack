@@ -4,15 +4,9 @@
 // E2E: wallet-only group create → relayer membership sync → sendMessage.
 
 import { describe, expect, it, inject } from 'vitest';
-import {
-	RelayerTransportError,
-	waitForMembership,
-} from '@socialproof/myso-messaging-stack';
+import { RelayerTransportError, waitForMembership } from '@socialproof/myso-messaging-stack';
 
-import {
-	createFundedAccount,
-	createMySoMessagingStackClient,
-} from '../helpers/index.js';
+import { createFundedAccount, createMySoMessagingStackClient } from '../helpers/index.js';
 
 function isRelayerMembershipPending(err: unknown): boolean {
 	if (err instanceof RelayerTransportError) {
@@ -34,83 +28,77 @@ describe('Wallet-only group + relayer send', () => {
 
 	const faucetUrl = `http://localhost:${faucetPort}`;
 
-	it(
-		'creates a wallet-only group and sends a message through the relayer',
-		async () => {
-			const walletAccount = await createFundedAccount({ faucetUrl });
-			const walletClient = createMySoMessagingStackClient({
-				url: mysoClientUrl,
-				network,
-				packageConfig: genesisConfig,
-				keypair: walletAccount.keypair,
-				relayer: { relayerUrl },
-				mydata:
-					mydataServerConfigs.length > 0
-						? { serverConfigs: mydataServerConfigs, verifyKeyServers: false }
-						: undefined,
-			});
+	it('creates a wallet-only group and sends a message through the relayer', async () => {
+		const walletAccount = await createFundedAccount({ faucetUrl });
+		const walletClient = createMySoMessagingStackClient({
+			url: mysoClientUrl,
+			network,
+			packageConfig: genesisConfig,
+			keypair: walletAccount.keypair,
+			relayer: { relayerUrl },
+			mydata:
+				mydataServerConfigs.length > 0
+					? { serverConfigs: mydataServerConfigs, verifyKeyServers: false }
+					: undefined,
+		});
 
-			const memoryAccountId = await walletClient.messaging.view.memoryAccountIdForOwner({
-				owner: walletAccount.address,
-			});
-			expect(memoryAccountId).toBeNull();
+		const memoryAccountId = await walletClient.messaging.view.memoryAccountIdForOwner({
+			owner: walletAccount.address,
+		});
+		expect(memoryAccountId).toBeNull();
 
-			const uuid = crypto.randomUUID();
-			const { digest } = await walletClient.messaging.createAndShareGroup({
-				signer: walletAccount.keypair,
-				uuid,
-				name: 'Wallet-only E2E Group',
-			});
-			expect(digest).toBeDefined();
+		const uuid = crypto.randomUUID();
+		const { digest } = await walletClient.messaging.createAndShareGroup({
+			signer: walletAccount.keypair,
+			uuid,
+			name: 'Wallet-only E2E Group',
+		});
+		expect(digest).toBeDefined();
 
-			const groupId = walletClient.messaging.derive.groupId({ uuid });
+		const groupId = walletClient.messaging.derive.groupId({ uuid });
 
-			await waitForMembership({
-				messaging: walletClient.messaging,
-				groupId,
-				memberAddress: walletAccount.address,
-				permission: 'MessagingSender',
-			});
+		await waitForMembership({
+			messaging: walletClient.messaging,
+			groupId,
+			memberAddress: walletAccount.address,
+			permission: 'MessagingSender',
+		});
 
-			const sendPayload = {
-				signer: walletAccount.keypair,
-				groupRef: { uuid },
-				text: 'Hello from wallet-only group',
-			};
+		const sendPayload = {
+			signer: walletAccount.keypair,
+			groupRef: { uuid },
+			text: 'Hello from wallet-only group',
+		};
 
-			const deadline = Date.now() + 30_000;
-			let messageId: string | undefined;
-			let lastErr: unknown;
+		const deadline = Date.now() + 30_000;
+		let messageId: string | undefined;
+		let lastErr: unknown;
 
-			while (Date.now() < deadline) {
-				try {
-					({ messageId } = await walletClient.messaging.sendMessage(sendPayload));
-					break;
-				} catch (err) {
-					lastErr = err;
-					if (!isRelayerMembershipPending(err)) {
-						throw err;
-					}
-					await new Promise((resolve) => setTimeout(resolve, 500));
+		while (Date.now() < deadline) {
+			try {
+				({ messageId } = await walletClient.messaging.sendMessage(sendPayload));
+				break;
+			} catch (err) {
+				lastErr = err;
+				if (!isRelayerMembershipPending(err)) {
+					throw err;
 				}
+				await new Promise((resolve) => setTimeout(resolve, 500));
 			}
+		}
 
-			if (!messageId) {
-				throw lastErr ?? new Error('Timed out waiting for relayer membership sync');
-			}
+		if (!messageId) {
+			throw lastErr ?? new Error('Timed out waiting for relayer membership sync');
+		}
 
-			expect(messageId).toMatch(
-				/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
-			);
+		expect(messageId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
 
-			const msg = await walletClient.messaging.getMessage({
-				signer: walletAccount.keypair,
-				groupRef: { uuid },
-				messageId,
-			});
+		const msg = await walletClient.messaging.getMessage({
+			signer: walletAccount.keypair,
+			groupRef: { uuid },
+			messageId,
+		});
 
-			expect(msg.text).toBe('Hello from wallet-only group');
-		},
-		180_000,
-	);
+		expect(msg.text).toBe('Hello from wallet-only group');
+	}, 180_000);
 });

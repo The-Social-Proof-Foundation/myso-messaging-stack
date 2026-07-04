@@ -5,8 +5,11 @@
 /**
  * Fee distribution for claimed paid-message escrow (`MYSO`).
  *
- * **BPS** match `social_contracts::message` (`PAID_MSG_PLATFORM_FEE_BPS` /
- * `PAID_MSG_TREASURY_FEE_BPS`).
+ * Fee BPS are read from [`messaging_config::MessagingConfig`].
+ *
+ * When `platform_fee_recipient` is [`NO_PLATFORM_FEE_RECIPIENT`] (`@0x0`), the
+ * platform share is combined with the ecosystem share and sent to
+ * `ecosystem_fee_recipient` (wallet paid DMs with no associated platform).
  *
  * Uses `transfer::public_transfer` to fee recipients. Credits to the live
  * `Platform` treasury balance require
@@ -28,6 +31,23 @@ export const EscrowFeeTotals = new MoveStruct({
 		net_amount: bcs.u64(),
 	},
 });
+export interface NoPlatformFeeRecipientOptions {
+	package?: string;
+	arguments?: [];
+}
+/**
+ * Sentinel: pass as `platform_fee_recipient` when no platform is associated with
+ * the paid DM.
+ */
+export function noPlatformFeeRecipient(options: NoPlatformFeeRecipientOptions = {}) {
+	const packageAddress = options.package ?? '@local-pkg/messaging';
+	return (tx: Transaction) =>
+		tx.moveCall({
+			package: packageAddress,
+			module: 'paid_escrow_settlement',
+			function: 'no_platform_fee_recipient',
+		});
+}
 export interface TotalAmountArguments {
 	t: RawTransactionArgument<string>;
 }
@@ -105,6 +125,7 @@ export function netAmount(options: NetAmountOptions) {
 		});
 }
 export interface DistributeEscrowToRecipientsArguments {
+	config: RawTransactionArgument<string>;
 	escrowCoin: RawTransactionArgument<string>;
 	platformFeeRecipient: RawTransactionArgument<string>;
 	ecosystemFeeRecipient: RawTransactionArgument<string>;
@@ -115,6 +136,7 @@ export interface DistributeEscrowToRecipientsOptions {
 	arguments:
 		| DistributeEscrowToRecipientsArguments
 		| [
+				config: RawTransactionArgument<string>,
 				escrowCoin: RawTransactionArgument<string>,
 				platformFeeRecipient: RawTransactionArgument<string>,
 				ecosystemFeeRecipient: RawTransactionArgument<string>,
@@ -127,8 +149,9 @@ export interface DistributeEscrowToRecipientsOptions {
  */
 export function distributeEscrowToRecipients(options: DistributeEscrowToRecipientsOptions) {
 	const packageAddress = options.package ?? '@local-pkg/messaging';
-	const argumentsTypes = [null, 'address', 'address', 'address'] satisfies (string | null)[];
+	const argumentsTypes = [null, null, 'address', 'address', 'address'] satisfies (string | null)[];
 	const parameterNames = [
+		'config',
 		'escrowCoin',
 		'platformFeeRecipient',
 		'ecosystemFeeRecipient',

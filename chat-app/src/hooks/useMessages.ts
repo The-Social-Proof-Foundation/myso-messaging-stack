@@ -196,6 +196,7 @@ export function useMessages(
   const [presenceRecords, setPresenceRecords] = useState<
     Map<string, PresenceRecord>
   >(new Map());
+  const [minReplyChars, setMinReplyChars] = useState(PAID_DM_MIN_REPLY_CHARS);
 
   const onlineMembers = useMemo(
     () => presenceRecordsToOnlineMap(presenceRecords),
@@ -228,6 +229,23 @@ export function useMessages(
   reactionsRef.current = reactions;
   // Highest watermark already sent to the relayer — dedupes read-state writes.
   const lastSentReadUptoRef = useRef(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    void client.messaging.view
+      .getMessagingConfig()
+      .then((config) => {
+        if (!cancelled) {
+          setMinReplyChars(config.minReplyChars);
+        }
+      })
+      .catch((err) => {
+        console.warn('Failed to load MessagingConfig; using default min reply chars', err);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [client]);
 
   const resyncPresence = useCallback(async () => {
     try {
@@ -583,9 +601,9 @@ export function useMessages(
       if (!trimmed && !hasFiles) return;
 
       if (claimPendingRef.current) {
-        if (trimmed.length < PAID_DM_MIN_REPLY_CHARS) {
+        if (trimmed.length < minReplyChars) {
           setError(
-            `Reply with at least ${PAID_DM_MIN_REPLY_CHARS} characters to claim the escrow.`,
+            `Reply with at least ${minReplyChars} characters to claim the escrow.`,
           );
           return;
         }
@@ -614,7 +632,7 @@ export function useMessages(
       } catch (err) {
         if (claimPendingRef.current && !claimCompleted) {
           console.error('Failed to claim paid DM escrow:', err);
-          setError(formatPaidClaimError(err));
+          setError(formatPaidClaimError(err, minReplyChars));
           return;
         }
         if (isPaymentRequiredError(err)) {
@@ -648,7 +666,7 @@ export function useMessages(
         setSending(false);
       }
     },
-    [client, signer, groupId, performSend],
+    [client, signer, groupId, performSend, minReplyChars],
   );
 
   // ------------------------------------------------------------------

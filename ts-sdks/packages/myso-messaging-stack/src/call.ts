@@ -220,6 +220,7 @@ export class MySoMessagingStackCall {
 						groupLeaver: groupLeaverId,
 						blockList: this.#packageConfig.blockListRegistryId,
 						platform: options.platformId,
+						memoryConfig: this.#packageConfig.memoryConfigId,
 						creatorMemoryAccount: options.creatorMemoryAccountId,
 						crossPrincipalPeerAccount: options.crossPrincipalPeerMemoryAccountId,
 						name: options.name,
@@ -252,13 +253,13 @@ export class MySoMessagingStackCall {
 						groupLeaver: groupLeaverId,
 						blockList: this.#packageConfig.blockListRegistryId,
 						platform: options.platformId,
+						memoryConfig: this.#packageConfig.memoryConfigId,
 						creatorMemoryAccount: options.creatorMemoryAccountId,
 						crossPrincipalPeerAccount: options.crossPrincipalPeerMemoryAccountId,
 						name: options.name,
 						uuid,
 						initialEncryptedDek: Array.from(encryptedDek),
 						initialMembers: options?.initialMembers ?? [],
-						clock: '0x6',
 					},
 				}),
 			);
@@ -528,6 +529,7 @@ export class MySoMessagingStackCall {
 					package: this.#packageConfig.latestPackageId,
 					arguments: {
 						version: this.#packageConfig.versionId,
+						config: this.#packageConfig.messagingConfigId,
 						group,
 						log,
 						paidRegistry: this.#derive.paidMessagingRegistryId(),
@@ -564,6 +566,7 @@ export class MySoMessagingStackCall {
 					package: this.#packageConfig.latestPackageId,
 					arguments: {
 						version: this.#packageConfig.versionId,
+						config: this.#packageConfig.messagingConfigId,
 						group,
 						log,
 						paidRegistry: this.#derive.paidMessagingRegistryId(),
@@ -571,6 +574,7 @@ export class MySoMessagingStackCall {
 						blockList: this.#packageConfig.blockListRegistryId,
 						groupManager: this.#derive.groupManagerId(),
 						platform: options.platformId,
+						memoryConfig: this.#packageConfig.memoryConfigId,
 						memoryAccount: options.memoryAccountId,
 						recipient: options.recipient,
 						payment: options.payment,
@@ -612,6 +616,7 @@ export class MySoMessagingStackCall {
 					package: this.#packageConfig.latestPackageId,
 					arguments: {
 						version: this.#packageConfig.versionId,
+						config: this.#packageConfig.messagingConfigId,
 						group: groupId,
 						log: messageLogId,
 						blockList: this.#packageConfig.blockListRegistryId,
@@ -641,6 +646,7 @@ export class MySoMessagingStackCall {
 					package: this.#packageConfig.latestPackageId,
 					arguments: {
 						version: this.#packageConfig.versionId,
+						config: this.#packageConfig.messagingConfigId,
 						group: groupId,
 						log: messageLogId,
 						blockList: this.#packageConfig.blockListRegistryId,
@@ -668,6 +674,7 @@ export class MySoMessagingStackCall {
 					package: this.#packageConfig.latestPackageId,
 					arguments: {
 						version: this.#packageConfig.versionId,
+						config: this.#packageConfig.messagingConfigId,
 						group: groupId,
 						log: messageLogId,
 						blockList: this.#packageConfig.blockListRegistryId,

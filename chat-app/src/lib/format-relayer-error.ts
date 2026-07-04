@@ -53,11 +53,14 @@ export function formatRelayerError(err: unknown): string {
   return 'Request failed.';
 }
 
-export function formatPaidClaimError(err: unknown): string {
+export function formatPaidClaimError(
+  err: unknown,
+  minReplyChars: number = PAID_DM_MIN_REPLY_CHARS,
+): string {
   if (err instanceof Error) {
     const msg = err.message;
     if (msg.includes('EReplyTooShort') || msg.includes('reply too short')) {
-      return `Reply must be at least ${PAID_DM_MIN_REPLY_CHARS} characters to claim the escrow.`;
+      return `Reply must be at least ${minReplyChars} characters to claim the escrow.`;
     }
     if (msg.includes('EPaymentClaimed') || msg.includes('already claimed')) {
       return 'This escrow has already been claimed.';

@@ -388,6 +388,7 @@ export interface CreateAgentGroupArguments {
 	groupLeaver: RawTransactionArgument<string>;
 	blockList: RawTransactionArgument<string>;
 	platform: RawTransactionArgument<string>;
+	memoryConfig: RawTransactionArgument<string>;
 	creatorMemoryAccount: RawTransactionArgument<string>;
 	crossPrincipalPeerAccount: RawTransactionArgument<string>;
 	name: RawTransactionArgument<string>;
@@ -406,6 +407,7 @@ export interface CreateAgentGroupOptions {
 				groupLeaver: RawTransactionArgument<string>,
 				blockList: RawTransactionArgument<string>,
 				platform: RawTransactionArgument<string>,
+				memoryConfig: RawTransactionArgument<string>,
 				creatorMemoryAccount: RawTransactionArgument<string>,
 				crossPrincipalPeerAccount: RawTransactionArgument<string>,
 				name: RawTransactionArgument<string>,
@@ -437,6 +439,7 @@ export function createAgentGroup(options: CreateAgentGroupOptions) {
 		null,
 		null,
 		null,
+		null,
 		'0x1::string::String',
 		'0x1::string::String',
 		'vector<u8>',
@@ -450,6 +453,7 @@ export function createAgentGroup(options: CreateAgentGroupOptions) {
 		'groupLeaver',
 		'blockList',
 		'platform',
+		'memoryConfig',
 		'creatorMemoryAccount',
 		'crossPrincipalPeerAccount',
 		'name',
@@ -472,13 +476,13 @@ export interface CreateAgentAndShareGroupArguments {
 	groupLeaver: RawTransactionArgument<string>;
 	blockList: RawTransactionArgument<string>;
 	platform: RawTransactionArgument<string>;
+	memoryConfig: RawTransactionArgument<string>;
 	creatorMemoryAccount: RawTransactionArgument<string>;
 	crossPrincipalPeerAccount: RawTransactionArgument<string>;
 	name: RawTransactionArgument<string>;
 	uuid: RawTransactionArgument<string>;
 	initialEncryptedDek: RawTransactionArgument<number[]>;
 	initialMembers: RawTransactionArgument<string[]>;
-	clock: RawTransactionArgument<string>;
 }
 export interface CreateAgentAndShareGroupOptions {
 	package?: string;
@@ -491,19 +495,20 @@ export interface CreateAgentAndShareGroupOptions {
 				groupLeaver: RawTransactionArgument<string>,
 				blockList: RawTransactionArgument<string>,
 				platform: RawTransactionArgument<string>,
+				memoryConfig: RawTransactionArgument<string>,
 				creatorMemoryAccount: RawTransactionArgument<string>,
 				crossPrincipalPeerAccount: RawTransactionArgument<string>,
 				name: RawTransactionArgument<string>,
 				uuid: RawTransactionArgument<string>,
 				initialEncryptedDek: RawTransactionArgument<number[]>,
 				initialMembers: RawTransactionArgument<string[]>,
-				clock: RawTransactionArgument<string>,
 		  ];
 }
 /** Entry point: create and share an agent-associated messaging group. */
 export function createAgentAndShareGroup(options: CreateAgentAndShareGroupOptions) {
 	const packageAddress = options.package ?? '@local-pkg/messaging';
 	const argumentsTypes = [
+		null,
 		null,
 		null,
 		null,
@@ -525,6 +530,7 @@ export function createAgentAndShareGroup(options: CreateAgentAndShareGroupOption
 		'groupLeaver',
 		'blockList',
 		'platform',
+		'memoryConfig',
 		'creatorMemoryAccount',
 		'crossPrincipalPeerAccount',
 		'name',
@@ -900,6 +906,7 @@ export function removeGroupData(options: RemoveGroupDataOptions) {
 }
 export interface SendPaidMessageDigestArguments {
 	version: RawTransactionArgument<string>;
+	config: RawTransactionArgument<string>;
 	group: RawTransactionArgument<string>;
 	log: RawTransactionArgument<string>;
 	paidRegistry: RawTransactionArgument<string>;
@@ -918,6 +925,7 @@ export interface SendPaidMessageDigestOptions {
 		| SendPaidMessageDigestArguments
 		| [
 				version: RawTransactionArgument<string>,
+				config: RawTransactionArgument<string>,
 				group: RawTransactionArgument<string>,
 				log: RawTransactionArgument<string>,
 				paidRegistry: RawTransactionArgument<string>,
@@ -945,6 +953,7 @@ export function sendPaidMessageDigest(options: SendPaidMessageDigestOptions) {
 		null,
 		null,
 		null,
+		null,
 		'address',
 		null,
 		'u64',
@@ -954,6 +963,7 @@ export function sendPaidMessageDigest(options: SendPaidMessageDigestOptions) {
 	] satisfies (string | null)[];
 	const parameterNames = [
 		'version',
+		'config',
 		'group',
 		'log',
 		'paidRegistry',
@@ -976,6 +986,7 @@ export function sendPaidMessageDigest(options: SendPaidMessageDigestOptions) {
 }
 export interface SendAgentPaidMessageDigestArguments {
 	version: RawTransactionArgument<string>;
+	config: RawTransactionArgument<string>;
 	group: RawTransactionArgument<string>;
 	log: RawTransactionArgument<string>;
 	paidRegistry: RawTransactionArgument<string>;
@@ -983,6 +994,7 @@ export interface SendAgentPaidMessageDigestArguments {
 	blockList: RawTransactionArgument<string>;
 	groupManager: RawTransactionArgument<string>;
 	platform: RawTransactionArgument<string>;
+	memoryConfig: RawTransactionArgument<string>;
 	memoryAccount: RawTransactionArgument<string>;
 	recipient: RawTransactionArgument<string>;
 	payment: RawTransactionArgument<string>;
@@ -996,6 +1008,7 @@ export interface SendAgentPaidMessageDigestOptions {
 		| SendAgentPaidMessageDigestArguments
 		| [
 				version: RawTransactionArgument<string>,
+				config: RawTransactionArgument<string>,
 				group: RawTransactionArgument<string>,
 				log: RawTransactionArgument<string>,
 				paidRegistry: RawTransactionArgument<string>,
@@ -1003,6 +1016,7 @@ export interface SendAgentPaidMessageDigestOptions {
 				blockList: RawTransactionArgument<string>,
 				groupManager: RawTransactionArgument<string>,
 				platform: RawTransactionArgument<string>,
+				memoryConfig: RawTransactionArgument<string>,
 				memoryAccount: RawTransactionArgument<string>,
 				recipient: RawTransactionArgument<string>,
 				payment: RawTransactionArgument<string>,
@@ -1027,6 +1041,8 @@ export function sendAgentPaidMessageDigest(options: SendAgentPaidMessageDigestOp
 		null,
 		null,
 		null,
+		null,
+		null,
 		'address',
 		null,
 		'u64',
@@ -1036,6 +1052,7 @@ export function sendAgentPaidMessageDigest(options: SendAgentPaidMessageDigestOp
 	] satisfies (string | null)[];
 	const parameterNames = [
 		'version',
+		'config',
 		'group',
 		'log',
 		'paidRegistry',
@@ -1043,6 +1060,7 @@ export function sendAgentPaidMessageDigest(options: SendAgentPaidMessageDigestOp
 		'blockList',
 		'groupManager',
 		'platform',
+		'memoryConfig',
 		'memoryAccount',
 		'recipient',
 		'payment',
@@ -1060,6 +1078,7 @@ export function sendAgentPaidMessageDigest(options: SendAgentPaidMessageDigestOp
 }
 export interface ReplyToPaidMessageClaimCoinArguments {
 	version: RawTransactionArgument<string>;
+	config: RawTransactionArgument<string>;
 	group: RawTransactionArgument<string>;
 	log: RawTransactionArgument<string>;
 	blockList: RawTransactionArgument<string>;
@@ -1074,6 +1093,7 @@ export interface ReplyToPaidMessageClaimCoinOptions {
 		| ReplyToPaidMessageClaimCoinArguments
 		| [
 				version: RawTransactionArgument<string>,
+				config: RawTransactionArgument<string>,
 				group: RawTransactionArgument<string>,
 				log: RawTransactionArgument<string>,
 				blockList: RawTransactionArgument<string>,
@@ -1095,6 +1115,7 @@ export function replyToPaidMessageClaimCoin(options: ReplyToPaidMessageClaimCoin
 		null,
 		null,
 		null,
+		null,
 		'u64',
 		'u32',
 		'vector<u8>',
@@ -1103,6 +1124,7 @@ export function replyToPaidMessageClaimCoin(options: ReplyToPaidMessageClaimCoin
 	] satisfies (string | null)[];
 	const parameterNames = [
 		'version',
+		'config',
 		'group',
 		'log',
 		'blockList',
@@ -1121,6 +1143,7 @@ export function replyToPaidMessageClaimCoin(options: ReplyToPaidMessageClaimCoin
 }
 export interface ReplyToPaidMessageClaimSettledArguments {
 	version: RawTransactionArgument<string>;
+	config: RawTransactionArgument<string>;
 	group: RawTransactionArgument<string>;
 	log: RawTransactionArgument<string>;
 	blockList: RawTransactionArgument<string>;
@@ -1137,6 +1160,7 @@ export interface ReplyToPaidMessageClaimSettledOptions {
 		| ReplyToPaidMessageClaimSettledArguments
 		| [
 				version: RawTransactionArgument<string>,
+				config: RawTransactionArgument<string>,
 				group: RawTransactionArgument<string>,
 				log: RawTransactionArgument<string>,
 				blockList: RawTransactionArgument<string>,
@@ -1151,12 +1175,13 @@ export interface ReplyToPaidMessageClaimSettledOptions {
 /**
  * Reply and settle: same validation as [`reply_to_paid_message_claim_coin`], then
  * split escrow per paid-message BPS to `platform_fee_recipient` and the ecosystem
- * treasury address from `ecosystem_treasury` (via `profile::get_treasury_address`),
- * with net to the paid-message recipient.
+ * treasury address from `ecosystem_treasury` (via
+ * [`profile::get_treasury_address`]), with net to the paid-message recipient.
  */
 export function replyToPaidMessageClaimSettled(options: ReplyToPaidMessageClaimSettledOptions) {
 	const packageAddress = options.package ?? '@local-pkg/messaging';
 	const argumentsTypes = [
+		null,
 		null,
 		null,
 		null,
@@ -1171,6 +1196,7 @@ export function replyToPaidMessageClaimSettled(options: ReplyToPaidMessageClaimS
 	] satisfies (string | null)[];
 	const parameterNames = [
 		'version',
+		'config',
 		'group',
 		'log',
 		'blockList',
@@ -1191,6 +1217,7 @@ export function replyToPaidMessageClaimSettled(options: ReplyToPaidMessageClaimS
 }
 export interface RefundPaidEscrowArguments {
 	version: RawTransactionArgument<string>;
+	config: RawTransactionArgument<string>;
 	group: RawTransactionArgument<string>;
 	log: RawTransactionArgument<string>;
 	blockList: RawTransactionArgument<string>;
@@ -1202,6 +1229,7 @@ export interface RefundPaidEscrowOptions {
 		| RefundPaidEscrowArguments
 		| [
 				version: RawTransactionArgument<string>,
+				config: RawTransactionArgument<string>,
 				group: RawTransactionArgument<string>,
 				log: RawTransactionArgument<string>,
 				blockList: RawTransactionArgument<string>,
@@ -1214,11 +1242,11 @@ export interface RefundPaidEscrowOptions {
  */
 export function refundPaidEscrow(options: RefundPaidEscrowOptions) {
 	const packageAddress = options.package ?? '@local-pkg/messaging';
-	const argumentsTypes = [null, null, null, null, 'u64', '0x2::clock::Clock'] satisfies (
+	const argumentsTypes = [null, null, null, null, null, 'u64', '0x2::clock::Clock'] satisfies (
 		| string
 		| null
 	)[];
-	const parameterNames = ['version', 'group', 'log', 'blockList', 'paidMsgSeq'];
+	const parameterNames = ['version', 'config', 'group', 'log', 'blockList', 'paidMsgSeq'];
 	return (tx: Transaction) =>
 		tx.moveCall({
 			package: packageAddress,

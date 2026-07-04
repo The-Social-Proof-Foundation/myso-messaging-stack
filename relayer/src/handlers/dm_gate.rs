@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 use crate::auth::AuthContext;
 use crate::handlers::messages::error::ApiError;
 use crate::state::AppState;
+use crate::storage::PaidEscrowValidityFilter;
 
 /// Gate decision detail. All checks are idempotent state reads (payment exists /
 /// follow edge / policy), so concurrent sends race-free evaluate to the same result.
@@ -40,6 +41,8 @@ pub struct PaidDmGate {
     pub following: Option<bool>,
     /// Recipient's required minimum escrow (policy enabled + min set), else `None`.
     pub min_cost: Option<u64>,
+    /// On-chain minimum reply characters for escrow claim (`MessagingConfig.min_reply_chars`).
+    pub min_reply_chars: u32,
     /// Final decision: the free message must be rejected with 402.
     pub payment_required: bool,
 }
@@ -66,6 +69,12 @@ pub async fn evaluate_paid_dm_gate(
     recipient: &str,
     full: bool,
 ) -> Result<PaidDmGate, ApiError> {
+    let messaging_config = state.messaging_config.snapshot();
+    let escrow_validity = PaidEscrowValidityFilter {
+        now_ms: chrono::Utc::now().timestamp_millis(),
+        payment_expiration_ms: messaging_config.payment_expiration_ms,
+    };
+
     let mut gate = PaidDmGate {
         first_outbound: true,
         paid: false,
@@ -74,6 +83,7 @@ pub async fn evaluate_paid_dm_gate(
         peer_has_messaged: false,
         following: None,
         min_cost: None,
+        min_reply_chars: messaging_config.min_reply_chars,
         payment_required: false,
     };
 
@@ -91,13 +101,13 @@ pub async fn evaluate_paid_dm_gate(
         // not re-lock an already-opened conversation.
         gate.paid = state
             .storage
-            .has_paid_escrow(gid, sender, recipient, 0)
+            .has_paid_escrow(gid, sender, recipient, 0, Some(escrow_validity))
             .await?;
         if !gate.paid {
             if let Some(principal) = principal_owner {
                 gate.paid = state
                     .storage
-                    .has_paid_escrow(gid, principal, recipient, 0)
+                    .has_paid_escrow(gid, principal, recipient, 0, Some(escrow_validity))
                     .await?;
             }
         }
@@ -107,13 +117,13 @@ pub async fn evaluate_paid_dm_gate(
         // Mirrors on-chain `next_seq != 0`: replies are never charged.
         let mut peer_amount = state
             .storage
-            .latest_paid_escrow_amount(gid, recipient, sender)
+            .latest_paid_escrow_amount(gid, recipient, sender, Some(escrow_validity))
             .await?;
         if peer_amount.is_none() {
             if let Some(principal) = principal_owner {
                 peer_amount = state
                     .storage
-                    .latest_paid_escrow_amount(gid, recipient, principal)
+                    .latest_paid_escrow_amount(gid, recipient, principal, Some(escrow_validity))
                     .await?;
             }
         }
@@ -186,6 +196,8 @@ pub struct DmGateResponse {
     /// Minimum escrow (MIST) as a string, when payment applies.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub min_cost: Option<String>,
+    /// Minimum reply characters to claim peer escrow (from on-chain MessagingConfig).
+    pub min_reply_chars: u32,
     pub recipient: String,
 }
 
@@ -218,6 +230,7 @@ pub async fn get_dm_gate(
             peer_paid: false,
             peer_escrow_amount: None,
             min_cost: None,
+            min_reply_chars: state.messaging_config.snapshot().min_reply_chars,
             recipient: recipient.to_string(),
         }));
     }
@@ -260,6 +273,7 @@ pub async fn get_dm_gate(
         peer_paid: gate.peer_paid,
         peer_escrow_amount: gate.peer_escrow_amount.map(|a| a.to_string()),
         min_cost: gate.min_cost.map(|c| c.to_string()),
+        min_reply_chars: gate.min_reply_chars,
         recipient: recipient.to_string(),
     }))
 }

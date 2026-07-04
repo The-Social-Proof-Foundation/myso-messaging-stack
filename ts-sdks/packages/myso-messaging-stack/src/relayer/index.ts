@@ -63,6 +63,11 @@ export {
 	WsConnectionError,
 	type WSRelayerTransportConfig,
 } from './ws-transport.js';
-export { fromWireMessage, toWireAttachment, fromWireWorkflowItem, type WireMessageResponse } from './wire.js';
+export {
+	fromWireMessage,
+	toWireAttachment,
+	fromWireWorkflowItem,
+	type WireMessageResponse,
+} from './wire.js';
 export { createHeaderAuth, createWsAuthQuery } from './auth-headers.js';
 export { WorkflowClient, type WorkflowClientConfig } from './workflow.js';

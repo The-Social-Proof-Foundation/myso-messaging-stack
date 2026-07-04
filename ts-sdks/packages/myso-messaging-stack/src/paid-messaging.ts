@@ -143,7 +143,7 @@ function resolvePayment(
 	return payment;
 }
 
-/** Minimum reply character count for on-chain paid-DM escrow claim (`MIN_REPLY_CHARS`). */
+/** @deprecated Use {@link MySoMessagingStackView.getMessagingConfig} for the live on-chain value. */
 export const PAID_DM_MIN_REPLY_CHARS = 6;
 
 /**
@@ -183,10 +183,21 @@ export interface RefundPaidEscrowOptions {
 export class PaidMessagingClient {
 	readonly #messaging: MySoMessagingStackClient;
 	readonly #gating?: MessagingGatingClient;
+	#minReplyCharsCache: number | null = null;
 
 	constructor(options: PaidMessagingClientOptions) {
 		this.#messaging = options.messaging;
 		this.#gating = options.gating;
+	}
+
+	/** Minimum reply characters required to claim paid-DM escrow (from on-chain config). */
+	async minReplyChars(): Promise<number> {
+		if (this.#minReplyCharsCache !== null) {
+			return this.#minReplyCharsCache;
+		}
+		const config = await this.#messaging.view.getMessagingConfig();
+		this.#minReplyCharsCache = config.minReplyChars;
+		return config.minReplyChars;
 	}
 
 	async setPolicy(options: SetPaidPolicyOptions): Promise<{ digest: string }> {

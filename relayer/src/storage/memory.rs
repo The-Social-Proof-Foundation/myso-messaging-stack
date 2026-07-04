@@ -276,6 +276,7 @@ impl StorageAdapter for InMemoryStorage {
         payer: &str,
         recipient: &str,
         min_amount: i64,
+        validity: Option<crate::storage::PaidEscrowValidityFilter>,
     ) -> StorageResult<bool> {
         let escrows = self
             .paid_escrows
@@ -286,6 +287,7 @@ impl StorageAdapter for InMemoryStorage {
                 && e.payer == payer
                 && e.recipient == recipient
                 && e.amount >= min_amount
+                && validity.map_or(true, |v| v.is_valid(e.created_at_ms))
         }))
     }
 
@@ -294,6 +296,7 @@ impl StorageAdapter for InMemoryStorage {
         group_id: &str,
         payer: &str,
         recipient: &str,
+        validity: Option<crate::storage::PaidEscrowValidityFilter>,
     ) -> StorageResult<Option<i64>> {
         let escrows = self
             .paid_escrows
@@ -301,7 +304,12 @@ impl StorageAdapter for InMemoryStorage {
             .map_err(|e| StorageError::OperationFailed(format!("Lock poisoned: {}", e)))?;
         Ok(escrows
             .values()
-            .filter(|e| e.group_id == group_id && e.payer == payer && e.recipient == recipient)
+            .filter(|e| {
+                e.group_id == group_id
+                    && e.payer == payer
+                    && e.recipient == recipient
+                    && validity.map_or(true, |v| v.is_valid(e.created_at_ms))
+            })
             .max_by_key(|e| e.seq)
             .map(|e| e.amount))
     }
@@ -819,33 +827,33 @@ mod tests {
         storage.record_paid_escrow(record).await.unwrap();
 
         assert!(storage
-            .has_paid_escrow("group_1", "0xpayer", "0xrecipient", 0)
+            .has_paid_escrow("group_1", "0xpayer", "0xrecipient", 0, None)
             .await
             .unwrap());
         assert!(storage
-            .has_paid_escrow("group_1", "0xpayer", "0xrecipient", 100)
+            .has_paid_escrow("group_1", "0xpayer", "0xrecipient", 100, None)
             .await
             .unwrap());
         // min_amount above escrowed value does not match.
         assert!(!storage
-            .has_paid_escrow("group_1", "0xpayer", "0xrecipient", 101)
+            .has_paid_escrow("group_1", "0xpayer", "0xrecipient", 101, None)
             .await
             .unwrap());
         // Direction matters.
         assert!(!storage
-            .has_paid_escrow("group_1", "0xrecipient", "0xpayer", 0)
+            .has_paid_escrow("group_1", "0xrecipient", "0xpayer", 0, None)
             .await
             .unwrap());
         // Group scope matters.
         assert!(!storage
-            .has_paid_escrow("group_2", "0xpayer", "0xrecipient", 0)
+            .has_paid_escrow("group_2", "0xpayer", "0xrecipient", 0, None)
             .await
             .unwrap());
 
         // Latest-amount lookup returns the highest-seq escrow for the pair.
         assert_eq!(
             storage
-                .latest_paid_escrow_amount("group_1", "0xpayer", "0xrecipient")
+                .latest_paid_escrow_amount("group_1", "0xpayer", "0xrecipient", None)
                 .await
                 .unwrap(),
             Some(100)
@@ -863,7 +871,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             storage
-                .latest_paid_escrow_amount("group_1", "0xpayer", "0xrecipient")
+                .latest_paid_escrow_amount("group_1", "0xpayer", "0xrecipient", None)
                 .await
                 .unwrap(),
             Some(250)
@@ -871,7 +879,7 @@ mod tests {
         // Direction matters for the amount lookup too.
         assert_eq!(
             storage
-                .latest_paid_escrow_amount("group_1", "0xrecipient", "0xpayer")
+                .latest_paid_escrow_amount("group_1", "0xrecipient", "0xpayer", None)
                 .await
                 .unwrap(),
             None

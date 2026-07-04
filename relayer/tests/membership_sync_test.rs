@@ -43,6 +43,7 @@ fn new_sync_service_with_hub(
         false,
         Arc::new(InMemoryStorage::new()),
         MessageGateService::from_config(config),
+        messaging_relayer::services::fallback_messaging_config_cache(),
         hub,
         PushService::from_config(config),
     )

@@ -135,28 +135,28 @@ async fn postgres_paid_escrow_upsert_and_gate_lookups() {
     storage.record_paid_escrow(record).await.unwrap();
 
     assert!(storage
-        .has_paid_escrow(&group_id, payer, recipient, 0)
+        .has_paid_escrow(&group_id, payer, recipient, 0, None)
         .await
         .unwrap());
     assert!(storage
-        .has_paid_escrow(&group_id, payer, recipient, 100)
+        .has_paid_escrow(&group_id, payer, recipient, 100, None)
         .await
         .unwrap());
     // min_amount above the escrowed value does not match.
     assert!(!storage
-        .has_paid_escrow(&group_id, payer, recipient, 101)
+        .has_paid_escrow(&group_id, payer, recipient, 101, None)
         .await
         .unwrap());
     // Direction matters: recipient never paid the payer.
     assert!(!storage
-        .has_paid_escrow(&group_id, recipient, payer, 0)
+        .has_paid_escrow(&group_id, recipient, payer, 0, None)
         .await
         .unwrap());
 
     // Latest-amount lookup: highest-seq escrow wins, direction still matters.
     assert_eq!(
         storage
-            .latest_paid_escrow_amount(&group_id, payer, recipient)
+            .latest_paid_escrow_amount(&group_id, payer, recipient, None)
             .await
             .unwrap(),
         Some(100)
@@ -174,14 +174,14 @@ async fn postgres_paid_escrow_upsert_and_gate_lookups() {
         .unwrap();
     assert_eq!(
         storage
-            .latest_paid_escrow_amount(&group_id, payer, recipient)
+            .latest_paid_escrow_amount(&group_id, payer, recipient, None)
             .await
             .unwrap(),
         Some(250)
     );
     assert_eq!(
         storage
-            .latest_paid_escrow_amount(&group_id, recipient, payer)
+            .latest_paid_escrow_amount(&group_id, recipient, payer, None)
             .await
             .unwrap(),
         None

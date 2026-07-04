@@ -213,9 +213,7 @@ describe('WSRelayerTransport', () => {
 				expires_at: 1_700_000_005,
 			}),
 		);
-		socket.emitMessage(
-			JSON.stringify({ type: 'typing.stop', group_id: GROUP_ID, member: '0xa' }),
-		);
+		socket.emitMessage(JSON.stringify({ type: 'typing.stop', group_id: GROUP_ID, member: '0xa' }));
 		socket.emitMessage(
 			JSON.stringify({
 				type: 'presence.updated',
@@ -270,9 +268,7 @@ describe('WSRelayerTransport', () => {
 
 		const socket = MockWebSocket.instances[0]!;
 		expect(socket.url).toContain('wss://relayer.example.com/v1/users/ws?');
-		expect(socket.url).toContain(
-			`sender_address=${encodeURIComponent(keypair.toMySoAddress())}`,
-		);
+		expect(socket.url).toContain(`sender_address=${encodeURIComponent(keypair.toMySoAddress())}`);
 		expect(socket.url).not.toContain('group_id=');
 
 		socket.emitMessage(

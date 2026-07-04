@@ -179,19 +179,13 @@ export class WSRelayerTransport {
 				}
 				return;
 			} catch (error) {
-				reconnectAttempt = await this.#handleStreamError(
-					error,
-					reconnectAttempt,
-					params.signal,
-				);
+				reconnectAttempt = await this.#handleStreamError(error, reconnectAttempt, params.signal);
 				if (reconnectAttempt < 0) return;
 			}
 		}
 	}
 
-	async *subscribeUserEvents(
-		params: SubscribeUserEventsParams,
-	): AsyncIterable<RelayerUserEvent> {
+	async *subscribeUserEvents(params: SubscribeUserEventsParams): AsyncIterable<RelayerUserEvent> {
 		let reconnectAttempt = 0;
 
 		while (!this.#disconnected && !params.signal?.aborted) {
@@ -199,22 +193,14 @@ export class WSRelayerTransport {
 				const query = await createUserWsAuthQuery(params.signer);
 				const wsUrl = `${relayerUrlToWsBase(this.#relayerUrl)}${this.#userWsPath}?${query}`;
 
-				for await (const event of this.#connectAndStream(
-					wsUrl,
-					params.signal,
-					parseUserFrame,
-				)) {
+				for await (const event of this.#connectAndStream(wsUrl, params.signal, parseUserFrame)) {
 					if (this.#disconnected || params.signal?.aborted) return;
 					yield event;
 					reconnectAttempt = 0;
 				}
 				return;
 			} catch (error) {
-				reconnectAttempt = await this.#handleStreamError(
-					error,
-					reconnectAttempt,
-					params.signal,
-				);
+				reconnectAttempt = await this.#handleStreamError(error, reconnectAttempt, params.signal);
 				if (reconnectAttempt < 0) return;
 			}
 		}

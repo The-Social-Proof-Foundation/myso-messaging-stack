@@ -11,7 +11,7 @@ export {
 } from './factory.js';
 export { MySoMessagingStackCall } from './call.js';
 export { MySoMessagingStackTransactions } from './transactions.js';
-export { MySoMessagingStackView } from './view.js';
+export { MySoMessagingStackView, type MessagingConfigView } from './view.js';
 export { MySoMessagingStackDerive } from './derive.js';
 export { MySoMessagingStackBCS } from './bcs.js';
 export { MySoMessagingStackClientError, EncryptionAccessDeniedError } from './error.js';

@@ -21,6 +21,8 @@ const NAMESPACE_TYPE = `${GENESIS_PACKAGE_IDS.messaging}::messaging::MessagingNa
 const BLOCK_LIST_TYPE = `${GENESIS_PACKAGE_IDS.social}::block_list::BlockListRegistry`;
 const SOCIAL_GRAPH_TYPE = `${GENESIS_PACKAGE_IDS.social}::social_graph::SocialGraph`;
 const MEMORY_REGISTRY_TYPE = `${GENESIS_PACKAGE_IDS.social}::memory::MemoryRegistry`;
+const MEMORY_CONFIG_TYPE = `${GENESIS_PACKAGE_IDS.social}::memory::MemoryConfig`;
+const MESSAGING_CONFIG_TYPE = `${GENESIS_PACKAGE_IDS.messaging}::messaging_config::MessagingConfig`;
 const ECOSYSTEM_TREASURY_TYPE = `${GENESIS_PACKAGE_IDS.social}::profile::EcosystemTreasury`;
 
 const MOCK_NAMESPACE_ID = '0x' + 'aa'.repeat(32);
@@ -28,6 +30,8 @@ const MOCK_VERSION_ID = '0x' + 'bb'.repeat(32);
 const MOCK_BLOCK_LIST_ID = '0x' + 'cc'.repeat(32);
 const MOCK_SOCIAL_GRAPH_ID = '0x' + 'dd'.repeat(32);
 const MOCK_MEMORY_REGISTRY_ID = '0x' + 'ee'.repeat(32);
+const MOCK_MEMORY_CONFIG_ID = '0x' + '66'.repeat(32);
+const MOCK_MESSAGING_CONFIG_ID = '0x' + '77'.repeat(32);
 const MOCK_ECOSYSTEM_TREASURY_ID = '0x' + 'ff'.repeat(32);
 
 const OBJECT_TYPES: Record<string, string> = {
@@ -162,6 +166,12 @@ function mockGraphqlFetch(fetchMock: ReturnType<typeof vi.fn>) {
 		if (moveType === MEMORY_REGISTRY_TYPE) {
 			return graphqlResponse([{ address: MOCK_MEMORY_REGISTRY_ID }]) as Response;
 		}
+		if (moveType === MEMORY_CONFIG_TYPE) {
+			return graphqlResponse([{ address: MOCK_MEMORY_CONFIG_ID }]) as Response;
+		}
+		if (moveType === MESSAGING_CONFIG_TYPE) {
+			return graphqlResponse([{ address: MOCK_MESSAGING_CONFIG_ID }]) as Response;
+		}
 		if (moveType === ECOSYSTEM_TREASURY_TYPE) {
 			return graphqlResponse([{ address: MOCK_ECOSYSTEM_TREASURY_ID }]) as Response;
 		}
@@ -245,6 +255,12 @@ describe('resolveGenesisMessagingConfig RPC fallback', () => {
 			}
 			if (moveType === MEMORY_REGISTRY_TYPE) {
 				return graphqlResponse([{ address: MOCK_MEMORY_REGISTRY_ID }]) as Response;
+			}
+			if (moveType === MEMORY_CONFIG_TYPE) {
+				return graphqlResponse([{ address: MOCK_MEMORY_CONFIG_ID }]) as Response;
+			}
+			if (moveType === MESSAGING_CONFIG_TYPE) {
+				return graphqlResponse([{ address: MOCK_MESSAGING_CONFIG_ID }]) as Response;
 			}
 			if (moveType === ECOSYSTEM_TREASURY_TYPE) {
 				return graphqlResponse([{ address: MOCK_ECOSYSTEM_TREASURY_ID }]) as Response;

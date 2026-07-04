@@ -707,10 +707,7 @@ export class MySoMessagingStackClient<TApproveContext = void> {
 	/**
 	 * Unread counts and latest message order per group — one batch relayer request.
 	 */
-	async getGroupActivitySummary(options: {
-		signer: Signer;
-		groupIds: string[];
-	}): Promise<{
+	async getGroupActivitySummary(options: { signer: Signer; groupIds: string[] }): Promise<{
 		counts: Record<string, number>;
 		latestOrders: Record<string, number>;
 	}> {

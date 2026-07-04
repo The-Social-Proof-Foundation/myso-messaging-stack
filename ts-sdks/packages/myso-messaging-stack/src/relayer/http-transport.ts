@@ -658,9 +658,7 @@ export class HTTPRelayerTransport implements RelayerTransport {
 	 * snapshot is a baseline). Read-state and discovery events have no polling
 	 * equivalent — consumers reconcile those through their own REST paths.
 	 */
-	async *subscribeUserEvents(
-		params: SubscribeUserEventsParams,
-	): AsyncIterable<RelayerUserEvent> {
+	async *subscribeUserEvents(params: SubscribeUserEventsParams): AsyncIterable<RelayerUserEvent> {
 		let snapshot: Map<string, number> | undefined;
 
 		while (!this.#disconnected && !params.signal?.aborted) {

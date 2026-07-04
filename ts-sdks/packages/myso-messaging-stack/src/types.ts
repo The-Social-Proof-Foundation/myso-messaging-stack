@@ -38,6 +38,10 @@ export type MySoMessagingStackPackageConfig = {
 	socialGraphId: string;
 	/** Social MemoryRegistry shared object ID (`0x50c1::memory::MemoryRegistry`) */
 	memoryRegistryId: string;
+	/** Social MemoryConfig shared object ID (`0x50c1::memory::MemoryConfig`) */
+	memoryConfigId: string;
+	/** MessagingConfig shared object ID (`0xe110::messaging_config::MessagingConfig`) */
+	messagingConfigId: string;
 	/** Social EcosystemTreasury shared object ID (`0x50c1::profile::EcosystemTreasury`) */
 	ecosystemTreasuryId: string;
 };

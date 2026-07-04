@@ -18,13 +18,13 @@
  * @throws {Error} when `emoji` is empty or whitespace-only.
  */
 export function emojiToStorage(emoji: string): string {
-    const normalized = emoji.normalize("NFC");
+	const normalized = emoji.normalize('NFC');
 
-    if (normalized.length === 0) {
-        throw new Error("Emoji cannot be empty");
-    }
+	if (normalized.length === 0) {
+		throw new Error('Emoji cannot be empty');
+	}
 
-    return normalized;
+	return normalized;
 }
 
 /** Converts a stored emoji string back to its display form (identity). */
