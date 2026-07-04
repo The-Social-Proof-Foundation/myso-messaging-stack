@@ -247,6 +247,12 @@ async fn response_json(response: axum::response::Response) -> serde_json::Value 
     serde_json::from_slice(&bytes).unwrap()
 }
 
+/// Escrow rows must carry a recent chain timestamp: `PaidEscrowValidityFilter`
+/// rejects `created_at_ms + payment_expiration_ms <= now` (so `0` always fails).
+fn escrow_created_at_ms() -> i64 {
+    chrono::Utc::now().timestamp_millis()
+}
+
 fn escrow(group_id: &str, seq: i64, payer: &str, recipient: &str, amount: i64) -> PaidEscrowRecord {
     PaidEscrowRecord {
         group_id: group_id.to_string(),
@@ -254,7 +260,7 @@ fn escrow(group_id: &str, seq: i64, payer: &str, recipient: &str, amount: i64) -
         payer: payer.to_string(),
         recipient: recipient.to_string(),
         amount,
-        created_at_ms: chrono::Utc::now().timestamp_millis(),
+        created_at_ms: escrow_created_at_ms(),
     }
 }
 

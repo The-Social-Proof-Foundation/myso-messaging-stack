@@ -884,6 +884,39 @@ mod tests {
                 .unwrap(),
             None
         );
+
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        let validity = crate::storage::PaidEscrowValidityFilter {
+            now_ms,
+            payment_expiration_ms: 2_592_000_000,
+        };
+        // Legacy test fixtures with `created_at_ms: 0` are treated as expired.
+        assert!(!storage
+            .has_paid_escrow("group_1", "0xpayer", "0xrecipient", 0, Some(validity))
+            .await
+            .unwrap());
+        storage
+            .record_paid_escrow(crate::models::PaidEscrowRecord {
+                group_id: "group_1".to_string(),
+                seq: 2,
+                payer: "0xpayer".to_string(),
+                recipient: "0xrecipient".to_string(),
+                amount: 500,
+                created_at_ms: now_ms,
+            })
+            .await
+            .unwrap();
+        assert!(storage
+            .has_paid_escrow("group_1", "0xpayer", "0xrecipient", 0, Some(validity))
+            .await
+            .unwrap());
+        assert_eq!(
+            storage
+                .latest_paid_escrow_amount("group_1", "0xpayer", "0xrecipient", Some(validity))
+                .await
+                .unwrap(),
+            Some(500)
+        );
     }
 
     #[tokio::test]
