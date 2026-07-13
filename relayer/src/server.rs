@@ -80,7 +80,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         }
     };
     let push_service = PushService::from_config(&config);
-    let realtime_hub = Arc::new(RealtimeHub::new());
+    let realtime_hub = Arc::new(RealtimeHub::from_config(&config));
 
     let app_state = AppState::new(
         storage.clone(),

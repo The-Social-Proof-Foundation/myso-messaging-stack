@@ -141,17 +141,50 @@ pub async fn create_membership_store_async(
 /// Thread-safe in-memory implementation of MembershipStore.
 pub struct InMemoryMembershipStore {
     members: RwLock<HashMap<String, HashMap<String, HashSet<MessagingPermission>>>>,
+    /// Reverse index: wallet -> groups where the wallet has a non-empty permission set.
+    member_groups: RwLock<HashMap<String, HashSet<String>>>,
 }
 
 impl InMemoryMembershipStore {
     pub fn new() -> Self {
         Self {
             members: RwLock::new(HashMap::new()),
+            member_groups: RwLock::new(HashMap::new()),
         }
     }
 
     pub fn clear(&self) {
         self.members.write().unwrap().clear();
+        self.member_groups.write().unwrap().clear();
+    }
+
+    fn remove_group_from_reverse_index(
+        member_groups: &mut HashMap<String, HashSet<String>>,
+        group_id: &str,
+    ) {
+        member_groups.retain(|_, groups| {
+            groups.remove(group_id);
+            !groups.is_empty()
+        });
+    }
+
+    fn set_member_in_reverse_index(
+        member_groups: &mut HashMap<String, HashSet<String>>,
+        group_id: &str,
+        address: &str,
+        is_member: bool,
+    ) {
+        if is_member {
+            member_groups
+                .entry(address.to_string())
+                .or_default()
+                .insert(group_id.to_string());
+        } else if let Some(groups) = member_groups.get_mut(address) {
+            groups.remove(group_id);
+            if groups.is_empty() {
+                member_groups.remove(address);
+            }
+        }
     }
 }
 
@@ -232,6 +265,15 @@ impl MembershipStore for InMemoryMembershipStore {
             member_perms.insert(perm);
         }
 
+        let is_member = !member_perms.is_empty();
+        drop(members);
+        Self::set_member_in_reverse_index(
+            &mut self.member_groups.write().unwrap(),
+            group_id,
+            address,
+            is_member,
+        );
+
         Ok(())
     }
 
@@ -265,6 +307,15 @@ impl MembershipStore for InMemoryMembershipStore {
             member_perms.remove(&perm);
         }
 
+        let is_member = !member_perms.is_empty();
+        drop(members);
+        Self::set_member_in_reverse_index(
+            &mut self.member_groups.write().unwrap(),
+            group_id,
+            address,
+            is_member,
+        );
+
         Ok(())
     }
 
@@ -282,6 +333,15 @@ impl MembershipStore for InMemoryMembershipStore {
         for perm in initial_permissions {
             member_perms.insert(perm);
         }
+
+        let is_member = !member_perms.is_empty();
+        drop(members);
+        Self::set_member_in_reverse_index(
+            &mut self.member_groups.write().unwrap(),
+            group_id,
+            address,
+            is_member,
+        );
     }
 
     fn remove_member(&self, group_id: &str, address: &str) {
@@ -289,6 +349,13 @@ impl MembershipStore for InMemoryMembershipStore {
         if let Some(group_members) = members.get_mut(group_id) {
             group_members.remove(address);
         }
+        drop(members);
+        Self::set_member_in_reverse_index(
+            &mut self.member_groups.write().unwrap(),
+            group_id,
+            address,
+            false,
+        );
     }
 
     fn set_group_members(
@@ -303,6 +370,23 @@ impl MembershipStore for InMemoryMembershipStore {
             group_members.insert(address, perm_set);
         }
         members.insert(group_id.to_string(), group_members);
+        drop(members);
+
+        let mut member_groups = self.member_groups.write().unwrap();
+        Self::remove_group_from_reverse_index(&mut member_groups, group_id);
+        let members = self.members.read().unwrap();
+        if let Some(group_members) = members.get(group_id) {
+            for (address, perms) in group_members {
+                if !perms.is_empty() {
+                    Self::set_member_in_reverse_index(
+                        &mut member_groups,
+                        group_id,
+                        address,
+                        true,
+                    );
+                }
+            }
+        }
     }
 
     fn list_member_addresses(&self, group_id: &str) -> Vec<String> {
@@ -320,17 +404,12 @@ impl MembershipStore for InMemoryMembershipStore {
     }
 
     fn groups_for_member(&self, address: &str) -> Vec<String> {
-        let members = self.members.read().unwrap();
-        members
-            .iter()
-            .filter(|(_, group_members)| {
-                group_members
-                    .get(address)
-                    .map(|perms| !perms.is_empty())
-                    .unwrap_or(false)
-            })
-            .map(|(group_id, _)| group_id.clone())
-            .collect()
+        self.member_groups
+            .read()
+            .unwrap()
+            .get(address)
+            .map(|groups| groups.iter().cloned().collect())
+            .unwrap_or_default()
     }
 
     fn clear_all(&self) {
@@ -530,6 +609,55 @@ mod tests {
 
         assert!(store.has_permission(group_id, "0xuser2", MessagingPermission::MessagingSender));
         assert!(store.has_permission(group_id, "0xuser2", MessagingPermission::MessagingEditor));
+        assert_eq!(store.groups_for_member("0xuser1"), vec![group_id.to_string()]);
+    }
+
+    #[test]
+    fn test_revoke_all_permissions_removes_reverse_index_entry() {
+        let store = InMemoryMembershipStore::new();
+        let group_id = "group-123";
+        let address = "0xalice";
+
+        store.add_member(
+            group_id,
+            address,
+            vec![MessagingPermission::MessagingSender],
+        );
+        assert_eq!(store.groups_for_member(address), vec![group_id.to_string()]);
+
+        store
+            .revoke_permissions(
+                group_id,
+                address,
+                vec![MessagingPermission::MessagingSender],
+            )
+            .unwrap();
+        assert!(store.groups_for_member(address).is_empty());
+    }
+
+    #[test]
+    fn test_set_group_members_replaces_reverse_index() {
+        let store = InMemoryMembershipStore::new();
+        let group_id = "group-123";
+
+        store.set_group_members(
+            group_id,
+            vec![(
+                "0xold".to_string(),
+                vec![MessagingPermission::MessagingReader],
+            )],
+        );
+        assert_eq!(store.groups_for_member("0xold"), vec![group_id.to_string()]);
+
+        store.set_group_members(
+            group_id,
+            vec![(
+                "0xnew".to_string(),
+                vec![MessagingPermission::MessagingReader],
+            )],
+        );
+        assert!(store.groups_for_member("0xold").is_empty());
+        assert_eq!(store.groups_for_member("0xnew"), vec![group_id.to_string()]);
     }
 
     #[test]

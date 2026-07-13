@@ -52,6 +52,7 @@
 //! ```
 
 use async_trait::async_trait;
+use std::collections::HashMap;
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -316,6 +317,35 @@ pub trait StorageAdapter: Send + Sync {
     async fn delete_push_token(&self, wallet: &str, token: &str) -> StorageResult<()>;
 
     async fn list_push_tokens_for_wallet(&self, wallet: &str) -> StorageResult<Vec<PushTokenRecord>>;
+
+    /// Batch presence lookup for push fan-out. Postgres overrides with `WHERE wallet = ANY($1)`.
+    async fn get_presence_last_seen_for_wallets(
+        &self,
+        wallets: &[String],
+    ) -> StorageResult<HashMap<String, chrono::DateTime<chrono::Utc>>> {
+        let mut out = HashMap::new();
+        for wallet in wallets {
+            if let Ok(Some(last_seen)) = self.get_presence_last_seen(wallet).await {
+                out.insert(wallet.clone(), last_seen);
+            }
+        }
+        Ok(out)
+    }
+
+    /// Batch push-token lookup for push fan-out. Postgres overrides with `WHERE wallet = ANY($1)`.
+    async fn list_push_tokens_for_wallets(
+        &self,
+        wallets: &[String],
+    ) -> StorageResult<HashMap<String, Vec<PushTokenRecord>>> {
+        let mut out = HashMap::new();
+        for wallet in wallets {
+            let tokens = self.list_push_tokens_for_wallet(wallet).await?;
+            if !tokens.is_empty() {
+                out.insert(wallet.clone(), tokens);
+            }
+        }
+        Ok(out)
+    }
 
     // === Presence (last seen) ===
 

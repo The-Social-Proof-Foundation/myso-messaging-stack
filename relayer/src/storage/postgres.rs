@@ -1,5 +1,6 @@
 //! PostgreSQL storage backend for production deployments.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -806,6 +807,32 @@ impl StorageAdapter for PostgresStorage {
             .collect())
     }
 
+    async fn list_push_tokens_for_wallets(
+        &self,
+        wallets: &[String],
+    ) -> StorageResult<HashMap<String, Vec<PushTokenRecord>>> {
+        if wallets.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let rows = sqlx::query("SELECT * FROM push_tokens WHERE wallet = ANY($1)")
+            .bind(wallets)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| StorageError::OperationFailed(e.to_string()))?;
+        let mut out: HashMap<String, Vec<PushTokenRecord>> = HashMap::new();
+        for r in rows {
+            let record = PushTokenRecord {
+                wallet: r.get("wallet"),
+                platform: r.get("platform"),
+                token: r.get("token"),
+                environment: r.get("environment"),
+                updated_at: r.get("updated_at"),
+            };
+            out.entry(record.wallet.clone()).or_default().push(record);
+        }
+        Ok(out)
+    }
+
     async fn update_presence(&self, wallet: &str) -> StorageResult<()> {
         sqlx::query(
             r#"INSERT INTO presence (wallet, last_seen_at) VALUES ($1, $2)
@@ -829,6 +856,24 @@ impl StorageAdapter for PostgresStorage {
             .await
             .map_err(|e| StorageError::OperationFailed(e.to_string()))?;
         Ok(row.map(|r| r.get("last_seen_at")))
+    }
+
+    async fn get_presence_last_seen_for_wallets(
+        &self,
+        wallets: &[String],
+    ) -> StorageResult<HashMap<String, chrono::DateTime<chrono::Utc>>> {
+        if wallets.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let rows = sqlx::query("SELECT wallet, last_seen_at FROM presence WHERE wallet = ANY($1)")
+            .bind(wallets)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| StorageError::OperationFailed(e.to_string()))?;
+        Ok(rows
+            .into_iter()
+            .map(|r| (r.get("wallet"), r.get("last_seen_at")))
+            .collect())
     }
 
     async fn notify_realtime_event(&self, payload_json: &str) -> StorageResult<()> {

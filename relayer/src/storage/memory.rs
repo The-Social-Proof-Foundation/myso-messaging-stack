@@ -586,6 +586,27 @@ impl StorageAdapter for InMemoryStorage {
             .collect())
     }
 
+    async fn list_push_tokens_for_wallets(
+        &self,
+        wallets: &[String],
+    ) -> StorageResult<HashMap<String, Vec<PushTokenRecord>>> {
+        if wallets.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let wallet_set: HashSet<&str> = wallets.iter().map(String::as_str).collect();
+        let tokens = self
+            .push_tokens
+            .read()
+            .map_err(|e| StorageError::OperationFailed(format!("Lock poisoned: {}", e)))?;
+        let mut out: HashMap<String, Vec<PushTokenRecord>> = HashMap::new();
+        for token in tokens.values() {
+            if wallet_set.contains(token.wallet.as_str()) {
+                out.entry(token.wallet.clone()).or_default().push(token.clone());
+            }
+        }
+        Ok(out)
+    }
+
     async fn update_presence(&self, wallet: &str) -> StorageResult<()> {
         let mut presence = self
             .presence
@@ -604,6 +625,25 @@ impl StorageAdapter for InMemoryStorage {
             .read()
             .map_err(|e| StorageError::OperationFailed(format!("Lock poisoned: {}", e)))?;
         Ok(presence.get(wallet).copied())
+    }
+
+    async fn get_presence_last_seen_for_wallets(
+        &self,
+        wallets: &[String],
+    ) -> StorageResult<HashMap<String, chrono::DateTime<chrono::Utc>>> {
+        if wallets.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let wallet_set: HashSet<&str> = wallets.iter().map(String::as_str).collect();
+        let presence = self
+            .presence
+            .read()
+            .map_err(|e| StorageError::OperationFailed(format!("Lock poisoned: {}", e)))?;
+        Ok(presence
+            .iter()
+            .filter(|(wallet, _)| wallet_set.contains(wallet.as_str()))
+            .map(|(wallet, last_seen)| (wallet.clone(), *last_seen))
+            .collect())
     }
 
     async fn notify_realtime_event(&self, _payload_json: &str) -> StorageResult<()> {

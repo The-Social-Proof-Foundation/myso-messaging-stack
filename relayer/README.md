@@ -551,7 +551,7 @@ Schema is applied via versioned SQL migrations in `relayer/migrations/` at conne
 
 When `PUSH_ENABLED=true` and all APNs credentials are set, the relayer sends **metadata-only** background pushes to offline iOS clients after each new message is stored. Push fan-out runs asynchronously so message POST latency is unaffected.
 
-**Gating:** push is skipped for the sender and for wallets with presence updated within `PRESENCE_TTL_SECS` (default 45s).
+**Gating:** push is skipped for the sender and for wallets with presence updated within `PRESENCE_TTL_SECS` (default 45s). For large groups, push fan-out batches presence and token lookups and sends APNs requests with bounded concurrency (`PUSH_NOTIFY_CONCURRENCY`, default 50). When a group reaches `PUSH_LARGE_GROUP_WARN_MEMBERS` (default 500), the relayer logs a warning so operators can spot oversized fan-out early.
 
 **Payload** (no message plaintext — relayer never decrypts):
 
@@ -611,7 +611,7 @@ Permissions are parsed from MySo type name strings like `0x123::messaging::Messa
 
 ### MembershipStore
 
-The in-memory membership store uses a nested `HashMap` protected by a `RwLock`:
+The in-memory membership store uses a nested `HashMap` protected by a `RwLock`, plus a reverse index (`wallet -> groups`) so presence fan-out and `groups_for_member` avoid scanning every group on the node:
 
 ```
 HashMap<group_id, HashMap<address, HashSet<Permission>>>
@@ -690,6 +690,8 @@ All configuration is loaded from environment variables. The relayer also support
 | `BLOCK_CACHE_MAX_ENTRIES` | `100000` | No | Block check LRU max entries |
 | `PUSH_ENABLED` | `false` | No | Enable APNs push delivery on new messages |
 | `PRESENCE_TTL_SECS` | `45` | No | Skip push if wallet seen within N seconds |
+| `PUSH_NOTIFY_CONCURRENCY` | `50` | No | Max concurrent APNs sends per group message |
+| `PUSH_LARGE_GROUP_WARN_MEMBERS` | `500` | No | Log a warning when push fan-out targets at least this many members |
 | `APNS_KEY_ID`, `APNS_TEAM_ID`, `APNS_BUNDLE_ID`, `APNS_AUTH_KEY_PATH`, `APNS_ENVIRONMENT` | — | When push enabled | APNs credentials (HTTP/2 + JWT via `.p8` key) |
 | `FILE_STORAGE_PUBLISHER_URL` | `https://publisher.file-storage-testnet.mysocial.network` | No | File Storage publisher endpoint for storing blobs/quilts |
 | `FILE_STORAGE_AGGREGATOR_URL` | `https://aggregator.file-storage-testnet.mysocial.network` | No | File Storage aggregator endpoint for reading blobs |
@@ -698,6 +700,8 @@ All configuration is loaded from environment variables. The relayer also support
 | `FILE_STORAGE_SYNC_BATCH_SIZE` | `100` | No | Max messages per sync cycle (hard-capped at 666 by File Storage quilt limit) |
 | `FILE_STORAGE_SYNC_MESSAGE_THRESHOLD` | `50` | No | Number of new messages that trigger an immediate sync (0 = timer-only) |
 | `REALTIME_ENABLED` | `true` when `STORAGE_TYPE=postgres`, else follows default | No | Master switch for WebSocket endpoint and Postgres LISTEN worker |
+| `REALTIME_GROUP_BUFFER_SIZE` | `256` | No | Per-group broadcast channel buffer for WebSocket fan-out |
+| `REALTIME_USER_FEED_BUFFER_SIZE` | `512` | No | Global user-feed broadcast channel buffer |
 | `WS_PING_INTERVAL_SECS` | `30` | No | Server-side presence refresh interval for active WebSocket connections |
 | `RUST_LOG` | `messaging_relayer=info` | No | Log level |
 

@@ -98,6 +98,10 @@ pub struct Config {
     pub push_enabled: bool,
     /// Skip push if wallet presence seen within this many seconds (default: 45).
     pub presence_ttl_secs: u64,
+    /// Max concurrent APNs sends per group message (default: 50).
+    pub push_notify_concurrency: usize,
+    /// Log a warning when push fan-out targets at least this many members (default: 500).
+    pub push_large_group_warn_members: usize,
     /// APNs key id (optional).
     pub apns_key_id: Option<String>,
     /// APNs team id (optional).
@@ -111,6 +115,10 @@ pub struct Config {
 
     /// Enable WebSocket realtime + Postgres LISTEN worker (default: true).
     pub realtime_enabled: bool,
+    /// Per-group broadcast channel buffer size (default: 256).
+    pub realtime_group_buffer_size: usize,
+    /// Global user-feed broadcast channel buffer size (default: 512).
+    pub realtime_user_feed_buffer_size: usize,
     /// WebSocket presence refresh interval in seconds (default: 30).
     pub ws_ping_interval_secs: u64,
 
@@ -251,6 +259,15 @@ impl Config {
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(45);
+        let push_notify_concurrency = env::var("PUSH_NOTIFY_CONCURRENCY")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(50)
+            .max(1);
+        let push_large_group_warn_members = env::var("PUSH_LARGE_GROUP_WARN_MEMBERS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(500);
         let apns_key_id = env::var("APNS_KEY_ID").ok();
         let apns_team_id = env::var("APNS_TEAM_ID").ok();
         let apns_bundle_id = env::var("APNS_BUNDLE_ID").ok();
@@ -261,6 +278,16 @@ impl Config {
             .ok()
             .map(|v| v == "true" || v == "1")
             .unwrap_or(true);
+        let realtime_group_buffer_size = env::var("REALTIME_GROUP_BUFFER_SIZE")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(256)
+            .max(1);
+        let realtime_user_feed_buffer_size = env::var("REALTIME_USER_FEED_BUFFER_SIZE")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(512)
+            .max(1);
         let ws_ping_interval_secs = env::var("WS_PING_INTERVAL_SECS")
             .ok()
             .and_then(|v| v.parse().ok())
@@ -306,12 +333,16 @@ impl Config {
             social_package_id,
             push_enabled,
             presence_ttl_secs,
+            push_notify_concurrency,
+            push_large_group_warn_members,
             apns_key_id,
             apns_team_id,
             apns_bundle_id,
             apns_auth_key_path,
             apns_environment,
             realtime_enabled,
+            realtime_group_buffer_size,
+            realtime_user_feed_buffer_size,
             ws_ping_interval_secs,
             workflow_enabled,
             internal_sync_secret,
@@ -353,12 +384,16 @@ impl Default for Config {
             social_package_id: GENESIS_SOCIAL_PACKAGE_ID.to_string(),
             push_enabled: false,
             presence_ttl_secs: 45,
+            push_notify_concurrency: 50,
+            push_large_group_warn_members: 500,
             apns_key_id: None,
             apns_team_id: None,
             apns_bundle_id: None,
             apns_auth_key_path: None,
             apns_environment: "sandbox".to_string(),
             realtime_enabled: true,
+            realtime_group_buffer_size: 256,
+            realtime_user_feed_buffer_size: 512,
             ws_ping_interval_secs: 30,
             workflow_enabled: false,
             internal_sync_secret: None,

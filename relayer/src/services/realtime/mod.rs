@@ -11,6 +11,7 @@ use tracing::warn;
 use uuid::Uuid;
 
 use crate::auth::MembershipStore;
+use crate::config::Config;
 use crate::handlers::messages::response::MessageResponse;
 use crate::models::ReactionEntry;
 use crate::storage::{StorageAdapter, StorageResult};
@@ -441,6 +442,7 @@ pub enum RealtimeEvent {
 pub struct RealtimeHub {
     channels: Arc<RwLock<HashMap<String, broadcast::Sender<RealtimeEvent>>>>,
     user_feed: broadcast::Sender<UserFeedEvent>,
+    group_buffer_size: usize,
 }
 
 impl Default for RealtimeHub {
@@ -451,9 +453,21 @@ impl Default for RealtimeHub {
 
 impl RealtimeHub {
     pub fn new() -> Self {
+        Self::with_buffer_sizes(256, 512)
+    }
+
+    pub fn from_config(config: &Config) -> Self {
+        Self::with_buffer_sizes(
+            config.realtime_group_buffer_size,
+            config.realtime_user_feed_buffer_size,
+        )
+    }
+
+    fn with_buffer_sizes(group_buffer_size: usize, user_feed_buffer_size: usize) -> Self {
         Self {
             channels: Arc::new(RwLock::new(HashMap::new())),
-            user_feed: broadcast::channel(512).0,
+            user_feed: broadcast::channel(user_feed_buffer_size.max(1)).0,
+            group_buffer_size: group_buffer_size.max(1),
         }
     }
 
@@ -461,7 +475,7 @@ impl RealtimeHub {
         let mut channels = self.channels.write().expect("realtime hub lock poisoned");
         channels
             .entry(group_id.to_string())
-            .or_insert_with(|| broadcast::channel(256).0)
+            .or_insert_with(|| broadcast::channel(self.group_buffer_size).0)
             .clone()
     }
 
@@ -538,7 +552,7 @@ mod tests {
     use super::*;
     use crate::models::Message;
 
-    fn sample_message(group_id: &str, order: i64) -> Message {
+    fn sample_message(group_id: &str, _order: i64) -> Message {
         Message::new(
             group_id.to_string(),
             "0xsender".to_string(),
