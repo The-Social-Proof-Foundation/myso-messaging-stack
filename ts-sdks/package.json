@@ -14,7 +14,8 @@
 		"lint": "pnpm run oxlint:check && pnpm run prettier:check",
 		"lint:fix": "pnpm run oxlint:fix && pnpm run prettier:fix",
 		"build": "turbo run build",
-		"release": "pnpm turbo run build --filter \"./packages/*\" && pnpm changeset publish"
+		"release": "pnpm turbo run build --filter \"./packages/*\" && pnpm changeset publish",
+		"publish:myso-messaging-stack": "pnpm --filter @socialproof/myso-messaging-stack build && pnpm --filter @socialproof/myso-messaging-stack publish"
 	},
 	"packageManager": "pnpm@10.17.0",
 	"pnpm": {

@@ -24,8 +24,8 @@ importers:
         specifier: ^0.0.1
         version: 0.0.1(@socialproof/bcs@0.0.2)(@socialproof/myso@0.0.4(typescript@5.8.3))
       '@socialproof/myso-messaging-stack':
-        specifier: file:../ts-sdks/packages/myso-messaging-stack
-        version: file:../ts-sdks/packages/myso-messaging-stack(@socialproof/bcs@0.0.2)(@socialproof/mydata@0.0.4(@socialproof/myso@0.0.4(typescript@5.8.3)))(@socialproof/myso-groups@0.0.1(@socialproof/bcs@0.0.2)(@socialproof/myso@0.0.4(typescript@5.8.3)))(@socialproof/myso@0.0.4(typescript@5.8.3))
+        specifier: ^0.1.1
+        version: 0.1.1(@socialproof/bcs@0.0.2)(@socialproof/mydata@0.0.4(@socialproof/myso@0.0.4(typescript@5.8.3)))(@socialproof/myso-groups@0.0.1(@socialproof/bcs@0.0.2)(@socialproof/myso@0.0.4(typescript@5.8.3)))(@socialproof/myso@0.0.4(typescript@5.8.3))
       '@socialproof/mysocial-auth':
         specifier: ^0.12.4
         version: 0.12.4
@@ -525,8 +525,8 @@ packages:
       '@socialproof/bcs': ^0.0.2
       '@socialproof/myso': ^0.0.4
 
-  '@socialproof/myso-messaging-stack@file:../ts-sdks/packages/myso-messaging-stack':
-    resolution: {directory: ../ts-sdks/packages/myso-messaging-stack, type: directory}
+  '@socialproof/myso-messaging-stack@0.1.1':
+    resolution: {integrity: sha512-qE162wrFU8IGjsoH8XGe1BRrhBSWDX7YmtqkE4bXC9/Cvo3m8Irkjnx3qO0OBmega4GhauT7lxQtfCv/OqF89A==}
     peerDependencies:
       '@socialproof/bcs': ^0.0.2
       '@socialproof/mydata': ^0.0.4
@@ -1331,7 +1331,7 @@ snapshots:
       '@socialproof/bcs': 0.0.2
       '@socialproof/myso': 0.0.4(typescript@5.8.3)
 
-  '@socialproof/myso-messaging-stack@file:../ts-sdks/packages/myso-messaging-stack(@socialproof/bcs@0.0.2)(@socialproof/mydata@0.0.4(@socialproof/myso@0.0.4(typescript@5.8.3)))(@socialproof/myso-groups@0.0.1(@socialproof/bcs@0.0.2)(@socialproof/myso@0.0.4(typescript@5.8.3)))(@socialproof/myso@0.0.4(typescript@5.8.3))':
+  '@socialproof/myso-messaging-stack@0.1.1(@socialproof/bcs@0.0.2)(@socialproof/mydata@0.0.4(@socialproof/myso@0.0.4(typescript@5.8.3)))(@socialproof/myso-groups@0.0.1(@socialproof/bcs@0.0.2)(@socialproof/myso@0.0.4(typescript@5.8.3)))(@socialproof/myso@0.0.4(typescript@5.8.3))':
     dependencies:
       '@socialproof/bcs': 0.0.2
       '@socialproof/mydata': 0.0.4(@socialproof/myso@0.0.4(typescript@5.8.3))

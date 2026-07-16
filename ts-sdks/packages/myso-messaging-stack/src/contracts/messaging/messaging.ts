@@ -1215,6 +1215,80 @@ export function replyToPaidMessageClaimSettled(options: ReplyToPaidMessageClaimS
 			arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
 		});
 }
+export interface ReplyToPaidMessageClaimSettledWithPlatformArguments {
+	version: RawTransactionArgument<string>;
+	config: RawTransactionArgument<string>;
+	group: RawTransactionArgument<string>;
+	log: RawTransactionArgument<string>;
+	blockList: RawTransactionArgument<string>;
+	paidMsgSeq: RawTransactionArgument<number | bigint>;
+	charCount: RawTransactionArgument<number>;
+	dedupeKey: RawTransactionArgument<number[]>;
+	nonce: RawTransactionArgument<number | bigint>;
+	platform: RawTransactionArgument<string>;
+	ecosystemTreasury: RawTransactionArgument<string>;
+}
+export interface ReplyToPaidMessageClaimSettledWithPlatformOptions {
+	package?: string;
+	arguments:
+		| ReplyToPaidMessageClaimSettledWithPlatformArguments
+		| [
+				version: RawTransactionArgument<string>,
+				config: RawTransactionArgument<string>,
+				group: RawTransactionArgument<string>,
+				log: RawTransactionArgument<string>,
+				blockList: RawTransactionArgument<string>,
+				paidMsgSeq: RawTransactionArgument<number | bigint>,
+				charCount: RawTransactionArgument<number>,
+				dedupeKey: RawTransactionArgument<number[]>,
+				nonce: RawTransactionArgument<number | bigint>,
+				platform: RawTransactionArgument<string>,
+				ecosystemTreasury: RawTransactionArgument<string>,
+		  ];
+}
+/**
+ * Reply and settle with platform treasury: platform fee is deposited into
+ * `Platform.treasury` via `fund_platform_treasury_from_coin`.
+ */
+export function replyToPaidMessageClaimSettledWithPlatform(
+	options: ReplyToPaidMessageClaimSettledWithPlatformOptions,
+) {
+	const packageAddress = options.package ?? '@local-pkg/messaging';
+	const argumentsTypes = [
+		null,
+		null,
+		null,
+		null,
+		null,
+		'u64',
+		'u32',
+		'vector<u8>',
+		'u128',
+		'0x2::clock::Clock',
+		null,
+		null,
+	] satisfies (string | null)[];
+	const parameterNames = [
+		'version',
+		'config',
+		'group',
+		'log',
+		'blockList',
+		'paidMsgSeq',
+		'charCount',
+		'dedupeKey',
+		'nonce',
+		'platform',
+		'ecosystemTreasury',
+	];
+	return (tx: Transaction) =>
+		tx.moveCall({
+			package: packageAddress,
+			module: 'messaging',
+			function: 'reply_to_paid_message_claim_settled_with_platform',
+			arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
+		});
+}
 export interface RefundPaidEscrowArguments {
 	version: RawTransactionArgument<string>;
 	config: RawTransactionArgument<string>;

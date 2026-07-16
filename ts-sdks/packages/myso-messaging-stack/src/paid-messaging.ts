@@ -171,6 +171,25 @@ export interface BuildReplyAndClaimSettledOptions {
 	platformFeeRecipient: string;
 }
 
+export interface BuildReplyAndClaimSettledWithPlatformOptions {
+	groupRef: GroupRef;
+	paidMsgSeq: number | bigint;
+	charCount: number;
+	dedupeKey?: Uint8Array | number[];
+	nonce?: number | bigint;
+	platformId: string;
+}
+
+export interface ReplyAndClaimSettledWithPlatformOptions {
+	signer: Signer;
+	groupRef: GroupRef;
+	paidMsgSeq: number | bigint;
+	charCount: number;
+	dedupeKey: Uint8Array | number[];
+	nonce: number | bigint;
+	platformId: string;
+}
+
 export interface RefundPaidEscrowOptions {
 	signer: Signer;
 	groupRef: GroupRef;
@@ -432,6 +451,25 @@ export class PaidMessagingClient {
 		return { transaction };
 	}
 
+	buildReplyAndClaimSettledWithPlatform(
+		options: BuildReplyAndClaimSettledWithPlatformOptions,
+	): {
+		transaction: Transaction;
+	} {
+		const transaction = new Transaction();
+		transaction.add(
+			this.#messaging.call.replyToPaidMessageClaimSettledWithPlatform({
+				...options.groupRef,
+				paidMsgSeq: options.paidMsgSeq,
+				charCount: options.charCount,
+				dedupeKey: options.dedupeKey ?? randomDedupeKey(),
+				nonce: options.nonce ?? randomNonce(),
+				platformId: options.platformId,
+			}),
+		);
+		return { transaction };
+	}
+
 	async replyAndClaimSettled(options: ReplyAndClaimSettledOptions): Promise<{ digest: string }> {
 		const { transaction } = this.buildReplyAndClaimSettled({
 			groupRef: options.groupRef,
@@ -442,6 +480,24 @@ export class PaidMessagingClient {
 			platformFeeRecipient: options.platformFeeRecipient,
 		});
 		return this.#execute(transaction, options.signer, 'reply and claim settled paid escrow');
+	}
+
+	async replyAndClaimSettledWithPlatform(
+		options: ReplyAndClaimSettledWithPlatformOptions,
+	): Promise<{ digest: string }> {
+		const { transaction } = this.buildReplyAndClaimSettledWithPlatform({
+			groupRef: options.groupRef,
+			paidMsgSeq: options.paidMsgSeq,
+			charCount: options.charCount,
+			dedupeKey: options.dedupeKey,
+			nonce: options.nonce,
+			platformId: options.platformId,
+		});
+		return this.#execute(
+			transaction,
+			options.signer,
+			'reply and claim settled paid escrow with platform treasury',
+		);
 	}
 
 	async refundEscrow(options: RefundPaidEscrowOptions): Promise<{ digest: string }> {

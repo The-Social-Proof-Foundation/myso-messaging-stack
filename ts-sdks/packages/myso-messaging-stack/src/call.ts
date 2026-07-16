@@ -662,6 +662,38 @@ export class MySoMessagingStackCall {
 		};
 	}
 
+	replyToPaidMessageClaimSettledWithPlatform(
+		options: GroupAndMessageLogRef & {
+			paidMsgSeq: number | bigint;
+			charCount: number;
+			dedupeKey: Uint8Array | number[];
+			nonce: number | bigint;
+			platformId: string;
+		},
+	) {
+		return (tx: Transaction) => {
+			const { groupId, messageLogId } = this.#resolveGroupAndLog(options);
+			return tx.add(
+				messaging.replyToPaidMessageClaimSettledWithPlatform({
+					package: this.#packageConfig.latestPackageId,
+					arguments: {
+						version: this.#packageConfig.versionId,
+						config: this.#packageConfig.messagingConfigId,
+						group: groupId,
+						log: messageLogId,
+						blockList: this.#packageConfig.blockListRegistryId,
+						paidMsgSeq: options.paidMsgSeq,
+						charCount: options.charCount,
+						dedupeKey: this.#byteVec(options.dedupeKey),
+						nonce: options.nonce,
+						platform: options.platformId,
+						ecosystemTreasury: this.#packageConfig.ecosystemTreasuryId,
+					},
+				}),
+			);
+		};
+	}
+
 	refundPaidEscrow(
 		options: GroupAndMessageLogRef & {
 			paidMsgSeq: number | bigint;

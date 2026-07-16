@@ -248,4 +248,30 @@ describe('PaidMessagingClient builders', () => {
 		expect(ecosystemTreasuryArg?.$kind).toBe('Input');
 		expect(objectInputId(transaction, ecosystemTreasuryArg)).toBe(MOCK_ECOSYSTEM_TREASURY_ID);
 	});
+
+	it('buildReplyAndClaimSettledWithPlatform targets reply_to_paid_message_claim_settled_with_platform', () => {
+		const platformId = '0x' + 'ab'.repeat(32);
+		const { transaction } = paid.buildReplyAndClaimSettledWithPlatform({
+			groupRef: { uuid: 'claim-uuid' },
+			paidMsgSeq: 0n,
+			charCount: 12,
+			platformId,
+		});
+
+		const moveCall = findMoveCall(
+			transaction,
+			'reply_to_paid_message_claim_settled_with_platform',
+		);
+		expect(moveCall).toBeDefined();
+		expect(moveCall?.module).toBe('messaging');
+		expect(moveCall?.package).toBe(MOCK_PACKAGE_ID);
+
+		const args = moveCall?.arguments ?? [];
+		const platformArg = args[args.length - 2];
+		const ecosystemTreasuryArg = args[args.length - 1];
+		expect(platformArg?.$kind).toBe('Input');
+		expect(ecosystemTreasuryArg?.$kind).toBe('Input');
+		expect(objectInputId(transaction, platformArg)).toBe(platformId);
+		expect(objectInputId(transaction, ecosystemTreasuryArg)).toBe(MOCK_ECOSYSTEM_TREASURY_ID);
+	});
 });

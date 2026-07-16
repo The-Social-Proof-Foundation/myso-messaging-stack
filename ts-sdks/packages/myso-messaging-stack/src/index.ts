@@ -113,7 +113,9 @@ export {
 	type BuildOpenPaidDmResult,
 	type BuildPayDmEscrowOptions,
 	type BuildReplyAndClaimSettledOptions,
+	type BuildReplyAndClaimSettledWithPlatformOptions,
 	type ReplyAndClaimSettledOptions,
+	type ReplyAndClaimSettledWithPlatformOptions,
 	type RefundPaidEscrowOptions,
 	type SetPaidPolicyOptions,
 } from './paid-messaging.js';

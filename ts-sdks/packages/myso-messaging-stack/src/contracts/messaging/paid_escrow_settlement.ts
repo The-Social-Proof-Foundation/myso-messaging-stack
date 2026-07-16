@@ -11,11 +11,9 @@
  * platform share is combined with the ecosystem share and sent to
  * `ecosystem_fee_recipient` (wallet paid DMs with no associated platform).
  *
- * Uses `transfer::public_transfer` to fee recipients. Credits to the live
- * `Platform` treasury balance require
- * `social_contracts::platform::add_to_treasury` (same-package); see
- * `ref_social_contract/sources/messaging_paid_fee_bridge.move` for a
- * foundation-side helper.
+ * Uses `transfer::public_transfer` to fee recipients, or
+ * `social_contracts::platform::fund_platform_treasury_from_coin` when settling
+ * via `reply_to_paid_message_claim_settled_with_platform`.
  */
 
 import { MoveStruct, normalizeMoveArguments, type RawTransactionArgument } from '../utils/index.js';

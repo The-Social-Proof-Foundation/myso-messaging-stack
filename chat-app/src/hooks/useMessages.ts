@@ -618,12 +618,20 @@ export function useMessages(
         if (claimPendingRef.current) {
           setClaiming(true);
           const paid = createPaidMessagingClient({ messaging: client.messaging });
-          const { transaction } = paid.buildReplyAndClaimSettled({
-            groupRef: { uuid: uuidRef.current },
-            paidMsgSeq: 0n,
-            charCount: trimmed.length,
-            platformFeeRecipient: PAID_MSG_NO_PLATFORM_FEE_RECIPIENT,
-          });
+          const platformId = import.meta.env.VITE_PLATFORM_ID?.trim() || null;
+          const { transaction } = platformId
+            ? paid.buildReplyAndClaimSettledWithPlatform({
+                groupRef: { uuid: uuidRef.current },
+                paidMsgSeq: 0n,
+                charCount: trimmed.length,
+                platformId,
+              })
+            : paid.buildReplyAndClaimSettled({
+                groupRef: { uuid: uuidRef.current },
+                paidMsgSeq: 0n,
+                charCount: trimmed.length,
+                platformFeeRecipient: PAID_MSG_NO_PLATFORM_FEE_RECIPIENT,
+              });
           await signAndExecuteTransactionAndWait(client, signer, transaction);
           claimCompleted = true;
         }

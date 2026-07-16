@@ -310,8 +310,11 @@ curl -H "Client-Sdk-Version: 0.0.4" \
 | `VITE_ENABLE_AGENT_DEV=true` | Shows dev agent send panel in chat |
 | `VITE_AGENT_SUB_AGENT_ID` | Sub-agent object id (dev panel) |
 | `VITE_AGENT_SECRET_KEY` | Agent Ed25519 secret key hex (dev panel) |
-| `VITE_AGENT_PLATFORM_ID` | Platform shared object id |
+| `VITE_AGENT_PLATFORM_ID` | Platform shared object id (agent send panel only) |
+| `VITE_PLATFORM_ID` | Optional platform shared object id for paid-DM escrow claims; routes platform fees to `Platform.treasury` instead of ecosystem treasury |
 | `VITE_AGENT_MEMORY_ACCOUNT_ID` | Principal (human parent) MemoryAccount object id — created once per human with profile; sub-agents are registered on this account via `register_sub_agent` and do not have their own |
+
+**Platform vs ecosystem treasury (paid-DM claims):** When a peer opens a paid DM and you reply to claim escrow, the on-chain settlement splits fees per `MessagingConfig` BPS. Without `VITE_PLATFORM_ID`, the app uses `reply_to_paid_message_claim_settled` and both fee slices route to the ecosystem treasury wallet (`0x0` sentinel). With `VITE_PLATFORM_ID` set to a shared `Platform` object address, claims use `reply_to_paid_message_claim_settled_with_platform` and the platform fee slice credits `Platform.treasury` on-chain. `VITE_AGENT_PLATFORM_ID` is separate — it scopes agent message sends, not claim settlement.
 
 **Localnet ports** (typical `myso start --with-graphql --with-social-indexer --with-mydata`):
 

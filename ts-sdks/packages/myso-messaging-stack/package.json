@@ -1,6 +1,6 @@
 {
 	"name": "@socialproof/myso-messaging-stack",
-	"version": "0.1.0",
+	"version": "0.1.1",
 	"private": false,
 	"description": "Permissioned Messaging Groups",
 	"license": "Apache-2.0",
@@ -31,6 +31,7 @@
 	"scripts": {
 		"clean": "rm -rf tsconfig.tsbuildinfo ./dist",
 		"build": "rm -rf dist && tsc --noEmit && tsdown",
+		"prepublishOnly": "pnpm run build",
 		"codegen:summaries": "(cd ../../../../myso-core/crates/myso-framework/packages/messaging && myso move summary -e localnet)",
 		"codegen:patch": "node scripts/patch-address-mappings.js",
 		"codegen:generate": "myso-ts-codegen generate",
