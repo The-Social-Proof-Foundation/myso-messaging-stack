@@ -30,6 +30,7 @@ import {
   isNotGroupMemberError,
   isPaymentRequiredError,
 } from '../lib/format-relayer-error';
+import { isMessageRecoveryEnabled } from '../lib/messaging-client-factory';
 import { signAndExecuteTransactionAndWait } from '../lib/sign-and-wait';
 import {
   applySnapshotEntries,
@@ -91,6 +92,12 @@ export interface UseMessagesResult {
   /** Broadcast the signer's typing state (fire-and-forget, ephemeral). */
   sendTyping: (typing: boolean) => void;
   loadMore: () => Promise<void>;
+  /** True when Cloudflare archive recovery is enabled for this build. */
+  recoveryEnabled: boolean;
+  /** Archive restore in flight. */
+  restoring: boolean;
+  /** Opt-in restore from the configured archive (merge into live history). */
+  restoreHistory: () => Promise<void>;
   /** Set when the last send hit the paid-DM gate; renders the payment dialog. */
   paymentRequired: PaymentRequiredState | null;
   /** Payment transaction + post-payment retry in flight. */
@@ -222,8 +229,10 @@ export function useMessages(
 ): UseMessagesResult {
   const { client, signer } = useRequiredMessagingClient();
 
+  const recoveryEnabled = isMessageRecoveryEnabled();
   const [messages, setMessages] = useState<Message[]>([]);
   const [loading, setLoading] = useState(true);
+  const [restoring, setRestoring] = useState(false);
   const [sending, setSending] = useState(false);
   const [claiming, setClaiming] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -345,7 +354,30 @@ export function useMessages(
 
         const readUpto = readState?.groups[groupId]?.readUpto ?? 0;
         setInitialReadUpto(readUpto);
-        setMessages(sortMessagesByOrder(result.messages));
+
+        let initial = sortMessagesByOrder(result.messages);
+        // Silent archive fill when the live relayer has no history yet.
+        if (recoveryEnabled && initial.length === 0) {
+          try {
+            const recovered = await client.messaging.recoverMessages({
+              groupRef: { uuid },
+              limit: 50,
+              mydataApproveContext: undefined,
+            });
+            if (cancelled || uuidRef.current !== uuid) return;
+            const verified = recovered.messages.filter((m) => m.senderVerified !== false);
+            const dropped = recovered.messages.length - verified.length;
+            if (dropped > 0) {
+              console.warn(`Dropped ${dropped} unverified recovered message(s)`);
+            }
+            // Live rows win on conflict (none here); keep helper order consistent.
+            initial = mergeMessages(verified as Message[], initial);
+          } catch (err) {
+            console.warn('Silent history restore failed:', err);
+          }
+        }
+
+        setMessages(initial);
         setHasMore(result.hasNext);
 
         // One listing covers all messages in the group (including older pages).
@@ -389,7 +421,7 @@ export function useMessages(
     return () => {
       cancelled = true;
     };
-  }, [uuid, groupId, client, signer]);
+  }, [uuid, groupId, client, signer, recoveryEnabled]);
 
   // ------------------------------------------------------------------
   // Real-time subscription (messages, reactions, typing, presence)
@@ -953,6 +985,32 @@ export function useMessages(
     [client, signer],
   );
 
+  const restoreHistory = useCallback(async () => {
+    if (!recoveryEnabled || restoring) return;
+    setRestoring(true);
+    setError(null);
+    try {
+      const recovered = await client.messaging.recoverMessages({
+        groupRef: { uuid: uuidRef.current },
+        limit: 100,
+        mydataApproveContext: undefined,
+      });
+      const verified = recovered.messages.filter((m) => m.senderVerified !== false);
+      const dropped = recovered.messages.length - verified.length;
+      if (dropped > 0) {
+        console.warn(`Dropped ${dropped} unverified recovered message(s)`);
+      }
+      setMessages((prev) => mergeMessages(verified as Message[], prev));
+    } catch (err) {
+      console.error('Failed to restore history:', err);
+      setError(
+        err instanceof Error ? err.message : 'Failed to restore history.',
+      );
+    } finally {
+      setRestoring(false);
+    }
+  }, [client, recoveryEnabled, restoring]);
+
   return {
     messages,
     loading,
@@ -969,6 +1027,9 @@ export function useMessages(
     toggleReaction,
     sendTyping,
     loadMore,
+    recoveryEnabled,
+    restoring,
+    restoreHistory,
     paymentRequired,
     paying,
     claiming,

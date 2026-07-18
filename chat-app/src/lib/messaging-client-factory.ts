@@ -2,6 +2,7 @@ import {
   clearGenesisMessagingConfigCache,
   createMySoMessagingStackClientAsync,
   FileStorageHttpStorageAdapter,
+  RelayerArchiveRecoveryTransport,
 } from '@socialproof/myso-messaging-stack';
 import type { Signer } from '@socialproof/myso/cryptography';
 import {
@@ -29,6 +30,17 @@ const FILE_STORAGE_PUBLISHER_URL =
 const FILE_STORAGE_AGGREGATOR_URL =
   import.meta.env.VITE_FILE_STORAGE_AGGREGATOR_URL || '';
 const FILE_STORAGE_EPOCHS = Number(import.meta.env.VITE_FILE_STORAGE_EPOCHS) || 1;
+
+const ARCHIVE_NAMESPACE =
+  import.meta.env.VITE_ARCHIVE_NAMESPACE || 'mysocial';
+const ENABLE_MESSAGE_RECOVERY =
+  import.meta.env.VITE_ENABLE_MESSAGE_RECOVERY === 'true' ||
+  import.meta.env.VITE_ENABLE_MESSAGE_RECOVERY === '1';
+
+/** True when relayer R2 archive recovery is enabled for this build. */
+export function isMessageRecoveryEnabled(): boolean {
+  return ENABLE_MESSAGE_RECOVERY;
+}
 
 export type MessagingClient = Awaited<
   ReturnType<typeof createMySoMessagingStackClientAsync>
@@ -133,6 +145,16 @@ export async function createFreshMessagingClient(
   const baseClient = createBaseMySoRpcClient();
   const mydataThreshold = parseMyDataThreshold();
 
+  const recovery = isMessageRecoveryEnabled()
+    ? new RelayerArchiveRecoveryTransport({
+        relayerUrl: RELAYER_URL,
+        namespace: ARCHIVE_NAMESPACE,
+        signer,
+        apiPrefix: '/v1',
+        fetch: browserFetch,
+      })
+    : undefined;
+
   return createMySoMessagingStackClientAsync(baseClient, {
     mydata: {
       serverConfigs: parseMyDataServerConfigs(),
@@ -156,6 +178,7 @@ export async function createFreshMessagingClient(
           },
         }
       : {}),
+    ...(recovery ? { recovery } : {}),
     attachments: attachmentsConfig,
     genesis: {
       graphqlUrl: getGenesisGraphqlUrl(),

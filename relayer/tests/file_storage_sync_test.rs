@@ -15,6 +15,7 @@ use messaging_relayer::auth::{
 };
 use messaging_relayer::config::Config;
 use messaging_relayer::models::{Message, SyncStatus};
+use messaging_relayer::archive::{ArchiveSyncService, FileStorageArchiveBackend};
 use messaging_relayer::services::FileStorageSyncService;
 use messaging_relayer::storage::{InMemoryStorage, StorageAdapter};
 use messaging_relayer::file_storage::FileStorageClient;
@@ -26,7 +27,7 @@ fn create_mock_file_storage_client(server_uri: &str) -> Arc<FileStorageClient> {
     Arc::new(FileStorageClient::new(server_uri, server_uri))
 }
 
-/// Creates a FileStorageSyncService wired to a wiremock-backed client.
+/// Creates an ArchiveSyncService wired to a wiremock-backed File Storage client.
 fn create_test_service(
     storage: Arc<dyn StorageAdapter>,
     file_storage_client: Arc<FileStorageClient>,
@@ -39,7 +40,11 @@ fn create_test_service(
     // Dummy channel. tests call sync_pending_messages() directly
     let (_tx, rx) = tokio::sync::mpsc::unbounded_channel::<()>();
 
-    FileStorageSyncService::new(&config, storage, file_storage_client, rx)
+    let backend = Arc::new(FileStorageArchiveBackend::new(
+        file_storage_client,
+        config.file_storage_storage_epochs,
+    ));
+    ArchiveSyncService::new(&config, storage, backend, rx)
 }
 
 static NONCE_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -392,7 +397,11 @@ async fn test_run_timer_trigger() {
     config.file_storage_storage_epochs = 1;
 
     let (_tx, rx) = mpsc::unbounded_channel::<()>();
-    let mut service = FileStorageSyncService::new(&config, storage.clone(), file_storage_client, rx);
+    let backend = Arc::new(FileStorageArchiveBackend::new(
+        file_storage_client,
+        config.file_storage_storage_epochs,
+    ));
+    let mut service = ArchiveSyncService::new(&config, storage.clone(), backend, rx);
 
     let handle = tokio::spawn(async move { service.run().await });
 
@@ -418,7 +427,11 @@ async fn test_run_message_threshold_trigger() {
     config.file_storage_storage_epochs = 1;
 
     let (tx, rx) = mpsc::unbounded_channel::<()>();
-    let mut service = FileStorageSyncService::new(&config, storage.clone(), file_storage_client, rx);
+    let backend = Arc::new(FileStorageArchiveBackend::new(
+        file_storage_client,
+        config.file_storage_storage_epochs,
+    ));
+    let mut service = ArchiveSyncService::new(&config, storage.clone(), backend, rx);
 
     let handle = tokio::spawn(async move { service.run().await });
 

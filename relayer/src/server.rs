@@ -15,8 +15,8 @@ use crate::auth::{
     AuthState, InternalSyncState,
 };
 use crate::config::Config;
-use crate::file_storage::FileStorageClient;
 use crate::handlers::agent_groups;
+use crate::handlers::archive::get_archive_messages;
 use crate::handlers::dm_gate;
 use crate::handlers::group_features;
 use crate::handlers::health::health_check;
@@ -31,10 +31,11 @@ use crate::handlers::workflow::{
     workflow_badge,
 };
 use crate::handlers::ws::ws_handler;
+use crate::archive::ArchiveSyncService;
 use crate::services::{
-    AttributionVerifyService, BlockCheckService, FileStorageSyncService, MembershipSyncService,
-    MessageGateService, PgListenerService, PushService, RealtimeHub,
-    bootstrap_messaging_config_cache, fallback_messaging_config_cache,
+    AttributionVerifyService, BlockCheckService, MembershipSyncService, MessageGateService,
+    PgListenerService, PushService, RealtimeHub, bootstrap_messaging_config_cache,
+    fallback_messaging_config_cache,
 };
 use crate::state::AppState;
 use crate::storage::{create_agent_group_store_async, create_storage_async, create_workflow_store_async};
@@ -47,11 +48,6 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let config = Config::from_env();
 
     let storage = create_storage_async(config.storage_type.clone()).await;
-
-    let file_storage_client = Arc::new(FileStorageClient::new(
-        &config.file_storage_publisher_url,
-        &config.file_storage_aggregator_url,
-    ));
 
     let (sync_tx, sync_rx) = tokio::sync::mpsc::unbounded_channel::<()>();
 
@@ -82,7 +78,16 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let push_service = PushService::from_config(&config);
     let realtime_hub = Arc::new(RealtimeHub::from_config(&config));
 
-    let app_state = AppState::new(
+    let (mut archive_sync_service, archive_read) =
+        match ArchiveSyncService::from_config(&config, storage.clone(), sync_rx).await {
+            Ok(stack) => stack,
+            Err(e) => {
+                tracing::error!("Failed to start archive sync service: {e}");
+                return Err(Box::new(e));
+            }
+        };
+
+    let app_state = AppState::new_with_archive(
         storage.clone(),
         sync_tx,
         membership_store.clone(),
@@ -99,6 +104,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         config.inline_realtime_publish(),
         config.ws_ping_interval_secs,
         config.request_ttl_seconds,
+        archive_read,
     );
 
     if config.realtime_enabled && config.uses_postgres_storage() {
@@ -132,10 +138,8 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         sync_service.run().await;
     });
 
-    let mut file_storage_sync_service =
-        FileStorageSyncService::new(&config, storage, file_storage_client, sync_rx);
     tokio::spawn(async move {
-        file_storage_sync_service.run().await;
+        archive_sync_service.run().await;
     });
 
     if config.workflow_enabled {
@@ -184,6 +188,10 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .route(
             "/groups/:group_id/presence",
             get(group_features::get_group_presence),
+        )
+        .route(
+            "/archive/groups/:group_id/messages",
+            get(get_archive_messages),
         );
 
     let v1_wallet_routes = Router::new()

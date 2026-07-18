@@ -113,6 +113,9 @@ function ChatHeader({
   onToggleAdmin,
   adminPanelOpen,
   onMobileBack,
+  recoveryEnabled,
+  restoring,
+  onRestoreHistory,
 }: Readonly<{
   name: string;
   onlineCount?: number;
@@ -120,6 +123,9 @@ function ChatHeader({
   onToggleAdmin?: () => void;
   adminPanelOpen?: boolean;
   onMobileBack?: () => void;
+  recoveryEnabled?: boolean;
+  restoring?: boolean;
+  onRestoreHistory?: () => void;
 }>) {
   return (
     <div className="relative flex min-h-14 shrink-0 items-center justify-center border-b border-secondary-200/40 bg-white/65 px-5 py-2 backdrop-blur-xl md:h-14 md:py-0 dark:border-secondary-700/40 dark:bg-secondary-950/55">
@@ -158,25 +164,39 @@ function ChatHeader({
           )
         )}
       </div>
-      {onToggleAdmin && (
-        <button
-          type="button"
-          onClick={onToggleAdmin}
-          aria-label="Group info"
-          title="Group info"
-          className={`absolute right-2 top-1/2 z-10 inline-flex h-11 min-h-11 -translate-y-1/2 items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium md:right-4 md:h-auto md:min-h-0 ${
-            adminPanelOpen
-              ? 'bg-bubble-sent/10 text-bubble-sent dark:bg-bubble-sent-dark/20 dark:text-bubble-sent-dark'
-              : 'text-secondary-500 hover:bg-secondary-100/80 dark:text-secondary-400 dark:hover:bg-secondary-800/80'
-          }`}
-        >
-          <Info
-            className="h-5 w-5 shrink-0 md:h-3.5 md:w-3.5"
-            strokeWidth={2}
-          />
-          <span className="hidden md:inline">Info</span>
-        </button>
-      )}
+      <div className="absolute right-2 top-1/2 z-10 flex -translate-y-1/2 items-center gap-1 md:right-4">
+        {recoveryEnabled && onRestoreHistory ? (
+          <button
+            type="button"
+            onClick={onRestoreHistory}
+            disabled={restoring}
+            aria-label="Restore history"
+            title="Restore history from archive"
+            className="inline-flex h-11 min-h-11 items-center rounded-full px-3 py-1.5 text-xs font-medium text-secondary-500 hover:bg-secondary-100/80 disabled:opacity-50 dark:text-secondary-400 dark:hover:bg-secondary-800/80 md:h-auto md:min-h-0"
+          >
+            {restoring ? 'Restoring…' : 'Restore'}
+          </button>
+        ) : null}
+        {onToggleAdmin && (
+          <button
+            type="button"
+            onClick={onToggleAdmin}
+            aria-label="Group info"
+            title="Group info"
+            className={`inline-flex h-11 min-h-11 items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium md:h-auto md:min-h-0 ${
+              adminPanelOpen
+                ? 'bg-bubble-sent/10 text-bubble-sent dark:bg-bubble-sent-dark/20 dark:text-bubble-sent-dark'
+                : 'text-secondary-500 hover:bg-secondary-100/80 dark:text-secondary-400 dark:hover:bg-secondary-800/80'
+            }`}
+          >
+            <Info
+              className="h-5 w-5 shrink-0 md:h-3.5 md:w-3.5"
+              strokeWidth={2}
+            />
+            <span className="hidden md:inline">Info</span>
+          </button>
+        )}
+      </div>
     </div>
   );
 }
@@ -227,6 +247,9 @@ function ChatView({
     toggleReaction,
     sendTyping,
     loadMore,
+    recoveryEnabled,
+    restoring,
+    restoreHistory,
     paymentRequired,
     paying,
     paymentError,
@@ -428,6 +451,11 @@ function ChatView({
             onToggleAdmin={() => setAdminPanelOpen((o) => !o)}
             adminPanelOpen={adminPanelOpen}
             onMobileBack={onMobileBack}
+            recoveryEnabled={recoveryEnabled}
+            restoring={restoring}
+            onRestoreHistory={() => {
+              void restoreHistory();
+            }}
           />
         </div>
 
@@ -454,10 +482,22 @@ function ChatView({
 
         {/* Empty state */}
         {!loading && messages.length === 0 && (
-          <div className="flex flex-1 items-center justify-center">
+          <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6">
             <p className="text-sm text-secondary-400 dark:text-secondary-500">
               No messages yet. Send the first one!
             </p>
+            {recoveryEnabled ? (
+              <button
+                type="button"
+                onClick={() => {
+                  void restoreHistory();
+                }}
+                disabled={restoring}
+                className="text-xs font-medium text-primary-500 hover:text-primary-600 disabled:opacity-50"
+              >
+                {restoring ? 'Restoring history…' : 'Restore history'}
+              </button>
+            ) : null}
           </div>
         )}
 

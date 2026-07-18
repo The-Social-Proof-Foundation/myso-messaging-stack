@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 
 use tokio::sync::mpsc;
 
+use crate::archive::ArchiveReadService;
 use crate::auth::MembershipStore;
 use crate::config::Config;
 use crate::services::block_check::BlockCheckService;
@@ -77,6 +78,8 @@ pub struct AppState {
     pub presence_registry: Arc<PresenceRegistry>,
     /// Throttles `typing.start` broadcasts per (wallet, group).
     pub typing_rate: Arc<TypingRateLimiter>,
+    /// Optional R2 archive recovery reader (`ARCHIVE_BACKEND=r2`).
+    pub archive_read: Option<Arc<ArchiveReadService>>,
 }
 
 impl AppState {
@@ -99,6 +102,47 @@ impl AppState {
         ws_ping_interval_secs: u64,
         request_ttl_seconds: i64,
     ) -> Self {
+        Self::new_with_archive(
+            storage,
+            sync_notifier,
+            membership_store,
+            agent_group_store,
+            workflow_store,
+            workflow_enabled,
+            attribution_verify,
+            block_check,
+            message_gate,
+            messaging_config,
+            push_service,
+            realtime_hub,
+            realtime_enabled,
+            inline_realtime_publish,
+            ws_ping_interval_secs,
+            request_ttl_seconds,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_archive(
+        storage: Arc<dyn StorageAdapter>,
+        sync_notifier: mpsc::UnboundedSender<()>,
+        membership_store: Arc<dyn MembershipStore>,
+        agent_group_store: Arc<dyn AgentGroupStore>,
+        workflow_store: Arc<dyn WorkflowStore>,
+        workflow_enabled: bool,
+        attribution_verify: AttributionVerifyService,
+        block_check: BlockCheckService,
+        message_gate: MessageGateService,
+        messaging_config: MessagingConfigCache,
+        push_service: PushService,
+        realtime_hub: Arc<RealtimeHub>,
+        realtime_enabled: bool,
+        inline_realtime_publish: bool,
+        ws_ping_interval_secs: u64,
+        request_ttl_seconds: i64,
+        archive_read: Option<Arc<ArchiveReadService>>,
+    ) -> Self {
         Self {
             storage,
             sync_notifier,
@@ -118,6 +162,7 @@ impl AppState {
             request_ttl_seconds,
             presence_registry: Arc::new(PresenceRegistry::new()),
             typing_rate: Arc::new(TypingRateLimiter::default()),
+            archive_read,
         }
     }
 

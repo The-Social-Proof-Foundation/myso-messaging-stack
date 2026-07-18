@@ -621,13 +621,22 @@ This allows O(1) lookups for the most common operation: "does address X have per
 
 ---
 
-## File Storage Archival
+## Message Archive (R2 or File Storage)
 
-The relayer archives messages to [File Storage](https://www.mysocial.network/storage/) for decentralized, durable backup storage. This runs as a background service that periodically batches pending messages and uploads them.
+The relayer archives encrypted messages to a **single** pluggable backend for durable backup and optional client recovery. Live delivery stays on the relayer; archive is restore-only. R2 write + recovery read run **in-process** (no separate archive Worker).
 
-### How It Works
+| Env | Purpose |
+|-----|---------|
+| `ARCHIVE_BACKEND` | `r2` or `file_storage` (default: `file_storage`; alias `cloudflare` → `r2`) |
+| `ARCHIVE_NAMESPACE` | Platform isolation key (e.g. `mysocial`); required for R2 |
+| `R2_BUCKET` / `R2_ENDPOINT` / `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` | Cloudflare R2 S3 API (R2 only) |
+| `R2_REGION` | Default `auto` |
+| `FILE_STORAGE_*` | Used when `ARCHIVE_BACKEND=file_storage` |
 
-The `FileStorageSyncService` runs an infinite loop that is triggered by one of two conditions — whichever fires first:
+- **R2:** blobs in Cloudflare R2; index table `archive_messages` in Postgres; recovery via `GET /v1/archive/groups/:group_id/messages`
+- **File Storage:** quilts + [`file-storage-discovery-indexer/`](../file-storage-discovery-indexer/) (drop-in replacement)
+
+The `ArchiveSyncService` runs an infinite loop that is triggered by one of two conditions — whichever fires first:
 
 1. **Timer-based** — A fixed interval elapses (default: 1 hour, configurable via `FILE_STORAGE_SYNC_INTERVAL_SECS`)
 2. **Threshold-based** — A configurable number of new messages have been created since the last sync (default: 50, configurable via `FILE_STORAGE_SYNC_MESSAGE_THRESHOLD`, set to 0 to disable)
@@ -736,7 +745,8 @@ src/
 ├── services/                  # Background services
 │   ├── membership_sync.rs     # gRPC checkpoint subscription and event processing
 │   ├── event_parser.rs        # BCS deserialization of Groups SDK events
-│   └── file_storage_sync.rs         # Periodic File Storage archival worker
+│   └── file_storage_sync.rs         # Re-export of archive::ArchiveSyncService
+├── archive/                         # Pluggable ArchiveBackend (Cloudflare / File Storage)
 ├── storage/                   # Storage layer
 │   ├── adapter.rs             # StorageAdapter trait definition
 │   └── memory.rs              # InMemoryStorage implementation (HashMap + RwLock)

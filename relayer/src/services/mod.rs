@@ -2,7 +2,7 @@
 //! This module contains services that run alongside the HTTP server:
 //! - `event_parser`: Parses MySo blockchain events into domain types
 //! - `membership_sync`: Subscribes to MySo checkpoints and syncs membership cache
-//! - `file_storage_sync`: Periodically uploads pending messages to File Storage storage
+//! - `file_storage_sync`: Re-exports [`crate::archive::ArchiveSyncService`]
 
 pub mod agent_group_detector;
 pub mod attribution_verify;
@@ -25,7 +25,7 @@ pub use messaging_config::{
     bootstrap_messaging_config_cache, fallback_messaging_config_cache, MessagingConfigCache,
     MessagingConfigSnapshot,
 };
-pub use file_storage_sync::FileStorageSyncService;
+pub use crate::archive::{ArchiveSyncService, FileStorageSyncService};
 pub use presence_sync::PresenceRegistry;
 pub use push::PushService;
 pub use realtime::{PgListenerService, RealtimeHub};

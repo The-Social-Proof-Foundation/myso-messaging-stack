@@ -3,6 +3,7 @@
 use std::env;
 use tracing::info;
 
+use crate::archive::ArchiveBackendKind;
 use crate::auth::MembershipStoreType;
 use crate::storage::StorageType;
 
@@ -75,6 +76,25 @@ pub struct Config {
     /// Default: 50, set via FILE_STORAGE_SYNC_MESSAGE_THRESHOLD env var.
     /// Set to 0 to disable message-count-based syncing (interval-only).
     pub file_storage_sync_message_threshold: usize,
+
+    /// Active archive backend: `r2` or `file_storage` (`cloudflare` alias → `r2`).
+    /// Default: `file_storage` (behavior-preserving).
+    pub archive_backend: ArchiveBackendKind,
+
+    /// Platform namespace for archive isolation (e.g. `mysocial`).
+    /// Required when `archive_backend=r2`; also tagged on File Storage patches when set.
+    pub archive_namespace: Option<String>,
+
+    /// R2 bucket name (required for r2 backend).
+    pub r2_bucket: Option<String>,
+    /// R2 S3 API endpoint (required for r2 backend).
+    pub r2_endpoint: Option<String>,
+    /// R2 access key id (required for r2 backend).
+    pub r2_access_key_id: Option<String>,
+    /// R2 secret access key (required for r2 backend).
+    pub r2_secret_access_key: Option<String>,
+    /// R2 region (default: `auto`).
+    pub r2_region: String,
 
     /// Base URL for myso-social-server block checks (optional).
     pub social_server_url: Option<String>,
@@ -222,6 +242,18 @@ impl Config {
             .and_then(|v| v.parse().ok())
             .unwrap_or(50);
 
+        // Archive backend: default file_storage; set r2 for in-process Cloudflare R2.
+        let archive_backend = env::var("ARCHIVE_BACKEND")
+            .ok()
+            .and_then(|v| ArchiveBackendKind::parse(&v))
+            .unwrap_or(ArchiveBackendKind::FileStorage);
+        let archive_namespace = env::var("ARCHIVE_NAMESPACE").ok().filter(|s| !s.is_empty());
+        let r2_bucket = env::var("R2_BUCKET").ok().filter(|s| !s.is_empty());
+        let r2_endpoint = env::var("R2_ENDPOINT").ok().filter(|s| !s.is_empty());
+        let r2_access_key_id = env::var("R2_ACCESS_KEY_ID").ok().filter(|s| !s.is_empty());
+        let r2_secret_access_key = env::var("R2_SECRET_ACCESS_KEY").ok().filter(|s| !s.is_empty());
+        let r2_region = env::var("R2_REGION").unwrap_or_else(|_| "auto".to_string());
+
         let social_server_url = env::var("SOCIAL_SERVER_URL").ok();
         let block_check_enabled = env::var("BLOCK_CHECK_ENABLED")
             .ok()
@@ -323,6 +355,13 @@ impl Config {
             file_storage_sync_interval_secs,
             file_storage_sync_batch_size,
             file_storage_sync_message_threshold,
+            archive_backend,
+            archive_namespace,
+            r2_bucket,
+            r2_endpoint,
+            r2_access_key_id,
+            r2_secret_access_key,
+            r2_region,
             social_server_url,
             block_check_enabled,
             block_cache_ttl_secs,
@@ -374,6 +413,13 @@ impl Default for Config {
             file_storage_sync_interval_secs: 3600,
             file_storage_sync_batch_size: 100,
             file_storage_sync_message_threshold: 50,
+            archive_backend: ArchiveBackendKind::FileStorage,
+            archive_namespace: None,
+            r2_bucket: None,
+            r2_endpoint: None,
+            r2_access_key_id: None,
+            r2_secret_access_key: None,
+            r2_region: "auto".to_string(),
             social_server_url: None,
             block_check_enabled: false,
             block_cache_ttl_secs: 300,
