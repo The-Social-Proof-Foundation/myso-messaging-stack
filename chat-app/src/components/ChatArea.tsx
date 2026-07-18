@@ -438,9 +438,6 @@ function ChatView({
           <div className="flex flex-1 items-center justify-center">
             <div className="flex flex-col items-center gap-2">
               <span className="inline-block h-5 w-5 animate-spin rounded-full border-2 border-primary-500 border-t-transparent" />
-              <span className="text-xs text-secondary-400 dark:text-secondary-500">
-                Loading messages...
-              </span>
             </div>
           </div>
         )}
