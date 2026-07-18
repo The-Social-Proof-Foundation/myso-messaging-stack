@@ -1,23 +1,77 @@
 # iOS Client-Side Integration
 
-The iOS client connects **directly to the Relayer** — no separate product backend for messages, unread counts, or push relay.
+The iOS client connects **directly to the Relayer** for messaging — no separate product backend for messages, unread counts, or push relay.
+
+DripDrop also keeps its **existing product WebSocket** (`WebSocketService`) to the DripDrop backend (portfolio, analytics, JWT `authenticate`). Messaging uses a **second** socket to the messaging relayer. Do not multiplex both protocols on one connection.
+
+## Two-socket model
+
+| Socket | Service | Auth | Purpose |
+|--------|---------|------|---------|
+| DripDrop backend | `WebSocketService` | Bearer JWT JSON `{type:authenticate,token}` | Product realtime (unchanged) |
+| Messaging relayer user feed | `MessagingUserFeedService` | Wallet-signed query params | Unread / discovery wake signals |
+| Messaging relayer group feed | `MessagingGroupFeedService` (stub) | Wallet-signed query + `group_id` | Open-thread encrypted frames |
+
+Lifecycle: on login / `sceneDidBecomeActive`, connect both DripDrop WS and user feed. On logout / background, disconnect both with `stopReconnect: true`.
+
+Config: `MESSAGING_RELAYER_URL` in xcconfig / Info.plist as **host only** (e.g. `10.0.0.10:3003`) — same pattern as `BACKEND_URL`. Do not put `http://` in xcconfig (`//` starts a comment). `Constants` prepends `http://` / `ws://`.
 
 ## Relayer endpoints
 
 | Feature | Endpoint |
 |---------|----------|
 | Messages | `/messages` or `/v1/messages` (signed CRUD) |
-| Realtime | `GET /v1/ws` (WebSocket, full encrypted wire JSON) |
+| User feed (wake) | `GET /v1/users/ws` (WebSocket, metadata only) |
+| Group realtime | `GET /v1/ws` (WebSocket, full encrypted wire JSON) |
 | Read state | `GET/PUT /v1/users/read-state` |
 | Push token | `POST/DELETE /v1/devices/push-tokens` |
 | Presence | `POST /v1/devices/presence` |
 | Blocks (DM) | Relayer enforces via social-server; SDK pre-check optional |
+
+## User feed WebSocket (`/v1/users/ws`)
+
+Wallet-scoped wake channel. Frames are **metadata only** — never ciphertext. After a wake, REST re-fetch is the source of truth (unread counts, message heads, read-state blob).
+
+### Auth (query string)
+
+Canonical personal-message string:
+
+```
+{timestamp}:{sender_address}
+```
+
+Query params (same bytes as wallet header auth):
+
+| Param | Value |
+|-------|--------|
+| `sender_address` | MySo address |
+| `timestamp` | Unix seconds |
+| `signature` | Hex raw 64-byte Ed25519 signature |
+| `public_key` | Hex flagged pubkey (`0x00 \|\| ed25519 pubkey`) |
+
+Swift: `MessagingRelayerAuth.createUserFeedQuery` (mirrors TS `createUserWsAuthQuery`).
+
+### Event types (wake → REST)
+
+| `type` | Meaning | Client action |
+|--------|---------|---------------|
+| `group.activity` | New message order in a group | REST re-fetch heads / messages for `group_id` |
+| `read_state.updated` | Encrypted read-state blob changed | `GET /v1/users/read-state` |
+| `group.discovered` | Conversation appeared (created/invited/joined) | Refresh group list |
+| `group.hidden` | Conversation should leave sidebar | Remove locally |
+
+Ignore unknown / workflow types until those milestones ship.
+
+### Group feed auth (`/v1/ws`)
+
+Canonical: `{timestamp}:{sender_address}:{group_id}` plus optional `after_order`. See `MessagingRelayerAuth.createGroupFeedQuery` / TS `createWsAuthQuery`.
 
 ## Unread badges
 
 1. `GET /v1/users/read-state` → decrypt blob → `readUpto` per group
 2. Fetch message heads → compute `unread = messages after readUpto`
 3. On thread open → merge blob → `PUT /v1/users/read-state`
+4. Foreground: user-feed `group.activity` / `read_state.updated` wakes recompute (no ciphertext on the socket)
 
 ## Push wake flow
 
@@ -26,14 +80,16 @@ The iOS client connects **directly to the Relayer** — no separate product back
 3. Relayer sends metadata-only APNs when recipient is not recently active (`PRESENCE_TTL_SECS`)
 4. On push: background-fetch messages + read-state → update local badge
 
-## Foreground realtime (WebSocket)
+## Foreground realtime (group WebSocket)
 
-When the app is active, prefer WebSocket over HTTP polling:
+When a thread is open, prefer group WebSocket over HTTP polling:
 
-1. Open `wss://{relayer}/v1/ws?group_id=...&sender_address=...&timestamp=...&signature=...&public_key=...` (same canonical auth as GET messages)
-2. Parse `{ "type": "message.created", "message": { ... } }` frames — decrypt locally; **do not HTTP-refetch** after each event
+1. Open `wss://{relayer}/v1/ws?group_id=...&sender_address=...&timestamp=...&signature=...&public_key=...`
+2. Parse `{ "type": "message.created", "message": { ... } }` frames — decrypt locally; **do not HTTP-refetch** after each event for that open thread
 3. Optional `after_order` query param for resumability
 4. Fall back to HTTP polling if WebSocket is blocked or fails (TypeScript SDK: `HybridRelayerTransport`)
+
+User feed stays connected for sidebar/unread while group feed is open.
 
 ### APNs payload contract
 
@@ -87,6 +143,15 @@ DATABASE_URL=postgres://...
 SOCIAL_SERVER_URL=https://...
 ```
 
-## Swift client
+## Swift client (current foundation)
 
-Implement the same wallet-signature HTTP contract as `HTTPRelayerTransport` in the TypeScript SDK (see `ReadState.md` and `Relayer.md`). For foreground delivery, mirror `HybridRelayerTransport` / `WSRelayerTransport` WebSocket auth and wire parsing.
+| Type | Role |
+|------|------|
+| `WebSocketConnection` | Shared transport (ping, reconnect) |
+| `MessagingRelayerAuth` | Personal-message sign + query/header auth |
+| `MessagingUserFeedService` | `/v1/users/ws` + typed events |
+| `MessagingSyncHub` | Extension points for unread / discovery |
+| `MessagingRelayerHTTPClient` | Stub for signed REST |
+| `MessagingGroupFeedService` | Stub for `/v1/ws` |
+
+Mirror the TypeScript SDK contracts in `auth-headers.ts` / `ws-transport.ts`. Ensure the messaging-relayer binary includes `/v1/users/ws` (stale release builds previously 401'd browser clients).
