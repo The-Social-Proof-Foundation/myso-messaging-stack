@@ -798,7 +798,8 @@ export function MessageBubble({
           isOwnMessage ? 'flex-row-reverse' : 'flex-row'
         }`}
       >
-        {/* Avatar only on the latest bubble in a same-sender run */}
+        {/* Avatar only on the latest bubble; spacer matches the post-overlap inset
+            so mid-cluster bubbles share the same left/right edge. */}
         {showAvatar ? (
           <ReservationNavAvatar
             address={message.senderAddress}
@@ -825,9 +826,13 @@ export function MessageBubble({
             isOwnMessage ? 'items-end' : 'items-start'
           }`}
           style={
-            isOwnMessage
-              ? { marginRight: -AVATAR_OVERLAP_PX }
-              : { marginLeft: -AVATAR_OVERLAP_PX }
+            // Only pull under the avatar when it is actually rendered — applying
+            // the overlap on mid-cluster rows double-counts the reduced spacer.
+            showAvatar
+              ? isOwnMessage
+                ? { marginRight: -AVATAR_OVERLAP_PX }
+                : { marginLeft: -AVATAR_OVERLAP_PX }
+              : undefined
           }
           onContextMenu={handleMessageContextMenu}
         >
