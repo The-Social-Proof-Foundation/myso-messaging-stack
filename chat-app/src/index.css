@@ -203,12 +203,34 @@
   animation-delay: calc(var(--reaction-i, 0) * 28ms);
 }
 
+/*
+ * Hover scale lives on an inner glyph so it never restarts the enter
+ * animation (which begins at scale 0 and caused a flash).
+ */
+.reaction-picker-emoji-glyph {
+  display: inline-block;
+  transform-origin: center center;
+  transition: transform 140ms ease-out;
+}
+
+.reaction-picker-emoji-btn:hover .reaction-picker-emoji-glyph {
+  transform: scale(1.5);
+}
+
 @media (prefers-reduced-motion: reduce) {
   .reaction-picker-tray-in,
   .reaction-picker-tray-out,
   .reaction-picker-emoji-in,
   .reaction-picker-emoji-out {
     animation: none;
+  }
+
+  .reaction-picker-emoji-glyph {
+    transition: none;
+  }
+
+  .reaction-picker-emoji-btn:hover .reaction-picker-emoji-glyph {
+    transform: none;
   }
 }
 

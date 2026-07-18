@@ -1,4 +1,5 @@
 import type { MySocialAuthConfig } from '@socialproof/mysocial-auth';
+import { createLocalStorageAdapter } from './mysocial-auth-storage';
 
 export type ReadMySocialAuthConfigResult = {
   config: MySocialAuthConfig | null;
@@ -42,7 +43,7 @@ export function readMySocialAuthConfig(): ReadMySocialAuthConfigResult {
       authOrigin,
       clientId,
       redirectUri,
-      storage: 'session',
+      storage: createLocalStorageAdapter(),
       proactiveRefresh: true,
     },
     error: null,

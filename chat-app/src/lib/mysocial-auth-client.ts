@@ -37,7 +37,7 @@ export function getMySocialAuthConfigError(): string | null {
   return initError;
 }
 
-/** Reset singleton (tests). Does not clear sessionStorage. */
+/** Reset singleton so the next getMySocialAuth() re-reads shared storage (e.g. cross-tab). */
 export function resetMySocialAuthInstance(): void {
   authInstance = null;
   initAttempted = false;

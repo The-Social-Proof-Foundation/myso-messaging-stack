@@ -98,7 +98,7 @@ export function resolveOAuthSubForKeypair(session: Session): string {
   return '';
 }
 
-export const SESSION_STORAGE_KEY = 'mysocial_auth_session';
+export { SESSION_KEY as SESSION_STORAGE_KEY } from './mysocial-auth-storage';
 
 /** Create/import wallet flow — not OAuth Google/Apple sign-in. */
 export function isTrueWalletOnlySession(session: Session): boolean {

@@ -2,9 +2,12 @@ import type { Session } from '@socialproof/mysocial-auth';
 import {
   isTrueWalletOnlySession,
   resolveOAuthSubForKeypair,
-  SESSION_STORAGE_KEY,
 } from './auth-utils';
-import { getMySocialAuth } from './mysocial-auth-client';
+import {
+  getMySocialAuth,
+  resetMySocialAuthInstance,
+} from './mysocial-auth-client';
+import { setAuthSessionRaw } from './mysocial-auth-storage';
 
 /** Shape of MYSOCIAL_AUTH_RESULT from BroadcastChannel / popup fallback. */
 export type AuthResultMessage = {
@@ -72,7 +75,7 @@ export function buildSessionFromAuthResult(
 }
 
 /**
- * Persist session to sessionStorage, sync the singleton client, and notify React.
+ * Persist session to shared localStorage, sync the singleton client, and notify React.
  * Returns true if the session was stored.
  */
 export function storeBroadcastAuthSession(msg: AuthResultMessage): boolean {
@@ -89,8 +92,9 @@ export function storeBroadcastAuthSession(msg: AuthResultMessage): boolean {
   }
 
   try {
-    sessionStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(session));
-    // Sync singleton cache + schedule proactive refresh (storage write bypasses SDK saveSession).
+    setAuthSessionRaw(JSON.stringify(session));
+    // Bypass stale in-memory SDK cache after out-of-band storage write.
+    resetMySocialAuthInstance();
     void getMySocialAuth()?.getSession();
     window.dispatchEvent(new CustomEvent('mysocial-auth-broadcast-session'));
     return true;

@@ -6,7 +6,6 @@ import {
   sessionLacksRefreshToken,
 } from '../lib/auth-session-build';
 import { getMySocialAuth } from '../lib/mysocial-auth-client';
-import { SESSION_STORAGE_KEY } from '../lib/auth-utils';
 
 async function handlePopupFallback(): Promise<boolean> {
   if (typeof BroadcastChannel === 'undefined') return false;
@@ -148,4 +147,4 @@ export default function AuthCallback() {
   );
 }
 
-export { SESSION_STORAGE_KEY };
+export { SESSION_KEY as SESSION_STORAGE_KEY } from '../lib/mysocial-auth-storage';

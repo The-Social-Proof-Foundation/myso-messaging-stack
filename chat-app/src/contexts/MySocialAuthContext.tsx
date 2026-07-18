@@ -24,13 +24,19 @@ import { getSaltFromSession } from '../lib/get-salt-from-session';
 import {
   getMySocialAuth,
   getMySocialAuthConfigError,
+  resetMySocialAuthInstance,
 } from '../lib/mysocial-auth-client';
+import {
+  getAuthSessionRaw,
+  removeAuthSession,
+  SESSION_KEY,
+  setAuthSessionRaw,
+} from '../lib/mysocial-auth-storage';
 import {
   canAttemptOAuthKeypairDerivation,
   isTrueWalletOnlySession,
   resolveOAuthSubForKeypair,
   shouldUseRedirectAuth,
-  SESSION_STORAGE_KEY,
 } from '../lib/auth-utils';
 
 const SESSION_EXPIRED_MESSAGE =
@@ -94,7 +100,7 @@ const MySocialAuthContext = createContext<MySocialAuthContextValue | null>(null)
 export function MySocialAuthProvider({
   children,
 }: Readonly<{ children: ReactNode }>) {
-  const auth = useMemo(() => getMySocialAuth(), []);
+  const [auth, setAuth] = useState<MySocialAuth | null>(() => getMySocialAuth());
   const configErrorFromEnv = useMemo(() => getMySocialAuthConfigError(), []);
 
   const saltUrl =
@@ -149,33 +155,48 @@ export function MySocialAuthProvider({
       setDeriveNonce((n) => n + 1);
     });
 
+    const applySession = (s: Session | null) => {
+      if (cancelled) return;
+      if (s && !sessionLacksRefreshToken(s)) {
+        setSignInError(null);
+      }
+      applyRefreshTokenGuard(s, setSignInError);
+      hadSessionRef.current = Boolean(s);
+      setSession(s);
+      setDeriveNonce((n) => n + 1);
+    };
+
     const onBroadcast = () => {
-      void auth.getSession().then((s) => {
-        if (cancelled) return;
-        if (s && !sessionLacksRefreshToken(s)) {
-          setSignInError(null);
-        }
-        applyRefreshTokenGuard(s, setSignInError);
-        hadSessionRef.current = Boolean(s);
-        setSession(s);
-        setDeriveNonce((n) => n + 1);
-      });
+      // Prefer live singleton — broadcast write may have reset the instance.
+      const current = getMySocialAuth() ?? auth;
+      void current.getSession().then(applySession);
     };
     window.addEventListener('mysocial-auth-broadcast-session', onBroadcast);
     window.addEventListener('mysocial-auth-session-changed', onBroadcast);
 
+    const onStorage = (event: StorageEvent) => {
+      if (event.key !== SESSION_KEY && event.key !== null) return;
+      // Cross-tab logout: avoid "session expired" toast from hadSessionRef.
+      if (event.newValue == null) {
+        hadSessionRef.current = false;
+        setSignInError(null);
+      }
+      resetMySocialAuthInstance();
+      const next = getMySocialAuth();
+      authRef.current = next;
+      setAuth(next);
+      if (!next) {
+        applySession(null);
+        return;
+      }
+      void next.getSession().then(applySession);
+    };
+    window.addEventListener('storage', onStorage);
+
     const onVisibilityChange = () => {
       if (document.visibilityState !== 'visible') return;
-      void auth.getSession().then((s) => {
-        if (cancelled) return;
-        if (s && !sessionLacksRefreshToken(s)) {
-          setSignInError(null);
-        }
-        applyRefreshTokenGuard(s, setSignInError);
-        hadSessionRef.current = Boolean(s);
-        setSession(s);
-        setDeriveNonce((n) => n + 1);
-      });
+      const current = getMySocialAuth() ?? auth;
+      void current.getSession().then(applySession);
     };
     document.addEventListener('visibilitychange', onVisibilityChange);
 
@@ -184,6 +205,7 @@ export function MySocialAuthProvider({
       unsub();
       window.removeEventListener('mysocial-auth-broadcast-session', onBroadcast);
       window.removeEventListener('mysocial-auth-session-changed', onBroadcast);
+      window.removeEventListener('storage', onStorage);
       document.removeEventListener('visibilitychange', onVisibilityChange);
     };
   }, [auth]);
@@ -290,12 +312,12 @@ export function MySocialAuthProvider({
           setDeriveKeyError(null);
 
           try {
-            const raw = sessionStorage.getItem(SESSION_STORAGE_KEY);
+            const raw = getAuthSessionRaw();
             if (raw) {
               const parsed = JSON.parse(raw) as Session & { salt?: string };
               if (parsed.salt !== salt) {
                 parsed.salt = salt;
-                sessionStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(parsed));
+                setAuthSessionRaw(JSON.stringify(parsed));
                 // Re-sync singleton after out-of-band storage write.
                 void auth.getSession();
               }
@@ -389,12 +411,18 @@ export function MySocialAuthProvider({
     hadSessionRef.current = false;
     setSignInError(null);
     const a = authRef.current;
-    if (a) {
-      await a.signOut();
+    try {
+      if (a) {
+        await a.signOut();
+      }
+    } finally {
+      // Ensure shared localStorage is cleared so other tabs observe logout.
+      removeAuthSession();
+      setSession(null);
+      setKeypair(null);
+      setIsUsingDevMessengerSigner(false);
+      setDeriveKeyError(null);
     }
-    setKeypair(null);
-    setIsUsingDevMessengerSigner(false);
-    setDeriveKeyError(null);
   }, []);
 
   const configError = auth ? null : configErrorFromEnv;

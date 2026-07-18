@@ -8,14 +8,21 @@ import {
   type MouseEvent,
   type ReactNode,
 } from 'react';
+import EmojiPicker, {
+  EmojiStyle,
+  Theme as EmojiPickerTheme,
+  type EmojiClickData,
+} from 'emoji-picker-react';
+import { Plus } from 'lucide-react';
 import type {
   Message,
   AttachmentHandle,
   RelayerReactionEntry,
 } from '../hooks/useMessages';
+import { useTheme } from '../contexts/ThemeContext';
 import { ReservationNavAvatar } from './ReservationNavAvatar';
 
-/** Basic reaction palette shown in the reaction picker. */
+/** Quick reaction palette shown in the reaction tray. */
 const REACTION_EMOJIS = ['👍', '❤️', '😂', '😮', '😢', '🙏'];
 
 /** Enter/exit duration budget for staggered picker (keep mounted for exit). */
@@ -305,22 +312,26 @@ function ImageAttachmentTile({
 }
 
 /**
- * Staggered Meta-style reaction tray.
+ * Staggered Meta-style reaction tray + optional full Apple emoji panel.
  * Received: left → right. Own: right → left (bounce upward).
  */
 function ReactionPickerTray({
   open,
   isOwnMessage,
+  preferBelow,
   verticalClass,
   onPick,
 }: Readonly<{
   open: boolean;
   isOwnMessage: boolean;
+  preferBelow: boolean;
   verticalClass: string;
   onPick: (emoji: string) => void;
 }>) {
+  const { resolvedTheme } = useTheme();
   const [mounted, setMounted] = useState(open);
   const [leaving, setLeaving] = useState(false);
+  const [showFullPicker, setShowFullPicker] = useState(false);
 
   useEffect(() => {
     if (open) {
@@ -330,6 +341,7 @@ function ReactionPickerTray({
     }
     if (!mounted) return;
     setLeaving(true);
+    setShowFullPicker(false);
     const t = window.setTimeout(() => {
       setMounted(false);
       setLeaving(false);
@@ -337,42 +349,124 @@ function ReactionPickerTray({
     return () => window.clearTimeout(t);
   }, [open, mounted]);
 
+  useEffect(() => {
+    if (!showFullPicker) return;
+    function handleKeyDown(e: globalThis.KeyboardEvent) {
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        setShowFullPicker(false);
+      }
+    }
+    document.addEventListener('keydown', handleKeyDown, true);
+    return () => document.removeEventListener('keydown', handleKeyDown, true);
+  }, [showFullPicker]);
+
   if (!mounted) return null;
 
-  const n = REACTION_EMOJIS.length;
+  // Quick emojis + trailing "+" control share the stagger index space.
+  const quickCount = REACTION_EMOJIS.length;
+  const totalSlots = quickCount + 1;
+
+  const handleFullEmojiClick = (data: EmojiClickData) => {
+    onPick(data.emoji);
+    setShowFullPicker(false);
+  };
 
   return (
     <div
-      className={`absolute z-20 flex gap-0.5 rounded-full border border-secondary-200 bg-white px-2 py-1 shadow-lg dark:border-secondary-600 dark:bg-secondary-800 ${verticalClass} ${
+      className={`absolute z-20 ${verticalClass} ${
         isOwnMessage ? 'right-0' : 'left-0'
-      } ${leaving ? 'reaction-picker-tray-out' : 'reaction-picker-tray-in'}`}
+      }`}
     >
-      {REACTION_EMOJIS.map((emoji, i) => {
-        // Enter: received L→R (i), own R→L (n-1-i). Exit reverses cascade.
-        const staggerI = leaving
-          ? isOwnMessage
-            ? i
-            : n - 1 - i
-          : isOwnMessage
-            ? n - 1 - i
-            : i;
-        return (
+      <div className="relative">
+        {showFullPicker && (
+          <div
+            className={`absolute z-30 overflow-hidden rounded-xl border border-secondary-200 shadow-xl dark:border-secondary-600 ${
+              preferBelow ? 'top-full mt-1.5' : 'bottom-full mb-1.5'
+            } ${isOwnMessage ? 'right-0' : 'left-0'}`}
+            onMouseDown={(e) => e.stopPropagation()}
+          >
+            <EmojiPicker
+              onEmojiClick={handleFullEmojiClick}
+              theme={
+                resolvedTheme === 'dark'
+                  ? EmojiPickerTheme.DARK
+                  : EmojiPickerTheme.LIGHT
+              }
+              emojiStyle={EmojiStyle.APPLE}
+              width={320}
+              height={360}
+              lazyLoadEmojis
+              previewConfig={{ showPreview: false }}
+            />
+          </div>
+        )}
+
+        <div
+          className={`flex gap-0.5 rounded-full border border-secondary-200 bg-white px-2 py-1 shadow-lg dark:border-secondary-600 dark:bg-secondary-800 ${
+            leaving ? 'reaction-picker-tray-out' : 'reaction-picker-tray-in'
+          }`}
+        >
+          {REACTION_EMOJIS.map((emoji, i) => {
+            const staggerI = leaving
+              ? isOwnMessage
+                ? i
+                : totalSlots - 1 - i
+              : isOwnMessage
+                ? totalSlots - 1 - i
+                : i;
+            return (
+              <button
+                key={emoji}
+                type="button"
+                onClick={() => onPick(emoji)}
+                title={`React with ${emoji}`}
+                style={{ '--reaction-i': staggerI } as CSSProperties}
+                className={`reaction-picker-emoji-btn rounded-full px-1.5 py-0.5 text-base ${
+                  leaving
+                    ? 'reaction-picker-emoji-out'
+                    : 'reaction-picker-emoji-in'
+                }`}
+              >
+                <span className="reaction-picker-emoji-glyph inline-block">
+                  {emoji}
+                </span>
+              </button>
+            );
+          })}
           <button
-            key={emoji}
             type="button"
-            onClick={() => onPick(emoji)}
-            title={`React with ${emoji}`}
-            style={{ '--reaction-i': staggerI } as CSSProperties}
-            className={`rounded-full px-1.5 py-0.5 text-base transition-colors hover:bg-secondary-100 dark:hover:bg-secondary-600 ${
+            onClick={(e) => {
+              e.stopPropagation();
+              setShowFullPicker((v) => !v);
+            }}
+            title="More emojis"
+            aria-label="Open full emoji picker"
+            aria-expanded={showFullPicker}
+            style={
+              {
+                '--reaction-i': leaving
+                  ? isOwnMessage
+                    ? quickCount
+                    : 0
+                  : isOwnMessage
+                    ? 0
+                    : quickCount,
+              } as CSSProperties
+            }
+            className={`reaction-picker-emoji-btn inline-flex items-center justify-center rounded-full px-1.5 py-0.5 text-secondary-500 dark:text-secondary-400 ${
               leaving
                 ? 'reaction-picker-emoji-out'
                 : 'reaction-picker-emoji-in'
             }`}
           >
-            {emoji}
+            <Plus
+              className="reaction-picker-emoji-glyph h-4 w-4"
+              strokeWidth={2.5}
+            />
           </button>
-        );
-      })}
+        </div>
+      </div>
     </div>
   );
 }
@@ -863,6 +957,7 @@ export function MessageBubble({
               <ReactionPickerTray
                 open={showReactionPicker && !hoveredReactionEmoji}
                 isOwnMessage={isOwnMessage}
+                preferBelow={preferReactionBelow}
                 verticalClass={popoverVerticalClass}
                 onPick={handlePickEmoji}
               />

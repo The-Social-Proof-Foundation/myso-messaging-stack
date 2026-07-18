@@ -506,12 +506,12 @@ function ChatView({
         <div ref={bottomRef} />
       </div>
 
-      {/* Scroll to bottom FAB */}
+      {/* Scroll to bottom FAB — z above message avatars (z-20) */}
       {!isAtBottom && messages.length > 0 && (
-        <div className="relative">
+        <div className="relative z-30">
           <button
             onClick={scrollToBottom}
-            className="absolute -top-12 right-4 z-10 flex h-9 w-9 items-center justify-center rounded-full border border-secondary-200/80 bg-white text-secondary-600 shadow-md transition-colors hover:bg-secondary-50 dark:border-secondary-600 dark:bg-secondary-800 dark:text-secondary-300 dark:hover:bg-secondary-700"
+            className="absolute -top-12 right-4 flex h-9 w-9 items-center justify-center rounded-full border border-secondary-200/80 bg-white text-secondary-600 shadow-md transition-colors hover:bg-secondary-50 dark:border-secondary-600 dark:bg-secondary-800 dark:text-secondary-300 dark:hover:bg-secondary-700"
             aria-label="Scroll to bottom"
           >
             ↓
