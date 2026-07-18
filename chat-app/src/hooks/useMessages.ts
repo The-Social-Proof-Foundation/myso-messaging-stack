@@ -578,7 +578,8 @@ export function useMessages(
         groupId: '',
         order: (lastOrderRef.current ?? 0) + 1,
         text,
-        senderAddress: '',
+        // Must match signer so the bubble aligns right before the relayer echo.
+        senderAddress: signer.toMySoAddress(),
         createdAt: Date.now() / 1000,
         updatedAt: Date.now() / 1000,
         isEdited: false,

@@ -1,5 +1,6 @@
 import { StrictMode, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
+import { BrowserRouter, useLocation } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MessagingClientProvider } from './contexts/MessagingClientContext';
 import {
@@ -23,35 +24,36 @@ function AppErrorBoundary({ children }: Readonly<{ children: ReactNode }>) {
 }
 
 const queryClient = new QueryClient();
-const isAuthCallback =
-  typeof window !== 'undefined' &&
-  window.location.pathname.replace(/\/$/, '') === '/auth/callback';
 
-const root = createRoot(document.getElementById('root')!);
+function Root() {
+  const location = useLocation();
+  const isAuthCallback =
+    location.pathname.replace(/\/$/, '') === '/auth/callback';
 
-if (isAuthCallback) {
-  root.render(
-    <StrictMode>
-      <ThemeProvider>
-        <AuthCallback />
-      </ThemeProvider>
-    </StrictMode>,
-  );
-} else {
-  root.render(
-    <StrictMode>
-      <ThemeProvider>
-        <QueryClientProvider client={queryClient}>
-          <MySocialAuthProvider>
-            <MySocialAuthBroadcastListener />
-            <MessagingClientProvider>
-              <AppErrorBoundary>
-                <App />
-              </AppErrorBoundary>
-            </MessagingClientProvider>
-          </MySocialAuthProvider>
-        </QueryClientProvider>
-      </ThemeProvider>
-    </StrictMode>,
+  if (isAuthCallback) {
+    return <AuthCallback />;
+  }
+
+  return (
+    <QueryClientProvider client={queryClient}>
+      <MySocialAuthProvider>
+        <MySocialAuthBroadcastListener />
+        <MessagingClientProvider>
+          <AppErrorBoundary>
+            <App />
+          </AppErrorBoundary>
+        </MessagingClientProvider>
+      </MySocialAuthProvider>
+    </QueryClientProvider>
   );
 }
+
+createRoot(document.getElementById('root')!).render(
+  <StrictMode>
+    <BrowserRouter>
+      <ThemeProvider>
+        <Root />
+      </ThemeProvider>
+    </BrowserRouter>
+  </StrictMode>,
+);

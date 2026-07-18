@@ -11,7 +11,6 @@ interface SidebarProps {
   onCreateGroup: () => void;
   loading?: boolean;
   agentPanel?: ReactNode;
-  settingsPanel?: ReactNode;
 }
 
 export function Sidebar({
@@ -23,29 +22,27 @@ export function Sidebar({
   onCreateGroup,
   loading = false,
   agentPanel,
-  settingsPanel,
 }: Readonly<SidebarProps>) {
   return (
-    <aside className="flex w-72 shrink-0 flex-col border-r border-secondary-200 bg-white dark:border-secondary-700 dark:bg-secondary-800">
+    <aside className="flex w-72 shrink-0 flex-col border-r border-secondary-200/80 bg-white dark:border-secondary-700 dark:bg-secondary-900">
       {/* Header */}
-      <div className="flex items-center justify-between border-b border-secondary-200 px-4 py-3 dark:border-secondary-700">
+      <div className="flex h-14 shrink-0 items-center justify-between border-b border-secondary-200/80 px-4 dark:border-secondary-700">
         <div className="flex items-center gap-2">
-          <h2 className="text-sm font-semibold text-secondary-700 dark:text-secondary-300">
+          <h2 className="text-[15px] font-semibold tracking-tight text-secondary-800 dark:text-secondary-200">
             Groups
           </h2>
           {loading && (
-            <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-primary-500 border-t-transparent" />
+            <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-bubble-sent border-t-transparent dark:border-bubble-sent-dark" />
           )}
         </div>
         <button
           onClick={onCreateGroup}
-          className="rounded-lg bg-primary-500 px-3 py-1.5 text-xs font-medium text-white hover:bg-primary-600"
+          className="rounded-full bg-bubble-sent px-3 py-1.5 text-xs font-medium text-white hover:bg-bubble-sent/90 dark:bg-bubble-sent-dark dark:hover:bg-bubble-sent-dark/90"
         >
           + New
         </button>
       </div>
 
-      {settingsPanel}
       {agentPanel}
 
       {/* Group list */}
@@ -63,36 +60,38 @@ export function Sidebar({
             )}
           </div>
         ) : (
-          <ul className="py-1">
+          <ul className="px-1.5 py-1.5">
             {groups.map((group) => {
               const unread = unreadCounts[group.groupId] ?? 0;
               const isPaidRequest = paidDmGroupIds?.has(group.groupId) ?? false;
+              const selected =
+                (selectedUuid === group.uuid ||
+                  selectedUuid === group.groupId) &&
+                !!selectedUuid;
               return (
               <li key={group.uuid || group.groupId}>
                 <button
                   onClick={() => onSelectGroup(group.uuid || group.groupId)}
-                  className={`w-full px-4 py-3 text-left transition-colors ${
-                    (selectedUuid === group.uuid ||
-                      selectedUuid === group.groupId) &&
-                    selectedUuid
-                      ? 'bg-primary-50 text-primary-700 dark:bg-primary-900/30 dark:text-primary-300'
+                  className={`w-full rounded-xl px-3 py-2.5 text-left transition-colors ${
+                    selected
+                      ? 'bg-bubble-sent/10 text-secondary-900 dark:bg-secondary-700 dark:text-secondary-50'
                       : 'text-secondary-700 hover:bg-secondary-50 dark:text-secondary-300 dark:hover:bg-secondary-700/50'
                   }`}
                 >
                   <div className="flex items-center justify-between gap-2">
-                    <p className="text-sm font-medium truncate">{group.name}</p>
+                    <p className="truncate text-sm font-medium">{group.name}</p>
                     {unread > 0 &&
                       (isPaidRequest ? (
                         <span className="shrink-0 rounded-full bg-amber-500 px-2 py-0.5 text-[10px] font-semibold text-white">
                           PAID
                         </span>
                       ) : (
-                        <span className="shrink-0 rounded-full bg-primary-500 px-2 py-0.5 text-[10px] font-semibold text-white">
+                        <span className="shrink-0 rounded-full bg-bubble-sent px-2 py-0.5 text-[10px] font-semibold text-white dark:bg-bubble-sent-dark">
                           {unread > 99 ? '99+' : unread}
                         </span>
                       ))}
                   </div>
-                  <p className="mt-0.5 text-xs text-secondary-400 font-mono dark:text-secondary-500">
+                  <p className="mt-0.5 font-mono text-[11px] text-secondary-400 dark:text-secondary-500">
                     {group.groupId.slice(0, 8)}...{group.groupId.slice(-6)}
                   </p>
                 </button>

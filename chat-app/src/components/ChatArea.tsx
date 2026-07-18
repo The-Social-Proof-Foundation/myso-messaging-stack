@@ -1,4 +1,12 @@
-import { useState, useRef, useEffect, useCallback, type ReactNode } from 'react';
+import {
+  useState,
+  useRef,
+  useEffect,
+  useCallback,
+  useMemo,
+  type ReactNode,
+} from 'react';
+import { Info } from 'lucide-react';
 import type { StoredGroup } from '../lib/group-store';
 import { removeStoredGroup } from '../lib/group-store';
 import { useRequiredMessagingClient } from '../contexts/MessagingClientContext';
@@ -7,6 +15,7 @@ import { signAndExecuteTransactionAndWait } from '../lib/sign-and-wait';
 import { useMessages } from '../hooks/useMessages';
 import { usePaidDmGate } from '../hooks/usePaidDmGate';
 import { usePermissions } from '../hooks/usePermissions';
+import { useWalletAvatarMap } from '../hooks/useWalletAvatarMap';
 import { mistToMyso } from '../lib/mys-coin';
 import { MessageBubble } from './MessageBubble';
 import { MessageInput } from './MessageInput';
@@ -23,6 +32,12 @@ interface ChatAreaProps {
   /** Called when a message is sent or received in the open thread. */
   onGroupActivity?: (order: number) => void;
   devAgentPanel?: ReactNode;
+}
+
+/** Case-insensitive MySo address compare (0x-prefixed hex). */
+function sameAddress(a?: string | null, b?: string | null): boolean {
+  if (!a || !b) return false;
+  return a.toLowerCase() === b.toLowerCase();
 }
 
 /** Wrapper that requires a UUID to render the chat. */
@@ -73,54 +88,43 @@ export function ChatArea({
 function ChatHeader({
   name,
   onlineCount,
-  onLeaveClick,
-  leaving,
   onToggleAdmin,
   adminPanelOpen,
 }: Readonly<{
   name: string;
   onlineCount?: number;
-  onLeaveClick?: () => void;
-  leaving?: boolean;
   onToggleAdmin?: () => void;
   adminPanelOpen?: boolean;
 }>) {
   return (
-    <div className="flex items-center justify-between border-b border-secondary-200 px-6 py-3 dark:border-secondary-700">
-      <div className="flex items-baseline gap-2">
-        <h3 className="text-sm font-semibold text-secondary-800 dark:text-secondary-200">
+    <div className="relative flex h-14 shrink-0 items-center justify-center border-b border-secondary-200/40 bg-white/65 px-5 backdrop-blur-xl dark:border-secondary-700/40 dark:bg-secondary-950/55">
+      <div className="flex min-w-0 max-w-[min(100%,20rem)] flex-col items-center gap-1.5 text-center">
+        <h3 className="w-full truncate text-[15px] font-semibold leading-tight tracking-tight text-secondary-900 dark:text-secondary-100">
           {name}
         </h3>
         {onlineCount !== undefined && onlineCount > 0 && (
-          <span className="flex items-center gap-1 text-xs text-secondary-400 dark:text-secondary-500">
+          <span className="flex items-center justify-center gap-1.5 text-[11px] leading-none text-secondary-400 dark:text-secondary-500">
             <span className="inline-block h-1.5 w-1.5 rounded-full bg-green-500" />
             {onlineCount} online
           </span>
         )}
       </div>
-      <div className="flex items-center gap-2">
-        {onLeaveClick && (
-          <button
-            onClick={onLeaveClick}
-            disabled={leaving}
-            className="rounded-lg px-3 py-1 text-xs font-medium text-danger-500 hover:bg-danger-400/10 disabled:opacity-50 dark:text-danger-400"
-          >
-            {leaving ? 'Leaving...' : 'Leave'}
-          </button>
-        )}
-        {onToggleAdmin && (
-          <button
-            onClick={onToggleAdmin}
-            className={`rounded-lg px-3 py-1 text-xs font-medium ${
-              adminPanelOpen
-                ? 'bg-primary-100 text-primary-700 dark:bg-primary-900/30 dark:text-primary-300'
-                : 'text-secondary-500 hover:bg-secondary-100 dark:text-secondary-400 dark:hover:bg-secondary-700'
-            }`}
-          >
-            ⚙ Info
-          </button>
-        )}
-      </div>
+      {onToggleAdmin && (
+        <button
+          type="button"
+          onClick={onToggleAdmin}
+          aria-label="Group info"
+          title="Group info"
+          className={`absolute right-4 top-1/2 inline-flex -translate-y-1/2 items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium ${
+            adminPanelOpen
+              ? 'bg-bubble-sent/10 text-bubble-sent dark:bg-bubble-sent-dark/20 dark:text-bubble-sent-dark'
+              : 'text-secondary-500 hover:bg-secondary-100/80 dark:text-secondary-400 dark:hover:bg-secondary-800/80'
+          }`}
+        >
+          <Info className="h-3.5 w-3.5 shrink-0" strokeWidth={2} />
+          Info
+        </button>
+      )}
     </div>
   );
 }
@@ -176,12 +180,32 @@ function ChatView({
     onGroupActivity,
   });
 
+  const profileAddresses = useMemo(() => {
+    const addrs = new Set<string>();
+    for (const m of messages) {
+      if (m.senderAddress) addrs.add(m.senderAddress);
+    }
+    for (const address of typingMembers) {
+      if (address) addrs.add(address);
+    }
+    for (const entries of reactions.values()) {
+      for (const entry of entries) {
+        for (const reactor of entry.reactors) {
+          if (reactor) addrs.add(reactor);
+        }
+      }
+    }
+    return [...addrs];
+  }, [messages, reactions, typingMembers]);
+  const { photoFor, labelFor: profileLabelFor } =
+    useWalletAvatarMap(profileAddresses);
+
   const typingTypers = typingMembers.map((address) => ({
     address,
-    label: labelFor(address),
+    label: profileLabelFor(address) || labelFor(address),
+    avatarSrc: photoFor(address),
   }));
 
-  const [showLeaveConfirm, setShowLeaveConfirm] = useState(false);
   const [leaving, setLeaving] = useState(false);
   const [leaveError, setLeaveError] = useState<string | null>(null);
 
@@ -199,13 +223,13 @@ function ChatView({
 
       // Remove from localStorage and deselect
       removeStoredGroup(group.uuid);
-      setShowLeaveConfirm(false);
       onLeaveGroup?.();
     } catch (err) {
       console.error('Failed to leave group:', err);
       setLeaveError(
         err instanceof Error ? err.message : 'Failed to leave group.',
       );
+      throw err;
     } finally {
       setLeaving(false);
     }
@@ -271,21 +295,21 @@ function ChatView({
   return (
     <div className="flex min-w-0 flex-1 overflow-hidden">
       <div className="flex min-w-0 flex-1 flex-col">
-      <ChatHeader
-        name={group.name}
-        onlineCount={[...onlineMembers.values()].filter(Boolean).length}
-        onLeaveClick={() => setShowLeaveConfirm(true)}
-        leaving={leaving}
-        onToggleAdmin={() => setAdminPanelOpen((o) => !o)}
-        adminPanelOpen={adminPanelOpen}
-      />
-
-      {/* Messages area */}
+      {/* Messages area — header sticky so content can scroll under the blur */}
       <div
         ref={scrollRef}
         onScroll={handleScroll}
         className="relative flex min-w-0 flex-1 flex-col overflow-x-hidden overflow-y-auto"
       >
+        <div className="sticky top-0 z-30">
+          <ChatHeader
+            name={group.name}
+            onlineCount={[...onlineMembers.values()].filter(Boolean).length}
+            onToggleAdmin={() => setAdminPanelOpen((o) => !o)}
+            adminPanelOpen={adminPanelOpen}
+          />
+        </div>
+
         {/* Load more */}
         {hasMore && !loading && (
           <div className="py-2 text-center">
@@ -321,9 +345,15 @@ function ChatView({
 
         {/* Message list */}
         {!loading && messages.length > 0 && (
-          <div className="flex flex-col gap-0.5 py-4">
-            {messages.map((msg) => {
-              const isOwn = msg.senderAddress === myAddress;
+          <div className="flex flex-col pb-4 pt-6">
+            {messages.map((msg, index) => {
+              const isOwn = sameAddress(msg.senderAddress, myAddress);
+              const prev = messages[index - 1];
+              const next = messages[index + 1];
+              const isFirstInGroup =
+                !prev || !sameAddress(prev.senderAddress, msg.senderAddress);
+              const isLastInGroup =
+                !next || !sameAddress(next.senderAddress, msg.senderAddress);
               return (
                 <MessageBubble
                   key={msg.messageId}
@@ -336,6 +366,15 @@ function ChatView({
                     permissions.canSend ? toggleReaction : undefined
                   }
                   myAddress={myAddress ?? undefined}
+                  preferReactionBelow={index === 0}
+                  isFirstInGroup={isFirstInGroup}
+                  isLastInGroup={isLastInGroup}
+                  avatarSrc={
+                    msg.senderAddress
+                      ? photoFor(msg.senderAddress)
+                      : null
+                  }
+                  labelForAddress={profileLabelFor}
                 />
               );
             })}
@@ -354,7 +393,7 @@ function ChatView({
         <div className="relative">
           <button
             onClick={scrollToBottom}
-            className="absolute -top-12 right-4 z-10 flex h-8 w-8 items-center justify-center rounded-full bg-secondary-200 text-secondary-600 shadow-md transition-colors hover:bg-secondary-300 dark:bg-secondary-600 dark:text-secondary-300 dark:hover:bg-secondary-500"
+            className="absolute -top-12 right-4 z-10 flex h-9 w-9 items-center justify-center rounded-full border border-secondary-200/80 bg-white text-secondary-600 shadow-md transition-colors hover:bg-secondary-50 dark:border-secondary-600 dark:bg-secondary-800 dark:text-secondary-300 dark:hover:bg-secondary-700"
             aria-label="Scroll to bottom"
           >
             ↓
@@ -431,47 +470,6 @@ function ChatView({
         onCancel={cancelPayment}
       />
 
-      {/* Leave group confirmation dialog */}
-      {showLeaveConfirm && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-          <div className="w-full max-w-sm rounded-xl bg-white p-6 shadow-2xl dark:bg-secondary-800">
-            <h3 className="mb-2 text-base font-semibold text-secondary-900 dark:text-secondary-100">
-              Leave Group
-            </h3>
-            <p className="mb-4 text-sm text-secondary-600 dark:text-secondary-400">
-              Are you sure you want to leave{' '}
-              <span className="font-medium">{group.name}</span>? You will no
-              longer receive messages from this group.
-            </p>
-
-            {leaveError && (
-              <p className="mb-3 text-sm text-danger-500 dark:text-danger-400">{leaveError}</p>
-            )}
-
-            <div className="flex justify-end gap-3">
-              <button
-                type="button"
-                onClick={() => {
-                  setShowLeaveConfirm(false);
-                  setLeaveError(null);
-                }}
-                disabled={leaving}
-                className="rounded-lg px-4 py-2 text-sm font-medium text-secondary-600 hover:bg-secondary-100 disabled:opacity-50 dark:text-secondary-400 dark:hover:bg-secondary-700"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={handleLeave}
-                disabled={leaving}
-                className="rounded-lg bg-danger-500 px-4 py-2 text-sm font-medium text-white hover:bg-danger-600 disabled:opacity-50"
-              >
-                {leaving ? 'Leaving...' : 'Leave'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
 
       {/* Admin / Group Info panel */}
@@ -487,6 +485,9 @@ function ChatView({
           refreshMemberLabels();
         }}
         onlineMembers={onlineMembers}
+        onLeaveGroup={handleLeave}
+        leaving={leaving}
+        leaveError={leaveError}
       />
     </div>
   );

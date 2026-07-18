@@ -811,8 +811,9 @@ VITE_MYSO_RPC_URL=https://fullnode.testnet.mysocial.network:9000
 VITE_MYSO_GRAPHQL_URL=https://graphql.testnet.mysocial.network/graphql
 
 # MySocial Login (register redirect URI allowlist per client ID)
-VITE_MYSOCIAL_AUTH_API_BASE_URL=https://api.mysocial.network
-VITE_MYSOCIAL_AUTH_ORIGIN=https://auth.mysocial.network
+# apiBaseUrl = salt service origin (/auth/refresh, /auth/logout); SALT_URL = /salt path
+VITE_MYSOCIAL_AUTH_API_BASE_URL=https://salt.testnet.mysocial.network
+VITE_MYSOCIAL_AUTH_ORIGIN=https://auth.testnet.mysocial.network
 VITE_MYSOCIAL_AUTH_CLIENT_ID=your-client-id
 VITE_MYSOCIAL_AUTH_REDIRECT_URI=http://localhost:5173/auth/callback
 VITE_MYSOCIAL_SALT_URL=https://salt.testnet.mysocial.network/salt

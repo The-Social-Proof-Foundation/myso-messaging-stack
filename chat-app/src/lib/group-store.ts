@@ -6,6 +6,7 @@
  */
 
 const STORAGE_KEY = 'chat-app-groups';
+const SELECTED_GROUP_KEY = 'chat-app-selected-group';
 
 export interface StoredGroup {
   uuid: string;
@@ -14,6 +15,46 @@ export interface StoredGroup {
   createdAt: number;
   /** Highest known relayer message order — used for sidebar sort before network refresh. */
   lastActivityOrder?: number;
+}
+
+/** Read the last-selected group key for a wallet (uuid or groupId). */
+export function getSelectedGroupKey(walletAddress?: string | null): string | null {
+  if (!walletAddress) return null;
+  try {
+    const raw = localStorage.getItem(SELECTED_GROUP_KEY);
+    if (!raw) return null;
+    const map = JSON.parse(raw) as Record<string, string>;
+    const key = map[walletAddress.toLowerCase()];
+    return typeof key === 'string' && key.length > 0 ? key : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Persist the selected group key for a wallet (uuid preferred). */
+export function setSelectedGroupKey(
+  walletAddress: string | null | undefined,
+  selectedKey: string | null,
+): void {
+  if (!walletAddress) return;
+  try {
+    const addr = walletAddress.toLowerCase();
+    let map: Record<string, string> = {};
+    try {
+      const raw = localStorage.getItem(SELECTED_GROUP_KEY);
+      if (raw) map = JSON.parse(raw) as Record<string, string>;
+    } catch {
+      map = {};
+    }
+    if (selectedKey) {
+      map[addr] = selectedKey;
+    } else {
+      delete map[addr];
+    }
+    localStorage.setItem(SELECTED_GROUP_KEY, JSON.stringify(map));
+  } catch {
+    // ignore (e.g. private mode / disabled storage)
+  }
 }
 
 /** Read all stored groups from localStorage. */

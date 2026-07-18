@@ -4,31 +4,84 @@
  * Custom theme for MySocial Messaging.
  * Tailwind v4 uses CSS-native @theme instead of tailwind.config.js.
  * Dark mode: use `class` strategy via `@variant dark (&:where(.dark, .dark *))`.
+ *
+ * Neutral zinc palette — light + dark share one gray family (no brand blue).
+ * Dark roles: 950 page, 900 card, 800 popover, 700 border/input, 400 muted text.
  */
-@theme {
-  /* Primary - MySo brand blue */
-  --color-primary-50: #eff6ff;
-  --color-primary-100: #dbeafe;
-  --color-primary-200: #bfdbfe;
-  --color-primary-300: #93c5fd;
-  --color-primary-400: #60a5fa;
-  --color-primary-500: #4f63f6;
-  --color-primary-600: #4338ca;
-  --color-primary-700: #3730a3;
-  --color-primary-800: #312e81;
-  --color-primary-900: #1e1b4b;
 
-  /* Secondary - neutral grays */
-  --color-secondary-50: #f8fafc;
-  --color-secondary-100: #f1f5f9;
-  --color-secondary-200: #e2e8f0;
-  --color-secondary-300: #cbd5e1;
-  --color-secondary-400: #94a3b8;
-  --color-secondary-500: #64748b;
-  --color-secondary-600: #475569;
-  --color-secondary-700: #334155;
-  --color-secondary-800: #1e293b;
-  --color-secondary-900: #0f172a;
+@font-face {
+  font-family: 'Chakra Petch';
+  font-style: normal;
+  font-weight: 300;
+  font-display: swap;
+  src: url(https://fonts.gstatic.com/s/chakrapetch/v12/cIflMapbsEk7TDLdtEz1BwkeNIh1R5_F.woff2)
+    format('woff2');
+}
+
+@font-face {
+  font-family: 'Chakra Petch';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url(https://fonts.gstatic.com/s/chakrapetch/v12/cIf6MapbsEk7TDLdtEz1BwkWn6pg.woff2)
+    format('woff2');
+}
+
+@font-face {
+  font-family: 'Chakra Petch';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url(https://fonts.gstatic.com/s/chakrapetch/v12/cIflMapbsEk7TDLdtEz1BwkebIl1R5_F.woff2)
+    format('woff2');
+}
+
+@font-face {
+  font-family: 'Chakra Petch';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url(https://fonts.gstatic.com/s/chakrapetch/v12/cIflMapbsEk7TDLdtEz1BwkeQI51R5_F.woff2)
+    format('woff2');
+}
+
+@font-face {
+  font-family: 'Chakra Petch';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url(https://fonts.gstatic.com/s/chakrapetch/v12/cIflMapbsEk7TDLdtEz1BwkeJI91R5_F.woff2)
+    format('woff2');
+}
+
+@theme {
+  /* Brand display font — nav title only (utility: font-chakra) */
+  --font-chakra: 'Chakra Petch', ui-sans-serif, system-ui, sans-serif;
+
+  /* Primary - neutral charcoal / near-white accents */
+  --color-primary-50: #fafafa;
+  --color-primary-100: #f4f4f5;
+  --color-primary-200: #e4e4e7;
+  --color-primary-300: #d4d4d8;
+  --color-primary-400: #a1a1a9;
+  --color-primary-500: #3f3f46;
+  --color-primary-600: #27272a;
+  --color-primary-700: #1f1f1f;
+  --color-primary-800: #151517;
+  --color-primary-900: #0a0a0b;
+
+  /* Secondary - zinc surfaces */
+  --color-secondary-50: #fafafa;
+  --color-secondary-100: #f4f4f5;
+  --color-secondary-200: #e4e4e7;
+  --color-secondary-300: #d4d4d8;
+  --color-secondary-400: #a1a1a9;
+  --color-secondary-500: #6b6b70;
+  --color-secondary-600: #34343a;
+  --color-secondary-700: #27272a;
+  --color-secondary-800: #151517;
+  --color-secondary-900: #0f0f11;
+  --color-secondary-950: #0a0a0b;
 
   /* Accent - teal for success/positive */
   --color-accent-400: #2dd4bf;
@@ -39,9 +92,49 @@
   --color-danger-400: #f87171;
   --color-danger-500: #ef4444;
   --color-danger-600: #dc2626;
+
+  /* iMessage-style chat bubbles (thread only; shell stays zinc) */
+  --color-bubble-sent: #0a84ff;
+  --color-bubble-sent-dark: #0a84ff;
+  --color-bubble-sent-top: #59a7ff;
+  --color-bubble-received: #e9e9eb;
+  --color-bubble-received-bottom: #dcdcdf;
+  --color-bubble-received-dark: #3a3a3c;
+  --color-bubble-received-dark-bottom: #2c2c2e;
+  --color-bubble-sent-meta: #cce4ff;
 }
 
 @variant dark (&:where(.dark, .dark *));
+
+/* Subtle top → bottom fills for message bubbles */
+@layer utilities {
+  .bg-bubble-sent-fill {
+    background-color: var(--color-bubble-sent);
+    background-image: linear-gradient(
+      to bottom,
+      var(--color-bubble-sent-top),
+      var(--color-bubble-sent)
+    );
+  }
+
+  .bg-bubble-received-fill {
+    background-color: var(--color-bubble-received);
+    background-image: linear-gradient(
+      to bottom,
+      var(--color-bubble-received),
+      var(--color-bubble-received-bottom)
+    );
+  }
+
+  :where(.dark, .dark *) .bg-bubble-received-fill {
+    background-color: var(--color-bubble-received-dark);
+    background-image: linear-gradient(
+      to bottom,
+      var(--color-bubble-received-dark),
+      var(--color-bubble-received-dark-bottom)
+    );
+  }
+}
 
 /* Base styles */
 @layer base {
@@ -54,8 +147,8 @@
   }
 
   body {
-    @apply bg-white text-secondary-900 antialiased;
-    @apply dark:bg-secondary-900 dark:text-secondary-100;
+    @apply bg-secondary-50 text-secondary-900 antialiased;
+    @apply dark:bg-secondary-950 dark:text-secondary-50;
   }
 
   #root {

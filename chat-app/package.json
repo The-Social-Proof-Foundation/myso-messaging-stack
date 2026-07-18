@@ -12,6 +12,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@radix-ui/react-dropdown-menu": "^2.1.20",
     "@socialproof/bcs": "^0.0.2",
     "@socialproof/mydata": "^0.0.4",
     "@socialproof/myso": "^0.0.4",
@@ -20,8 +21,10 @@
     "@socialproof/mysocial-auth": "^0.12.4",
     "@tailwindcss/vite": "^4.2.1",
     "@tanstack/react-query": "^5.90.21",
+    "lucide-react": "^1.25.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
+    "react-router-dom": "^7.18.1",
     "tailwindcss": "^4.2.1"
   },
   "devDependencies": {

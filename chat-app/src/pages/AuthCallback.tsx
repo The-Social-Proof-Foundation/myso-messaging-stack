@@ -1,22 +1,9 @@
 import { useEffect, useState } from 'react';
 import { createMySocialAuth } from '@socialproof/mysocial-auth';
+import type { AuthResultMessage } from '../lib/auth-session-build';
+import { buildSessionFromAuthResult } from '../lib/auth-session-build';
+import { readMySocialAuthConfig } from '../lib/mysocial-auth-config';
 import { SESSION_STORAGE_KEY } from '../lib/auth-utils';
-
-function readAuthConfig(): Parameters<typeof createMySocialAuth>[0] | null {
-  const apiBaseUrl = import.meta.env.VITE_MYSOCIAL_AUTH_API_BASE_URL;
-  const authOrigin = import.meta.env.VITE_MYSOCIAL_AUTH_ORIGIN;
-  const clientId = import.meta.env.VITE_MYSOCIAL_AUTH_CLIENT_ID;
-  const redirectUri = import.meta.env.VITE_MYSOCIAL_AUTH_REDIRECT_URI;
-  if (!apiBaseUrl || !authOrigin || !clientId || !redirectUri) return null;
-  return {
-    apiBaseUrl,
-    authOrigin,
-    clientId,
-    redirectUri,
-    storage: 'session',
-    proactiveRefresh: true,
-  };
-}
 
 async function handlePopupFallback(): Promise<boolean> {
   if (typeof BroadcastChannel === 'undefined') return false;
@@ -57,21 +44,41 @@ async function handlePopupFallback(): Promise<boolean> {
   if (params.get('address')) user.address = params.get('address') || undefined;
   if (params.get('sub')) user.sub = params.get('sub') || undefined;
 
-  channel.postMessage({
-    type: 'MYSOCIAL_AUTH_RESULT',
+  const authResult: AuthResultMessage = {
     code,
     salt: params.get('salt') || undefined,
     id_token: hashParams.get('id_token') ?? params.get('id_token') ?? undefined,
-    access_token: hashParams.get('access_token') ?? params.get('access_token') ?? undefined,
+    access_token:
+      hashParams.get('access_token') ?? params.get('access_token') ?? undefined,
     session_access_token:
-      hashParams.get('session_access_token') ?? params.get('session_access_token') ?? undefined,
-    refresh_token: hashParams.get('refresh_token') ?? params.get('refresh_token') ?? undefined,
+      hashParams.get('session_access_token') ??
+      params.get('session_access_token') ??
+      undefined,
+    refresh_token:
+      hashParams.get('refresh_token') ?? params.get('refresh_token') ?? undefined,
     expires_in: hashParams.get('expires_in')
       ? Number(hashParams.get('expires_in'))
       : params.get('expires_in')
         ? Number(params.get('expires_in'))
         : undefined,
     user: Object.keys(user).length > 0 ? user : undefined,
+  };
+
+  // Validate payload shape before broadcasting (main window stores via listener)
+  if (!buildSessionFromAuthResult(authResult)) {
+    channel.postMessage({
+      type: 'MYSOCIAL_AUTH_ERROR',
+      error: 'Invalid auth result payload',
+      state: state || '',
+    });
+    channel.close();
+    window.close();
+    return true;
+  }
+
+  channel.postMessage({
+    type: 'MYSOCIAL_AUTH_RESULT',
+    ...authResult,
     state,
     nonce,
     clientId,
@@ -90,7 +97,7 @@ export default function AuthCallback() {
     const run = async () => {
       if (await handlePopupFallback()) return;
 
-      const config = readAuthConfig();
+      const { config } = readMySocialAuthConfig();
       if (!config) {
         if (!cancelled) setError('MySocial auth is not configured.');
         return;

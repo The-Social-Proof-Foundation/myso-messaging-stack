@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useMemo } from 'react';
+import { useState, useCallback, useRef, useMemo, useEffect } from 'react';
 import { Sidebar } from './Sidebar';
 import { ChatArea } from './ChatArea';
 import { CreateGroupModal } from './CreateGroupModal';
@@ -8,9 +8,12 @@ import { useGroupActivityOrder } from '../hooks/useGroupActivityOrder';
 import { useUserFeed } from '../hooks/useUserFeed';
 import { useAuthenticatedAddress, useMySocialAuth } from '../contexts/MySocialAuthContext';
 import { AgentConversationsPanel } from './AgentConversationsPanel';
-import { PaidMessagingSettings } from './PaidMessagingSettings';
 import { AgentDevSendPanel } from './AgentDevSendPanel';
 import { useAgentConversations } from '../hooks/useAgentConversations';
+import {
+  getSelectedGroupKey,
+  setSelectedGroupKey,
+} from '../lib/group-store';
 
 interface AuthenticatedAppProps {
   isUsingDevMessengerSigner: boolean;
@@ -46,8 +49,16 @@ export function AuthenticatedApp({
     [groups, activity.latestOrders],
   );
 
-  const [selectedUuid, setSelectedUuid] = useState<string | null>(null);
+  const [selectedUuid, setSelectedUuid] = useState<string | null>(() =>
+    getSelectedGroupKey(address),
+  );
   const [showCreateModal, setShowCreateModal] = useState(false);
+
+  // Re-hydrate selection when the wallet address becomes available / changes.
+  useEffect(() => {
+    const cached = getSelectedGroupKey(address);
+    setSelectedUuid(cached);
+  }, [address]);
 
   const selectedGroup =
     groups.find(
@@ -57,6 +68,24 @@ export function AuthenticatedApp({
   // Stable view of the active conversation for user-feed handlers.
   const selectedGroupIdRef = useRef<string | null>(null);
   selectedGroupIdRef.current = selectedGroup?.groupId ?? null;
+
+  const selectGroup = useCallback(
+    (key: string | null) => {
+      setSelectedUuid(key);
+      setSelectedGroupKey(address, key);
+    },
+    [address],
+  );
+
+  // Persist preferred uuid once the group list resolves a cached groupId match.
+  useEffect(() => {
+    if (!selectedGroup || !address) return;
+    const preferred = selectedGroup.uuid || selectedGroup.groupId;
+    if (preferred && preferred !== selectedUuid) {
+      setSelectedUuid(preferred);
+    }
+    setSelectedGroupKey(address, preferred);
+  }, [selectedGroup, address, selectedUuid]);
 
   // One user-feed socket per wallet drives sidebar badges, cross-device
   // read-state sync, and group discovery. Polling remains as reconciliation.
@@ -77,7 +106,7 @@ export function AuthenticatedApp({
     onGroupHidden: (groupId) => {
       handleHidden(groupId);
       if (selectedGroupIdRef.current === groupId) {
-        setSelectedUuid(null);
+        selectGroup(null);
       }
     },
   });
@@ -85,15 +114,15 @@ export function AuthenticatedApp({
   const handleGroupCreated = useCallback(
     (uuid: string) => {
       refreshGroups();
-      setSelectedUuid(uuid);
+      selectGroup(uuid);
     },
-    [refreshGroups],
+    [refreshGroups, selectGroup],
   );
 
   const handleLeaveGroup = useCallback(() => {
-    setSelectedUuid(null);
+    selectGroup(null);
     refreshGroups();
-  }, [refreshGroups]);
+  }, [refreshGroups, selectGroup]);
 
   return (
     <>
@@ -110,7 +139,7 @@ export function AuthenticatedApp({
           selectedUuid={selectedUuid}
           unreadCounts={activity.counts}
           paidDmGroupIds={paidDmGroupIds}
-          onSelectGroup={setSelectedUuid}
+          onSelectGroup={selectGroup}
           onCreateGroup={() => setShowCreateModal(true)}
           loading={discoveryLoading}
           agentPanel={
@@ -120,11 +149,10 @@ export function AuthenticatedApp({
               error={agentConversations.error}
               onSelectGroup={(groupId) => {
                 const match = groups.find((g) => g.groupId === groupId);
-                setSelectedUuid(match?.uuid ?? groupId);
+                selectGroup(match?.uuid ?? groupId);
               }}
             />
           }
-          settingsPanel={<PaidMessagingSettings />}
         />
         <ChatArea
           selectedGroup={selectedGroup}

@@ -144,14 +144,14 @@ export function MessageInput({
   const canSend = (text.trim() || files.length > 0) && !disabled && !sending;
 
   return (
-    <div className="border-t border-secondary-200 px-4 py-3 dark:border-secondary-700">
+    <div className="border-t border-secondary-200/80 px-3 py-2.5 dark:border-secondary-700">
       {/* File chips */}
       {files.length > 0 && (
-        <div className="mb-2 flex flex-wrap gap-1.5">
+        <div className="mb-2 flex flex-wrap gap-1.5 px-1">
           {files.map((f, i) => (
             <div
               key={`${f.name}-${i}`}
-              className="flex items-center gap-1 rounded-full bg-secondary-100 px-2.5 py-1 text-xs text-secondary-700 dark:bg-secondary-700 dark:text-secondary-300"
+              className="flex items-center gap-1 rounded-full bg-bubble-received px-2.5 py-1 text-xs text-secondary-700 dark:bg-bubble-received-dark dark:text-secondary-200"
             >
               <span className="max-w-30 truncate">{f.name}</span>
               <span className="text-secondary-400">{formatSize(f.size)}</span>
@@ -169,23 +169,23 @@ export function MessageInput({
 
       {/* File error */}
       {fileError && (
-        <p className="mb-1.5 text-xs text-danger-500">{fileError}</p>
+        <p className="mb-1.5 px-1 text-xs text-danger-500">{fileError}</p>
       )}
 
       {/* Sending indicator */}
       {sending && (
-        <div className="mb-2 flex items-center gap-2 text-xs text-secondary-500">
-          <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-primary-500 border-t-transparent" />
+        <div className="mb-2 flex items-center gap-2 px-1 text-xs text-secondary-500">
+          <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-bubble-sent border-t-transparent dark:border-bubble-sent-dark" />
           <span>Sending{files.length > 0 ? ' (uploading files...)' : '...'}</span>
         </div>
       )}
 
-      <div className="flex gap-2">
+      <div className="flex items-end gap-1.5">
         {/* Attachment button */}
         <button
           onClick={() => fileInputRef.current?.click()}
           disabled={disabled || sending}
-          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-secondary-400 hover:bg-secondary-100 hover:text-secondary-600 disabled:opacity-50 dark:hover:bg-secondary-700 dark:hover:text-secondary-300"
+          className="mb-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-secondary-400 hover:bg-secondary-100 hover:text-secondary-600 disabled:opacity-50 dark:hover:bg-secondary-700 dark:hover:text-secondary-300"
           title="Attach files"
         >
           <svg
@@ -220,17 +220,30 @@ export function MessageInput({
             noteTyping(e.target.value);
           }}
           onKeyDown={handleKeyDown}
-          placeholder="Type a message..."
+          placeholder="Message"
           rows={1}
           disabled={disabled || sending}
-          className="flex-1 resize-none rounded-lg border border-secondary-300 bg-white px-3 py-2 text-sm text-secondary-900 placeholder:text-secondary-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 disabled:opacity-50 dark:border-secondary-600 dark:bg-secondary-700 dark:text-secondary-100 dark:placeholder:text-secondary-500"
+          className="flex-1 resize-none rounded-full border border-secondary-200 bg-secondary-50 px-4 py-2 text-[15px] leading-snug text-secondary-900 placeholder:text-secondary-400 focus:border-bubble-sent focus:outline-none focus:ring-2 focus:ring-bubble-sent/20 disabled:opacity-50 dark:border-secondary-600 dark:bg-secondary-800 dark:text-secondary-100 dark:placeholder:text-secondary-500 dark:focus:border-bubble-sent-dark dark:focus:ring-bubble-sent-dark/20"
         />
         <button
           onClick={handleSend}
           disabled={!canSend}
-          className="rounded-lg bg-primary-500 px-4 py-2 text-sm font-medium text-white hover:bg-primary-600 disabled:opacity-50 disabled:hover:bg-primary-500"
+          aria-label="Send"
+          className="mb-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-bubble-sent text-white transition-opacity hover:bg-bubble-sent/90 disabled:opacity-40 disabled:hover:bg-bubble-sent dark:bg-bubble-sent-dark dark:hover:bg-bubble-sent-dark/90 dark:disabled:hover:bg-bubble-sent-dark"
         >
-          {sending ? '...' : 'Send'}
+          {sending ? (
+            <span className="text-xs">...</span>
+          ) : (
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              viewBox="0 0 20 20"
+              fill="currentColor"
+              className="h-4 w-4"
+              aria-hidden="true"
+            >
+              <path d="M3.105 2.288a.75.75 0 00-.826.95l1.414 4.926A1.5 1.5 0 005.135 9.25h6.115a.75.75 0 010 1.5H5.135a1.5 1.5 0 00-1.442 1.086L2.279 16.76a.75.75 0 00.826.95 28.897 28.897 0 0015.293-7.154.75.75 0 000-1.114A28.897 28.897 0 003.105 2.288z" />
+            </svg>
+          )}
         </button>
       </div>
     </div>

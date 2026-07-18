@@ -186,7 +186,7 @@ The app follows a 3-layer architecture:
 - **`pnpm dev`**: Restart the dev server after editing `.env` (Vite reads env when the server starts).
 - **`pnpm preview`**: The preview server only serves **`dist/`** from your last **`pnpm build`**. Env vars are inlined when that bundle was built — **not** from `.env` at preview runtime. Edit `.env`, then run **`pnpm build`** again, then `pnpm preview`.
 
-`VITE_MYSOCIAL_AUTH_API_BASE_URL` must be the **MySocial API** host (see [@socialproof/mysocial-auth](https://www.npmjs.com/package/@socialproof/mysocial-auth)), **not** the salt URL (`VITE_MYSOCIAL_SALT_URL` is separate).
+`VITE_MYSOCIAL_AUTH_API_BASE_URL` must be the **salt service origin** (e.g. `https://salt.testnet.mysocial.network`) — the SDK calls `/auth/refresh` and `/auth/logout` there. `VITE_MYSOCIAL_SALT_URL` is the full `/salt` path for keypair derivation and stays separate. `VITE_MYSOCIAL_AUTH_ORIGIN` is the auth frontend (e.g. `https://auth.testnet.mysocial.network`).
 
 ### Messaging client init fails: `Version` not found (`GraphQL found 0 and RPC publish-tx lookup found 0`)
 

@@ -112,7 +112,7 @@ export function PaidMessagingSettings() {
 
   if (!client || clientLoading) {
     return (
-      <section className="border-b border-secondary-200 px-4 py-3 dark:border-secondary-700">
+      <section className="px-4 py-4">
         <h3 className="text-xs font-semibold uppercase tracking-wide text-secondary-500 dark:text-secondary-400">
           Paid messaging
         </h3>
@@ -127,7 +127,7 @@ export function PaidMessagingSettings() {
     policySource === 'indexed' ? 'Indexed policy' : 'On-chain policy';
 
   return (
-    <section className="border-b border-secondary-200 px-4 py-3 dark:border-secondary-700">
+    <section className="px-4 py-4">
       <h3 className="text-xs font-semibold uppercase tracking-wide text-secondary-500 dark:text-secondary-400">
         Paid messaging
       </h3>

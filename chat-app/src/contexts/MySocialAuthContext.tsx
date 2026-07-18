@@ -10,6 +10,7 @@ import {
 } from 'react';
 import {
   createMySocialAuth,
+  SessionRevokedError,
   type MySocialAuth,
   type Session,
 } from '@socialproof/mysocial-auth';
@@ -17,6 +18,7 @@ import { Ed25519Keypair } from '@socialproof/myso/keypairs/ed25519';
 import { deriveKeypairFromSubAndSalt } from '../lib/derive-mysocial-keypair';
 import { getOrCreateDevMessengerKeypair } from '../lib/dev-signer';
 import { getSaltFromSession } from '../lib/get-salt-from-session';
+import { readMySocialAuthConfig } from '../lib/mysocial-auth-config';
 import {
   canAttemptOAuthKeypairDerivation,
   isTrueWalletOnlySession,
@@ -24,6 +26,17 @@ import {
   shouldUseRedirectAuth,
   SESSION_STORAGE_KEY,
 } from '../lib/auth-utils';
+
+const SESSION_EXPIRED_MESSAGE =
+  'Session expired — please sign in again';
+
+function isSessionRevokedOrExpiredError(e: unknown): boolean {
+  if (e instanceof SessionRevokedError) return true;
+  const message = e instanceof Error ? e.message : String(e);
+  return /session revoked|session expired|401|unauthorized|invalid.*refresh/i.test(
+    message,
+  );
+}
 
 function devUnblockEnabled(): boolean {
   const v = import.meta.env.VITE_DEV_UNBLOCK_MESSAGING_UI;
@@ -55,59 +68,16 @@ interface MySocialAuthContextValue {
   login: () => void;
   logout: () => Promise<void>;
   connectedAddress: string | undefined;
-  refreshSession: () => void;
+  retryKeypairDerivation: () => void;
 }
 
 const MySocialAuthContext = createContext<MySocialAuthContextValue | null>(null);
-
-function readAuthConfig(): {
-  config: Parameters<typeof createMySocialAuth>[0] | null;
-  error: string | null;
-} {
-  const apiBaseUrl = import.meta.env.VITE_MYSOCIAL_AUTH_API_BASE_URL;
-  const authOrigin = import.meta.env.VITE_MYSOCIAL_AUTH_ORIGIN;
-  const clientId = import.meta.env.VITE_MYSOCIAL_AUTH_CLIENT_ID;
-  const redirectUri = import.meta.env.VITE_MYSOCIAL_AUTH_REDIRECT_URI;
-
-  if (
-    typeof apiBaseUrl !== 'string' ||
-    typeof authOrigin !== 'string' ||
-    typeof clientId !== 'string' ||
-    typeof redirectUri !== 'string' ||
-    !apiBaseUrl ||
-    !authOrigin ||
-    !clientId ||
-    !redirectUri
-  ) {
-    const prodHint = import.meta.env.PROD
-      ? ' Preview/production bundles read env only at build time. Run vite build again after changing .env.'
-      : '';
-    return {
-      config: null,
-      error:
-        'Missing MySocial auth env: VITE_MYSOCIAL_AUTH_API_BASE_URL, VITE_MYSOCIAL_AUTH_ORIGIN, VITE_MYSOCIAL_AUTH_CLIENT_ID, VITE_MYSOCIAL_AUTH_REDIRECT_URI.' +
-        prodHint,
-    };
-  }
-
-  return {
-    config: {
-      apiBaseUrl,
-      authOrigin,
-      clientId,
-      redirectUri,
-      storage: 'session',
-      proactiveRefresh: true,
-    },
-    error: null,
-  };
-}
 
 export function MySocialAuthProvider({
   children,
 }: Readonly<{ children: ReactNode }>) {
   const { config: authConfig, error: configErrorFromEnv } = useMemo(
-    () => readAuthConfig(),
+    () => readMySocialAuthConfig(),
     [],
   );
 
@@ -132,7 +102,9 @@ export function MySocialAuthProvider({
   const authRef = useRef(auth);
   authRef.current = auth;
 
-  const refreshSession = useCallback(() => {
+  const hadSessionRef = useRef(false);
+
+  const retryKeypairDerivation = useCallback(() => {
     setDeriveNonce((n) => n + 1);
   }, []);
 
@@ -145,16 +117,30 @@ export function MySocialAuthProvider({
     let cancelled = false;
 
     void auth.getSession().then((s) => {
-      if (!cancelled) setSession(s);
+      if (!cancelled) {
+        setSession(s);
+        hadSessionRef.current = Boolean(s);
+      }
     });
 
     const unsub = auth.onAuthStateChange((s) => {
+      if (!s && hadSessionRef.current) {
+        setSignInError(SESSION_EXPIRED_MESSAGE);
+        setKeypair(null);
+        setIsUsingDevMessengerSigner(false);
+        setDeriveKeyError(null);
+      }
+      hadSessionRef.current = Boolean(s);
       setSession(s);
       setDeriveNonce((n) => n + 1);
     });
 
     const onBroadcast = () => {
       void auth.getSession().then((s) => {
+        if (s) {
+          setSignInError(null);
+        }
+        hadSessionRef.current = Boolean(s);
         setSession(s);
         setDeriveNonce((n) => n + 1);
       });
@@ -162,11 +148,26 @@ export function MySocialAuthProvider({
     window.addEventListener('mysocial-auth-broadcast-session', onBroadcast);
     window.addEventListener('mysocial-auth-session-changed', onBroadcast);
 
+    const onVisibilityChange = () => {
+      if (document.visibilityState !== 'visible') return;
+      void auth.getSession().then((s) => {
+        if (cancelled) return;
+        if (s) {
+          setSignInError(null);
+        }
+        hadSessionRef.current = Boolean(s);
+        setSession(s);
+        setDeriveNonce((n) => n + 1);
+      });
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+
     return () => {
       cancelled = true;
       unsub();
       window.removeEventListener('mysocial-auth-broadcast-session', onBroadcast);
       window.removeEventListener('mysocial-auth-session-changed', onBroadcast);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
     };
   }, [auth]);
 
@@ -286,6 +287,14 @@ export function MySocialAuthProvider({
         }
       } catch (e) {
         if (!cancelled) {
+          if (isSessionRevokedOrExpiredError(e)) {
+            setSignInError(SESSION_EXPIRED_MESSAGE);
+            setKeypair(null);
+            setIsUsingDevMessengerSigner(false);
+            setDeriveKeyError(null);
+            setDerivingKeypair(false);
+            return;
+          }
           if (devUnblockEnabled()) {
             applyDevSigner(
               setKeypair,
@@ -334,6 +343,7 @@ export function MySocialAuthProvider({
           void a.getSession().then((s) => {
             if (s?.user?.address) {
               setSession(s);
+              hadSessionRef.current = true;
               setDeriveNonce((n) => n + 1);
               return;
             }
@@ -350,6 +360,9 @@ export function MySocialAuthProvider({
   }, []);
 
   const logout = useCallback(async () => {
+    // Clear before signOut so onAuthStateChange(null) does not show "session expired"
+    hadSessionRef.current = false;
+    setSignInError(null);
     const a = authRef.current;
     if (a) {
       await a.signOut();
@@ -357,7 +370,6 @@ export function MySocialAuthProvider({
     setKeypair(null);
     setIsUsingDevMessengerSigner(false);
     setDeriveKeyError(null);
-    setSignInError(null);
   }, []);
 
   const configError = auth ? null : configErrorFromEnv;
@@ -376,7 +388,7 @@ export function MySocialAuthProvider({
       login,
       logout,
       connectedAddress,
-      refreshSession,
+      retryKeypairDerivation,
     }),
     [
       auth,
@@ -391,7 +403,7 @@ export function MySocialAuthProvider({
       login,
       logout,
       connectedAddress,
-      refreshSession,
+      retryKeypairDerivation,
     ],
   );
 

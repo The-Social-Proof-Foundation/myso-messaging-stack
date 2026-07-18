@@ -28,6 +28,10 @@ interface AdminPanelProps {
   onGroupArchived?: () => void;
   /** Presence per member (snapshot + live events) for the online dots. */
   onlineMembers?: Map<string, boolean>;
+  /** Leave the group (shown for all members in Group Actions). */
+  onLeaveGroup?: () => Promise<void>;
+  leaving?: boolean;
+  leaveError?: string | null;
 }
 
 export function AdminPanel({
@@ -41,6 +45,9 @@ export function AdminPanel({
   onGroupRenamed,
   onGroupArchived,
   onlineMembers,
+  onLeaveGroup,
+  leaving = false,
+  leaveError = null,
 }: Readonly<AdminPanelProps>) {
   const { client, signer } = useRequiredMessagingClient();
 
@@ -295,7 +302,7 @@ export function AdminPanel({
   if (!open) return null;
 
   return (
-    <div className="flex w-80 flex-col border-l border-secondary-200 bg-white dark:border-secondary-700 dark:bg-secondary-800">
+    <div className="flex w-80 flex-col border-l border-secondary-200 bg-white dark:border-secondary-700 dark:bg-secondary-900">
       {/* Header */}
       <div className="flex items-center justify-between border-b border-secondary-200 px-4 py-3 dark:border-secondary-700">
         <h3 className="text-sm font-semibold text-secondary-800 dark:text-secondary-200">
@@ -351,12 +358,21 @@ export function AdminPanel({
           />
         )}
 
-        {permissions.isAdmin && (
+        {(permissions.isAdmin || onLeaveGroup) && (
           <GroupActionsSection
-            canRotateKey={permissions.canRotateKey}
+            canRotateKey={permissions.isAdmin && permissions.canRotateKey}
+            canArchive={permissions.isAdmin}
             actionError={actionError}
             onRotateKey={handleRotateKey}
             onArchive={handleArchive}
+            onLeave={
+              onLeaveGroup ??
+              (async () => {
+                /* no-op when leave is unavailable */
+              })
+            }
+            leaving={leaving}
+            leaveError={leaveError}
           />
         )}
       </div>
