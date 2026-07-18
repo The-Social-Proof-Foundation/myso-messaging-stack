@@ -1,4 +1,5 @@
-FROM rust:1.90-bookworm AS builder
+# aws-sdk-s3 (R2 archive) requires rustc >= 1.94
+FROM rust:1.96-bookworm AS builder
 
 WORKDIR /app
 
