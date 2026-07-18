@@ -752,15 +752,17 @@ export function MessageBubble({
                 disabled={!onToggleReaction}
                 aria-label={`${entry.emoji} reaction from ${reactorsTitle}`}
                 title={reactorsTitle}
-                className={`flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs shadow-sm transition-colors ${
+                className={`flex items-center gap-1 rounded-full border px-2 py-1 shadow-sm transition-colors ${
                   mine
                     ? 'border-bubble-sent/50 bg-bubble-sent/15 text-bubble-sent backdrop-blur-md dark:border-bubble-sent-dark/70 dark:bg-[#0A3A6E]/92 dark:text-bubble-sent-dark'
                     : 'border-secondary-200 bg-white text-secondary-600 hover:bg-secondary-50 dark:border-secondary-600 dark:bg-secondary-800 dark:text-secondary-300 dark:hover:bg-secondary-700'
                 } ${onToggleReaction ? '' : 'cursor-default'}`}
               >
-                <span>{entry.emoji}</span>
+                <span className="text-[15px] leading-none">{entry.emoji}</span>
                 {entry.count >= 2 && (
-                  <span className="font-medium tabular-nums">{entry.count}</span>
+                  <span className="text-xs font-medium tabular-nums leading-none">
+                    {entry.count}
+                  </span>
                 )}
               </button>
               {showTip && (

@@ -109,12 +109,14 @@ export function ChatArea({
 function ChatHeader({
   name,
   onlineCount,
+  permissionsLoading,
   onToggleAdmin,
   adminPanelOpen,
   onMobileBack,
 }: Readonly<{
   name: string;
   onlineCount?: number;
+  permissionsLoading?: boolean;
   onToggleAdmin?: () => void;
   adminPanelOpen?: boolean;
   onMobileBack?: () => void;
@@ -142,11 +144,18 @@ function ChatHeader({
         <h3 className="w-full line-clamp-2 text-[15px] font-semibold leading-tight tracking-tight text-secondary-900 md:truncate md:line-clamp-none dark:text-secondary-100">
           {name}
         </h3>
-        {onlineCount !== undefined && onlineCount > 0 && (
-          <span className="flex items-center justify-center gap-1.5 text-[11px] leading-none text-secondary-400 dark:text-secondary-500">
-            <span className="inline-block h-1.5 w-1.5 rounded-full bg-green-500" />
-            {onlineCount} online
+        {permissionsLoading ? (
+          <span className="text-[11px] leading-none text-secondary-400 dark:text-secondary-500">
+            Checking permissions…
           </span>
+        ) : (
+          onlineCount !== undefined &&
+          onlineCount > 0 && (
+            <span className="flex items-center justify-center gap-1.5 text-[11px] leading-none text-secondary-400 dark:text-secondary-500">
+              <span className="inline-block h-1.5 w-1.5 rounded-full bg-green-500" />
+              {onlineCount} online
+            </span>
+          )
         )}
       </div>
       {onToggleAdmin && (
@@ -415,6 +424,7 @@ function ChatView({
           <ChatHeader
             name={group.name}
             onlineCount={[...onlineMembers.values()].filter(Boolean).length}
+            permissionsLoading={permissionsLoading}
             onToggleAdmin={() => setAdminPanelOpen((o) => !o)}
             adminPanelOpen={adminPanelOpen}
             onMobileBack={onMobileBack}
@@ -545,16 +555,11 @@ function ChatView({
 
       {/* Message input: while permissions load, show disabled composer (avoid false "no permission"). */}
       {permissionsLoading ? (
-        <div className="border-t border-secondary-200 px-4 py-3 dark:border-secondary-700">
-          <p className="mb-2 text-center text-xs text-secondary-400 dark:text-secondary-500">
-            Checking permissions…
-          </p>
-          <MessageInput
-            onSend={async () => {}}
-            disabled
-            sending={false}
-          />
-        </div>
+        <MessageInput
+          onSend={async () => {}}
+          disabled
+          sending={false}
+        />
       ) : permissions.canSend ? (
         <>
           {claiming && (
