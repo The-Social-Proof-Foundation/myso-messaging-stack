@@ -16,6 +16,16 @@ function ringLayoutForSize(size: number): {
   return { size, padding: 1.5, strokeWidth: 3.25 };
 }
 
+/** Outer box width for a bubble avatar (includes SPT ring when shown). */
+export function reservationAvatarShellSize(
+  size: number,
+  showRing: boolean,
+): number {
+  if (!showRing) return size;
+  const { padding, strokeWidth } = ringLayoutForSize(size);
+  return size + padding * 2 + strokeWidth;
+}
+
 type ReservationNavAvatarProps = {
   address?: string;
   imageSrc?: string | null;

@@ -20,7 +20,10 @@ import type {
   RelayerReactionEntry,
 } from '../hooks/useMessages';
 import { useTheme } from '../contexts/ThemeContext';
-import { ReservationNavAvatar } from './ReservationNavAvatar';
+import {
+  ReservationNavAvatar,
+  reservationAvatarShellSize,
+} from './ReservationNavAvatar';
 
 /** Quick reaction palette shown in the reaction tray. */
 const REACTION_EMOJIS = ['👍', '❤️', '😂', '😮', '😢', '🙏'];
@@ -60,6 +63,61 @@ interface MessageBubbleProps {
 
 /** Uniform bubble radius for every message (no cluster corner edits). */
 const BUBBLE_RADIUS = 'rounded-[18px]';
+
+/** Match http(s) URLs in plain message text for linkification. */
+const URL_IN_TEXT_RE = /https?:\/\/[^\s<>"'`]+/gi;
+
+function trimTrailingUrlPunctuation(url: string): {
+  href: string;
+  trailing: string;
+} {
+  // Peel common sentence punctuation off the end of a matched URL.
+  let href = url;
+  let trailing = '';
+  while (/[.,);:!?]$/.test(href)) {
+    trailing = href.slice(-1) + trailing;
+    href = href.slice(0, -1);
+  }
+  return { href, trailing };
+}
+
+/** Render message text with http(s) URLs as external links. */
+function LinkifiedText({
+  text,
+  isOwnMessage,
+}: Readonly<{ text: string; isOwnMessage: boolean }>) {
+  const nodes: ReactNode[] = [];
+  let lastIndex = 0;
+  const re = new RegExp(URL_IN_TEXT_RE.source, URL_IN_TEXT_RE.flags);
+  let match: RegExpExecArray | null;
+  const linkClass = isOwnMessage
+    ? 'underline decoration-white/55 underline-offset-2 break-all hover:decoration-white'
+    : 'underline decoration-bubble-sent/50 underline-offset-2 break-all text-bubble-sent hover:decoration-bubble-sent dark:text-bubble-sent-dark dark:decoration-bubble-sent-dark/60';
+  while ((match = re.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      nodes.push(text.slice(lastIndex, match.index));
+    }
+    const { href, trailing } = trimTrailingUrlPunctuation(match[0]);
+    nodes.push(
+      <a
+        key={`${match.index}-${href}`}
+        href={href}
+        target="_blank"
+        rel="noopener noreferrer"
+        className={linkClass}
+        onClick={(e) => e.stopPropagation()}
+      >
+        {href}
+      </a>,
+    );
+    if (trailing) nodes.push(trailing);
+    lastIndex = match.index + match[0].length;
+  }
+  if (lastIndex < text.length) {
+    nodes.push(text.slice(lastIndex));
+  }
+  return <>{nodes.length > 0 ? nodes : text}</>;
+}
 
 /** Format Unix timestamp (seconds) to a short relative/absolute time string. */
 function formatTime(epochSeconds: number): string {
@@ -699,6 +757,11 @@ export function MessageBubble({
     Boolean(message.senderAddress) &&
     senderLabel === truncateAddress(message.senderAddress);
   const showAvatar = isLastInGroup;
+  const avatarShellWidth = reservationAvatarShellSize(
+    AVATAR_SIZE,
+    Boolean(avatarShowRing),
+  );
+  const avatarColumnInset = Math.max(0, avatarShellWidth - AVATAR_OVERLAP_PX);
   const attachments = message.attachments ?? [];
   const imageAttachments = attachments.filter(isImageAttachment);
   const fileOnlyAttachments = attachments.filter((h) => !isImageAttachment(h));
@@ -798,8 +861,8 @@ export function MessageBubble({
           isOwnMessage ? 'flex-row-reverse' : 'flex-row'
         }`}
       >
-        {/* Avatar only on the latest bubble; spacer matches the post-overlap inset
-            so mid-cluster bubbles share the same left/right edge. */}
+        {/* Avatar only on the latest bubble; spacer uses the same shell width as
+            the avatar (incl. SPT ring) so mid-cluster edges match. */}
         {showAvatar ? (
           <ReservationNavAvatar
             address={message.senderAddress}
@@ -813,8 +876,8 @@ export function MessageBubble({
           <span
             className="shrink-0"
             style={{
-              width: Math.max(0, AVATAR_SIZE - AVATAR_OVERLAP_PX),
-              height: AVATAR_SIZE,
+              width: avatarColumnInset,
+              height: avatarShellWidth,
             }}
             aria-hidden
           />
@@ -826,8 +889,6 @@ export function MessageBubble({
             isOwnMessage ? 'items-end' : 'items-start'
           }`}
           style={
-            // Only pull under the avatar when it is actually rendered — applying
-            // the overlap on mid-cluster rows double-counts the reduced spacer.
             showAvatar
               ? isOwnMessage
                 ? { marginRight: -AVATAR_OVERLAP_PX }
@@ -944,7 +1005,10 @@ export function MessageBubble({
                       </div>
                     ) : (
                       <p className="text-[15px] leading-snug break-words whitespace-pre-wrap">
-                        {message.text}
+                        <LinkifiedText
+                          text={message.text}
+                          isOwnMessage={isOwnMessage}
+                        />
                       </p>
                     )}
                   </div>
