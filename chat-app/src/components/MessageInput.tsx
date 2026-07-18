@@ -172,14 +172,6 @@ export function MessageInput({
         <p className="mb-1.5 px-1 text-xs text-danger-500">{fileError}</p>
       )}
 
-      {/* Sending indicator */}
-      {sending && (
-        <div className="mb-2 flex items-center gap-2 px-1 text-xs text-secondary-500">
-          <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-bubble-sent border-t-transparent dark:border-bubble-sent-dark" />
-          <span>Sending{files.length > 0 ? ' (uploading files...)' : '...'}</span>
-        </div>
-      )}
-
       <div className="flex items-end gap-1.5">
         {/* Attachment button */}
         <button
@@ -228,17 +220,22 @@ export function MessageInput({
         <button
           onClick={handleSend}
           disabled={!canSend}
-          aria-label="Send"
-          className="mb-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-bubble-sent text-white transition-opacity hover:bg-bubble-sent/90 disabled:opacity-40 disabled:hover:bg-bubble-sent dark:bg-bubble-sent-dark dark:hover:bg-bubble-sent-dark/90 dark:disabled:hover:bg-bubble-sent-dark"
+          aria-label={sending ? 'Sending' : 'Send'}
+          className={`mb-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-bubble-sent text-white transition-opacity hover:bg-bubble-sent/90 disabled:hover:bg-bubble-sent dark:bg-bubble-sent-dark dark:hover:bg-bubble-sent-dark/90 dark:disabled:hover:bg-bubble-sent-dark ${
+            sending ? 'opacity-100' : 'disabled:opacity-40'
+          }`}
         >
           {sending ? (
-            <span className="text-xs">...</span>
+            <span
+              className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent"
+              aria-hidden="true"
+            />
           ) : (
             <svg
               xmlns="http://www.w3.org/2000/svg"
               viewBox="0 0 20 20"
               fill="currentColor"
-              className="h-4 w-4"
+              className="h-4 w-4 -rotate-45"
               aria-hidden="true"
             >
               <path d="M3.105 2.288a.75.75 0 00-.826.95l1.414 4.926A1.5 1.5 0 005.135 9.25h6.115a.75.75 0 010 1.5H5.135a1.5 1.5 0 00-1.442 1.086L2.279 16.76a.75.75 0 00.826.95 28.897 28.897 0 0015.293-7.154.75.75 0 000-1.114A28.897 28.897 0 003.105 2.288z" />

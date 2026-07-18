@@ -120,3 +120,42 @@ export function getMySocialProfileUrl(address: string): string {
   ).replace(/\/+$/, '');
   return `${origin}/wallet?address=${encodeURIComponent(address)}`;
 }
+
+/** On-chain group metadata name limit (`messaging::metadata::MAX_NAME_LENGTH`). */
+export const GROUP_NAME_MAX_LENGTH = 128;
+
+export function truncateWalletAddress(address: string): string {
+  if (!address) return 'unknown';
+  return `${address.slice(0, 6)}...${address.slice(-4)}`;
+}
+
+/** Create-group label: `@username` when reserved, else abbreviated wallet. */
+export function groupNameLabelForRecipient(
+  address: string,
+  profile: WalletProfile | null,
+): string {
+  const username = profile?.username?.trim();
+  if (username) return `@${username.replace(/^@/, '')}`;
+  return truncateWalletAddress(address);
+}
+
+/**
+ * Join recipient labels with ", " until {@link GROUP_NAME_MAX_LENGTH}.
+ * Fits as many full labels as possible; never truncates mid-label except a
+ * single oversized first label.
+ */
+export function buildAutoGroupName(
+  labels: readonly string[],
+  maxLen: number = GROUP_NAME_MAX_LENGTH,
+): string {
+  if (labels.length === 0) return 'New Group';
+  let name = labels[0]!;
+  if (name.length > maxLen) return name.slice(0, maxLen);
+
+  for (let i = 1; i < labels.length; i++) {
+    const next = `${name}, ${labels[i]}`;
+    if (next.length > maxLen) break;
+    name = next;
+  }
+  return name;
+}

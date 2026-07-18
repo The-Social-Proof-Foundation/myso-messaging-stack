@@ -128,12 +128,45 @@ function mergeMessages(prev: Message[], incoming: Message[]): Message[] {
   const byId = new Map<string, Message>();
   for (const m of prev) byId.set(m.messageId, m);
   for (const m of incoming) byId.set(m.messageId, m);
+
+  // Drop local optimistic stubs once the relayer echo for that order arrives.
+  const confirmedOrders = new Set(
+    [...byId.values()]
+      .filter((m) => !m.messageId.startsWith('optimistic-'))
+      .map((m) => m.order),
+  );
+  for (const [id, m] of byId) {
+    if (id.startsWith('optimistic-') && confirmedOrders.has(m.order)) {
+      byId.delete(id);
+    }
+  }
+
   return sortMessagesByOrder([...byId.values()]);
 }
 
 /** Deduplicate and merge a new message into the list (sorted by order). */
 function mergeMessage(prev: Message[], incoming: Message): Message[] {
   return mergeMessages(prev, [incoming]);
+}
+
+/** Local preview handles so optimistic sends show images before upload finishes. */
+function localAttachmentHandles(files: AttachmentFile[]): AttachmentHandle[] {
+  return files.map((file) => {
+    const bytes = file.data;
+    return {
+      fileName: file.fileName,
+      mimeType: file.mimeType,
+      fileSize: bytes.byteLength,
+      extras: file.extras,
+      wire: {
+        storageId: '',
+        nonce: '',
+        encryptedMetadata: '',
+        metadataNonce: '',
+      },
+      data: async () => bytes,
+    };
+  });
 }
 
 /** Group flat reaction rows by message order. */
@@ -539,6 +572,27 @@ export function useMessages(
    */
   const performSend = useCallback(
     async (text: string, files?: AttachmentFile[]) => {
+      // Show the bubble (with local image preview) immediately while uploading.
+      const tempId = `optimistic-${crypto.randomUUID()}`;
+      const optimisticOrder = (lastOrderRef.current ?? 0) + 1;
+      lastOrderRef.current = optimisticOrder;
+      const optimistic: Message = {
+        messageId: tempId,
+        groupId: '',
+        order: optimisticOrder,
+        text,
+        senderAddress: signer.toMySoAddress(),
+        createdAt: Date.now() / 1000,
+        updatedAt: Date.now() / 1000,
+        isEdited: false,
+        isDeleted: false,
+        syncStatus: 'SYNC_PENDING',
+        attachments: files?.length ? localAttachmentHandles(files) : [],
+        senderVerified: false,
+      };
+      setMessages((prev) => mergeMessage(prev, optimistic));
+      onGroupActivityRef.current?.(optimistic.order);
+
       const sendPayload = {
         signer,
         groupRef: { uuid: uuidRef.current },
@@ -551,46 +605,55 @@ export function useMessages(
       let lastErr: unknown;
       let messageId: string | undefined;
 
-      for (let attempt = 0; attempt < maxAttempts; attempt++) {
-        try {
-          ({ messageId } = await client.messaging.sendMessage(sendPayload));
-          break;
-        } catch (err) {
-          lastErr = err;
-          if (isNotGroupMemberError(err) && attempt < maxAttempts - 1) {
-            await new Promise((resolve) =>
-              setTimeout(resolve, 500 * (attempt + 1)),
-            );
-            continue;
+      try {
+        for (let attempt = 0; attempt < maxAttempts; attempt++) {
+          try {
+            ({ messageId } = await client.messaging.sendMessage(sendPayload));
+            break;
+          } catch (err) {
+            lastErr = err;
+            if (isNotGroupMemberError(err) && attempt < maxAttempts - 1) {
+              await new Promise((resolve) =>
+                setTimeout(resolve, 500 * (attempt + 1)),
+              );
+              continue;
+            }
+            throw err;
           }
-          throw err;
         }
+
+        if (!messageId) {
+          throw lastErr ?? new Error('Failed to send message.');
+        }
+
+        const confirmedId = messageId;
+
+        // Swap temp id for the relayer id (keep local preview until echo arrives).
+        setMessages((prev) => {
+          const fromTemp = prev.find((m) => m.messageId === tempId);
+          const fromServer = prev.find((m) => m.messageId === confirmedId);
+          const rest = prev.filter(
+            (m) => m.messageId !== tempId && m.messageId !== confirmedId,
+          );
+          if (fromServer) {
+            return sortMessagesByOrder([...rest, fromServer]);
+          }
+          if (fromTemp) {
+            return sortMessagesByOrder([
+              ...rest,
+              {
+                ...fromTemp,
+                messageId: confirmedId,
+                syncStatus: 'SYNC_PENDING',
+              },
+            ]);
+          }
+          return prev;
+        });
+      } catch (err) {
+        setMessages((prev) => prev.filter((m) => m.messageId !== tempId));
+        throw err;
       }
-
-      if (!messageId) {
-        throw lastErr ?? new Error('Failed to send message.');
-      }
-
-      // Optimistic local append — the subscription will replace this with
-      // the real message when it arrives from the relayer.
-      const optimistic: Message = {
-        messageId,
-        groupId: '',
-        order: (lastOrderRef.current ?? 0) + 1,
-        text,
-        // Must match signer so the bubble aligns right before the relayer echo.
-        senderAddress: signer.toMySoAddress(),
-        createdAt: Date.now() / 1000,
-        updatedAt: Date.now() / 1000,
-        isEdited: false,
-        isDeleted: false,
-        syncStatus: 'SYNC_PENDING',
-        attachments: [],
-        senderVerified: false,
-      };
-
-      setMessages((prev) => mergeMessage(prev, optimistic));
-      onGroupActivityRef.current?.(optimistic.order);
     },
     [client, signer],
   );

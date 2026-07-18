@@ -1,7 +1,10 @@
 import { type SyntheticEvent, useState } from 'react';
 import { MYSO_CLOCK_OBJECT_ID } from '@socialproof/myso/utils';
 import { createPaidMessagingClient } from '@socialproof/myso-messaging-stack';
-import { useRequiredMessagingClient } from '../contexts/MessagingClientContext';
+import {
+  useGraphQLClient,
+  useRequiredMessagingClient,
+} from '../contexts/MessagingClientContext';
 import { signAndExecuteTransactionAndWait } from '../lib/sign-and-wait';
 import { addStoredGroup } from '../lib/group-store';
 import { formatCreateGroupError } from '../lib/format-create-group-error';
@@ -19,6 +22,12 @@ import {
   STALE_GHOST_OBJECT_ID,
   verifyCreateGroupObjectsOnRpc,
 } from '../lib/messaging-genesis-debug';
+import {
+  PROFILE_FULL_QUERY,
+  buildAutoGroupName,
+  groupNameLabelForRecipient,
+  mapGraphqlProfile,
+} from '../lib/wallet-profile';
 import { PaymentConfirmDialog } from './PaymentConfirmDialog';
 
 interface CreateGroupModalProps {
@@ -34,15 +43,26 @@ interface PendingPaidDm {
   name: string;
 }
 
+function parseRecipients(raw: string): string[] {
+  return [
+    ...new Set(
+      raw
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean),
+    ),
+  ];
+}
+
 export function CreateGroupModal({
   open,
   onClose,
   onGroupCreated,
 }: Readonly<CreateGroupModalProps>) {
   const { signer, createFreshMessagingClient } = useRequiredMessagingClient();
+  const graphqlClient = useGraphQLClient();
 
-  const [name, setName] = useState('');
-  const [members, setMembers] = useState('');
+  const [recipients, setRecipients] = useState('');
   const [loading, setLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -54,19 +74,43 @@ export function CreateGroupModal({
 
   if (!open) return null;
 
+  async function resolveGroupName(addresses: string[]): Promise<string> {
+    const labels = await Promise.all(
+      addresses.map(async (address) => {
+        try {
+          const result = await graphqlClient.query({
+            query: PROFILE_FULL_QUERY as unknown as Parameters<
+              typeof graphqlClient.query
+            >[0]['query'],
+            variables: { address },
+          });
+          const data = result.data as
+            | { profile?: Record<string, unknown> | null }
+            | undefined;
+          const mapped = mapGraphqlProfile(data?.profile ?? null);
+          return groupNameLabelForRecipient(address, mapped);
+        } catch {
+          return groupNameLabelForRecipient(address, null);
+        }
+      }),
+    );
+    return buildAutoGroupName(labels);
+  }
+
   async function handleSubmit(e: SyntheticEvent) {
     e.preventDefault();
     setError(null);
 
-    const trimmedName = name.trim();
-    if (!trimmedName) {
-      setError('Group name is required.');
+    const initialMembers = parseRecipients(recipients);
+    if (initialMembers.length === 0) {
+      setError('Add at least one recipient address.');
       return;
     }
 
     setLoading(true);
 
     try {
+      const groupName = await resolveGroupName(initialMembers);
       const uuid = crypto.randomUUID();
 
       // Fresh client so packageConfig matches live genesis (not a stale init snapshot).
@@ -87,11 +131,6 @@ export function CreateGroupModal({
       await verifyCreateGroupObjectsOnRpc('create-group', expectedObjects, client);
       await logMyDataKeyServers('create-group', client);
       await logSignerGasCoins('create-group', client, signer);
-
-      const initialMembers = members
-        .split(',')
-        .map((s) => s.trim())
-        .filter(Boolean);
 
       const sender = signer.toMySoAddress();
 
@@ -115,7 +154,7 @@ export function CreateGroupModal({
             setPendingPaidDm({
               recipient,
               minCost: gate.minCost,
-              name: trimmedName,
+              name: groupName,
             });
             return;
           }
@@ -134,9 +173,9 @@ export function CreateGroupModal({
 
       const tx = client.messaging.tx.createAndShareGroup({
         uuid,
-        name: trimmedName,
+        name: groupName,
         sender,
-        ...(initialMembers.length > 0 && { initialMembers }),
+        initialMembers,
       });
 
       await logCreateGroupTxInputs(
@@ -162,13 +201,12 @@ export function CreateGroupModal({
 
       addStoredGroup({
         uuid,
-        name: trimmedName,
+        name: groupName,
         groupId,
         createdAt: Date.now(),
       });
 
-      setName('');
-      setMembers('');
+      setRecipients('');
       onGroupCreated(uuid);
       onClose();
     } catch (err) {
@@ -279,8 +317,7 @@ export function CreateGroupModal({
         createdAt: Date.now(),
       });
 
-      setName('');
-      setMembers('');
+      setRecipients('');
       setPendingPaidDm(null);
       onGroupCreated(uuid);
       onClose();
@@ -313,41 +350,25 @@ export function CreateGroupModal({
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
             <label
-              htmlFor="group-name"
+              htmlFor="recipients"
               className="mb-1 block text-sm font-medium text-secondary-700 dark:text-secondary-300"
             >
-              Group Name <span className="text-danger-500">*</span>
-            </label>
-            <input
-              id="group-name"
-              type="text"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="e.g. Project Alpha"
-              disabled={loading || syncing}
-              className="w-full rounded-lg border border-secondary-300 bg-white px-3 py-2 text-sm text-secondary-900 placeholder:text-secondary-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 disabled:opacity-50 dark:border-secondary-600 dark:bg-secondary-700 dark:text-secondary-100 dark:placeholder:text-secondary-500"
-            />
-          </div>
-
-          <div>
-            <label
-              htmlFor="initial-members"
-              className="mb-1 block text-sm font-medium text-secondary-700 dark:text-secondary-300"
-            >
-              Initial Members{' '}
-              <span className="text-secondary-400 dark:text-secondary-500">
-                (optional)
-              </span>
+              Recipients <span className="text-danger-500">*</span>
             </label>
             <textarea
-              id="initial-members"
-              value={members}
-              onChange={(e) => setMembers(e.target.value)}
+              id="recipients"
+              value={recipients}
+              onChange={(e) => setRecipients(e.target.value)}
               placeholder="Comma-separated MySo addresses&#10;0xabc..., 0xdef..."
               rows={3}
               disabled={loading || syncing}
+              required
               className="w-full rounded-lg border border-secondary-300 bg-white px-3 py-2 text-sm text-secondary-900 placeholder:text-secondary-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 disabled:opacity-50 dark:border-secondary-600 dark:bg-secondary-700 dark:text-secondary-100 dark:placeholder:text-secondary-500"
             />
+            <p className="mt-1.5 text-xs text-secondary-400 dark:text-secondary-500">
+              Group name is set from recipient profiles (@username or abbreviated
+              wallet). You can rename it later in Group Info.
+            </p>
           </div>
 
           {error && (

@@ -45,14 +45,14 @@ export function TypingIndicator({ typers }: Readonly<TypingIndicatorProps>) {
           address={primary.address}
           imageSrc={primary.avatarSrc}
           size={AVATAR_SIZE}
-          className="relative z-20 mb-0.5 shrink-0"
+          className="relative z-20 mb-0.5 shrink-0 rounded-full shadow-sm dark:shadow-none"
         />
 
         <div
           className="relative z-0 min-w-0 shrink"
           style={{ marginLeft: -AVATAR_OVERLAP_PX }}
         >
-          <div className="bg-bubble-received-fill inline-flex max-w-full overflow-hidden rounded-[18px] px-3.5 py-2.5">
+          <div className="bg-bubble-received-fill inline-flex max-w-full overflow-hidden rounded-[18px] px-3.5 py-2.5 shadow-sm dark:shadow-none">
             <span className="inline-flex gap-1" aria-hidden="true">
               <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-secondary-400 [animation-delay:0ms] dark:bg-secondary-300" />
               <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-secondary-400 [animation-delay:150ms] dark:bg-secondary-300" />
