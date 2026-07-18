@@ -2,11 +2,12 @@ import {
   useState,
   useRef,
   useEffect,
+  useLayoutEffect,
   useCallback,
   useMemo,
   type ReactNode,
 } from 'react';
-import { Info } from 'lucide-react';
+import { ChevronLeft, Info } from 'lucide-react';
 import type { StoredGroup } from '../lib/group-store';
 import { removeStoredGroup } from '../lib/group-store';
 import { useRequiredMessagingClient } from '../contexts/MessagingClientContext';
@@ -31,6 +32,8 @@ interface ChatAreaProps {
   onReadStateChanged?: (groupId: string) => void;
   /** Called when a message is sent or received in the open thread. */
   onGroupActivity?: (order: number) => void;
+  /** Phone stack: return to the conversation list (clears selection). */
+  onMobileBack?: () => void;
   devAgentPanel?: ReactNode;
 }
 
@@ -46,14 +49,30 @@ export function ChatArea({
   onLeaveGroup,
   onReadStateChanged,
   onGroupActivity,
+  onMobileBack,
   devAgentPanel,
 }: Readonly<ChatAreaProps>) {
   if (!selectedGroup) {
     return (
-      <div className="flex min-w-0 flex-1 items-center justify-center">
-        <p className="text-secondary-400 dark:text-secondary-500">
-          Select a group to start chatting
-        </p>
+      <div className="relative flex min-w-0 flex-1 flex-col">
+        {onMobileBack ? (
+          <div className="relative flex h-14 shrink-0 items-center border-b border-secondary-200/40 bg-white/65 px-2 backdrop-blur-xl dark:border-secondary-700/40 dark:bg-secondary-950/55">
+            <button
+              type="button"
+              onClick={onMobileBack}
+              aria-label="Back to conversations"
+              className="inline-flex h-11 min-w-11 items-center justify-center gap-0.5 rounded-full px-2 text-sm font-medium text-secondary-600 hover:bg-secondary-100/80 dark:text-secondary-300 dark:hover:bg-secondary-800/80"
+            >
+              <ChevronLeft className="h-5 w-5 shrink-0" strokeWidth={2} />
+              <span className="pr-1">Back</span>
+            </button>
+          </div>
+        ) : null}
+        <div className="flex flex-1 items-center justify-center">
+          <p className="text-secondary-400 dark:text-secondary-500">
+            Select a group to start chatting
+          </p>
+        </div>
       </div>
     );
   }
@@ -62,7 +81,7 @@ export function ChatArea({
   if (!selectedGroup.uuid) {
     return (
       <div className="flex flex-1 flex-col">
-        <ChatHeader name={selectedGroup.name} />
+        <ChatHeader name={selectedGroup.name} onMobileBack={onMobileBack} />
         <div className="flex flex-1 items-center justify-center px-8 text-center">
           <p className="text-sm text-secondary-400 dark:text-secondary-500">
             This group was discovered via on-chain events.
@@ -76,10 +95,12 @@ export function ChatArea({
 
   return (
     <ChatView
+      key={selectedGroup.uuid}
       group={selectedGroup}
       onLeaveGroup={onLeaveGroup}
       onReadStateChanged={onReadStateChanged}
       onGroupActivity={onGroupActivity}
+      onMobileBack={onMobileBack}
       devAgentPanel={devAgentPanel}
     />
   );
@@ -90,16 +111,35 @@ function ChatHeader({
   onlineCount,
   onToggleAdmin,
   adminPanelOpen,
+  onMobileBack,
 }: Readonly<{
   name: string;
   onlineCount?: number;
   onToggleAdmin?: () => void;
   adminPanelOpen?: boolean;
+  onMobileBack?: () => void;
 }>) {
   return (
-    <div className="relative flex h-14 shrink-0 items-center justify-center border-b border-secondary-200/40 bg-white/65 px-5 backdrop-blur-xl dark:border-secondary-700/40 dark:bg-secondary-950/55">
-      <div className="flex min-w-0 max-w-[min(100%,20rem)] flex-col items-center gap-1.5 text-center">
-        <h3 className="w-full truncate text-[15px] font-semibold leading-tight tracking-tight text-secondary-900 dark:text-secondary-100">
+    <div className="relative flex min-h-14 shrink-0 items-center justify-center border-b border-secondary-200/40 bg-white/65 px-5 py-2 backdrop-blur-xl md:h-14 md:py-0 dark:border-secondary-700/40 dark:bg-secondary-950/55">
+      {onMobileBack ? (
+        <button
+          type="button"
+          onClick={onMobileBack}
+          aria-label="Back to conversations"
+          className="absolute left-2 top-1/2 z-10 inline-flex h-11 min-w-11 -translate-y-1/2 items-center justify-center gap-0.5 rounded-full px-2 text-sm font-medium text-secondary-600 hover:bg-secondary-100/80 dark:text-secondary-300 dark:hover:bg-secondary-800/80"
+        >
+          <ChevronLeft className="h-5 w-5 shrink-0" strokeWidth={2} />
+          <span className="pr-1">Back</span>
+        </button>
+      ) : null}
+      <div
+        className={`flex min-w-0 flex-col items-center gap-1 text-center ${
+          onMobileBack
+            ? 'mx-auto w-full max-w-[calc(100%-9.5rem)] md:max-w-[min(100%,20rem)]'
+            : 'max-w-[min(100%,20rem)]'
+        }`}
+      >
+        <h3 className="w-full line-clamp-2 text-[15px] font-semibold leading-tight tracking-tight text-secondary-900 md:truncate md:line-clamp-none dark:text-secondary-100">
           {name}
         </h3>
         {onlineCount !== undefined && onlineCount > 0 && (
@@ -115,14 +155,17 @@ function ChatHeader({
           onClick={onToggleAdmin}
           aria-label="Group info"
           title="Group info"
-          className={`absolute right-4 top-1/2 inline-flex -translate-y-1/2 items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium ${
+          className={`absolute right-2 top-1/2 z-10 inline-flex h-11 min-h-11 -translate-y-1/2 items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium md:right-4 md:h-auto md:min-h-0 ${
             adminPanelOpen
               ? 'bg-bubble-sent/10 text-bubble-sent dark:bg-bubble-sent-dark/20 dark:text-bubble-sent-dark'
               : 'text-secondary-500 hover:bg-secondary-100/80 dark:text-secondary-400 dark:hover:bg-secondary-800/80'
           }`}
         >
-          <Info className="h-3.5 w-3.5 shrink-0" strokeWidth={2} />
-          Info
+          <Info
+            className="h-5 w-5 shrink-0 md:h-3.5 md:w-3.5"
+            strokeWidth={2}
+          />
+          <span className="hidden md:inline">Info</span>
         </button>
       )}
     </div>
@@ -135,12 +178,14 @@ function ChatView({
   onLeaveGroup,
   onReadStateChanged,
   onGroupActivity,
+  onMobileBack,
   devAgentPanel,
 }: Readonly<{
   group: StoredGroup;
   onLeaveGroup?: () => void;
   onReadStateChanged?: (groupId: string) => void;
   onGroupActivity?: (order: number) => void;
+  onMobileBack?: () => void;
   devAgentPanel?: ReactNode;
 }>) {
   const myAddress = useAuthenticatedAddress();
@@ -148,10 +193,13 @@ function ChatView({
   const { permissions, loading: permissionsLoading, refresh: refreshPermissions } =
     usePermissions(group.groupId);
   const [adminPanelOpen, setAdminPanelOpen] = useState(false);
-  const { labelFor, refresh: refreshMemberLabels } = useGroupMemberLabels(
-    group.groupId,
-    { refreshKey: adminPanelOpen ? 1 : 0 },
-  );
+  const {
+    labelFor,
+    memberAddresses,
+    refresh: refreshMemberLabels,
+  } = useGroupMemberLabels(group.groupId, {
+    refreshKey: adminPanelOpen ? 1 : 0,
+  });
   const paidGate = usePaidDmGate(group);
   const {
     messages,
@@ -163,6 +211,7 @@ function ChatView({
     reactions,
     typingMembers,
     onlineMembers,
+    initialReadUpto,
     sendMessage,
     editMessage,
     deleteMessage,
@@ -195,10 +244,16 @@ function ChatView({
         }
       }
     }
+    for (const address of memberAddresses) {
+      if (address) addrs.add(address);
+    }
     return [...addrs];
-  }, [messages, reactions, typingMembers]);
-  const { photoFor, labelFor: profileLabelFor } =
-    useWalletAvatarMap(profileAddresses);
+  }, [messages, reactions, typingMembers, memberAddresses]);
+  const {
+    photoFor,
+    labelFor: profileLabelFor,
+    ringFor,
+  } = useWalletAvatarMap(profileAddresses);
 
   const typingTypers = typingMembers.map((address) => ({
     address,
@@ -239,6 +294,41 @@ function ChatView({
   const bottomRef = useRef<HTMLDivElement>(null);
   const [isAtBottom, setIsAtBottom] = useState(true);
   const prevMessageCountRef = useRef(0);
+  const didInitialScrollRef = useRef(false);
+
+  const scrollToBottomSmooth = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
+  }, []);
+
+  /** Land on first unread (order > watermark) or the bottom of the thread. */
+  const performOpenScroll = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el || messages.length === 0) return;
+
+    // readUpto === 0 means no watermark yet (or fetch failed) → open at bottom.
+    const firstUnread =
+      initialReadUpto > 0
+        ? messages.find((m) => m.order > initialReadUpto)
+        : undefined;
+    if (firstUnread) {
+      const node = el.querySelector(
+        `[data-message-order="${firstUnread.order}"]`,
+      );
+      if (node instanceof HTMLElement) {
+        // Align unread near the top, below the sticky header (~3.5rem).
+        const headerOffset = 56;
+        const delta =
+          node.getBoundingClientRect().top -
+          el.getBoundingClientRect().top -
+          headerOffset;
+        el.scrollTop = Math.max(0, el.scrollTop + delta);
+        return;
+      }
+    }
+    el.scrollTop = el.scrollHeight;
+  }, [messages, initialReadUpto]);
 
   // Track whether the user is scrolled to the bottom
   const handleScroll = useCallback(() => {
@@ -250,28 +340,48 @@ function ChatView({
     setIsAtBottom(atBottom);
   }, []);
 
-  // Auto-scroll to bottom on initial load
-  useEffect(() => {
-    if (!loading && messages.length > 0 && prevMessageCountRef.current === 0) {
-      // Initial load — scroll instantly (no smooth animation)
-      bottomRef.current?.scrollIntoView();
+  // Initial open: watermark scroll (or bottom), with a layout retry for late height
+  useLayoutEffect(() => {
+    if (loading || messages.length === 0 || didInitialScrollRef.current) {
+      return;
     }
+    didInitialScrollRef.current = true;
     prevMessageCountRef.current = messages.length;
-  }, [loading, messages.length]);
+
+    performOpenScroll();
+    const prevHeight = scrollRef.current?.scrollHeight ?? 0;
+    const raf = requestAnimationFrame(() => {
+      const el = scrollRef.current;
+      if (!el) return;
+      if (el.scrollHeight !== prevHeight || el.scrollTop < 8) {
+        performOpenScroll();
+      }
+      handleScroll();
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [loading, messages.length, performOpenScroll, handleScroll]);
 
   // Auto-scroll when new messages arrive (only if already at bottom)
   useEffect(() => {
-    if (isAtBottom && messages.length > 0) {
-      bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+    if (
+      !didInitialScrollRef.current ||
+      !isAtBottom ||
+      messages.length === 0 ||
+      messages.length <= prevMessageCountRef.current
+    ) {
+      prevMessageCountRef.current = messages.length;
+      return;
     }
-  }, [messages.length, isAtBottom]);
+    prevMessageCountRef.current = messages.length;
+    scrollToBottomSmooth();
+  }, [messages.length, isAtBottom, scrollToBottomSmooth]);
 
   // Keep typing bubble visible when near the bottom of the thread.
   useEffect(() => {
-    if (isAtBottom && typingMembers.length > 0) {
-      bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+    if (isAtBottom && typingMembers.length > 0 && didInitialScrollRef.current) {
+      scrollToBottomSmooth();
     }
-  }, [typingMembers.length, isAtBottom]);
+  }, [typingMembers.length, isAtBottom, scrollToBottomSmooth]);
 
   // Preserve scroll position when loading older messages (prepending)
   const prevScrollHeightRef = useRef(0);
@@ -289,8 +399,8 @@ function ChatView({
   }, [messages.length]);
 
   const scrollToBottom = useCallback(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, []);
+    scrollToBottomSmooth();
+  }, [scrollToBottomSmooth]);
 
   return (
     <div className="flex min-w-0 flex-1 overflow-hidden">
@@ -307,6 +417,7 @@ function ChatView({
             onlineCount={[...onlineMembers.values()].filter(Boolean).length}
             onToggleAdmin={() => setAdminPanelOpen((o) => !o)}
             adminPanelOpen={adminPanelOpen}
+            onMobileBack={onMobileBack}
           />
         </div>
 
@@ -375,6 +486,16 @@ function ChatView({
                       : null
                   }
                   labelForAddress={profileLabelFor}
+                  avatarShowRing={
+                    msg.senderAddress
+                      ? ringFor(msg.senderAddress).showRing
+                      : false
+                  }
+                  avatarRingPercent={
+                    msg.senderAddress
+                      ? ringFor(msg.senderAddress).ringPercent
+                      : 0
+                  }
                 />
               );
             })}
@@ -488,6 +609,9 @@ function ChatView({
         onLeaveGroup={handleLeave}
         leaving={leaving}
         leaveError={leaveError}
+        photoFor={photoFor}
+        labelFor={profileLabelFor}
+        ringFor={ringFor}
       />
     </div>
   );

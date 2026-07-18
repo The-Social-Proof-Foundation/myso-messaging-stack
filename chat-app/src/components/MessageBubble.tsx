@@ -46,6 +46,9 @@ interface MessageBubbleProps {
   avatarSrc?: string | null;
   /** Resolve a display label (username / name / truncated address) for a wallet. */
   labelForAddress?: (address: string) => string;
+  /** SPT reservation ring for the sender avatar (when GraphQL indicates SPT/pool). */
+  avatarShowRing?: boolean;
+  avatarRingPercent?: number;
 }
 
 /** Uniform bubble radius for every message (no cluster corner edits). */
@@ -439,6 +442,8 @@ export function MessageBubble({
   isLastInGroup = true,
   avatarSrc = null,
   labelForAddress,
+  avatarShowRing = false,
+  avatarRingPercent = 0,
 }: Readonly<MessageBubbleProps>) {
   const [editing, setEditing] = useState(false);
   const [editText, setEditText] = useState(message.text);
@@ -592,8 +597,13 @@ export function MessageBubble({
   }
 
   const senderLabel = message.senderAddress
-    ? truncateAddress(message.senderAddress)
+    ? (labelForAddress?.(message.senderAddress) ??
+      truncateAddress(message.senderAddress))
     : null;
+  const senderLabelIsWallet =
+    Boolean(senderLabel) &&
+    Boolean(message.senderAddress) &&
+    senderLabel === truncateAddress(message.senderAddress);
   const showAvatar = isLastInGroup;
   const attachments = message.attachments ?? [];
   const imageAttachments = attachments.filter(isImageAttachment);
@@ -682,6 +692,7 @@ export function MessageBubble({
 
   return (
     <div
+      data-message-order={message.order}
       className={`group flex min-w-0 max-w-full px-4 ${
         isFirstInGroup ? 'mt-2.5' : 'mt-0.5'
       } ${isOwnMessage ? 'justify-end' : 'justify-start'}`}
@@ -697,6 +708,8 @@ export function MessageBubble({
             address={message.senderAddress}
             imageSrc={avatarSrc}
             size={AVATAR_SIZE}
+            showRing={avatarShowRing}
+            ringPercent={avatarRingPercent}
             className="relative z-20 mb-0.5 shrink-0 rounded-full shadow-sm dark:shadow-none"
           />
         ) : (
@@ -942,7 +955,12 @@ export function MessageBubble({
               ) : (
                 <>
                   {senderLabel && (
-                    <span className="font-medium text-secondary-500 dark:text-secondary-400">
+                    <span
+                      className={`font-medium text-secondary-500 dark:text-secondary-400 ${
+                        senderLabelIsWallet ? 'font-mono' : ''
+                      }`}
+                      title={message.senderAddress ?? undefined}
+                    >
                       {senderLabel}
                     </span>
                   )}

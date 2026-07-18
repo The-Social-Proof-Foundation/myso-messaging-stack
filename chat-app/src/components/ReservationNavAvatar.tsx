@@ -7,6 +7,15 @@ const PRESETS = {
   navDropdown: { size: 48, padding: 4, strokeWidth: 2.35 },
 } as const;
 
+/** Chat bubble avatars — thicker ring, tighter gap to the photo. */
+function ringLayoutForSize(size: number): {
+  size: number;
+  padding: number;
+  strokeWidth: number;
+} {
+  return { size, padding: 1.5, strokeWidth: 3.25 };
+}
+
 type ReservationNavAvatarProps = {
   address?: string;
   imageSrc?: string | null;
@@ -28,9 +37,7 @@ export function ReservationNavAvatar({
   className = '',
 }: Readonly<ReservationNavAvatarProps>) {
   const preset =
-    typeof size === 'number'
-      ? { size, padding: 3.25, strokeWidth: 1.75 }
-      : PRESETS[size];
+    typeof size === 'number' ? ringLayoutForSize(size) : PRESETS[size];
   const imageDiameter = preset.size;
   const padding = showRing ? preset.padding : 0;
   const strokeWidth = showRing ? preset.strokeWidth : 0;

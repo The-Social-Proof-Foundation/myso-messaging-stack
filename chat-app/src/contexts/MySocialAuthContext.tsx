@@ -9,16 +9,22 @@ import {
   type ReactNode,
 } from 'react';
 import {
-  createMySocialAuth,
   SessionRevokedError,
   type MySocialAuth,
   type Session,
 } from '@socialproof/mysocial-auth';
 import { Ed25519Keypair } from '@socialproof/myso/keypairs/ed25519';
+import {
+  SESSION_CANNOT_REFRESH_MESSAGE,
+  sessionLacksRefreshToken,
+} from '../lib/auth-session-build';
 import { deriveKeypairFromSubAndSalt } from '../lib/derive-mysocial-keypair';
 import { getOrCreateDevMessengerKeypair } from '../lib/dev-signer';
 import { getSaltFromSession } from '../lib/get-salt-from-session';
-import { readMySocialAuthConfig } from '../lib/mysocial-auth-config';
+import {
+  getMySocialAuth,
+  getMySocialAuthConfigError,
+} from '../lib/mysocial-auth-client';
 import {
   canAttemptOAuthKeypairDerivation,
   isTrueWalletOnlySession,
@@ -29,6 +35,18 @@ import {
 
 const SESSION_EXPIRED_MESSAGE =
   'Session expired — please sign in again';
+
+function applyRefreshTokenGuard(
+  s: Session | null,
+  setSignInError: (msg: string | null) => void,
+): void {
+  if (sessionLacksRefreshToken(s)) {
+    console.warn(
+      '[MySocialAuth] Session has no refresh_token; access JWT will expire in ~30 minutes without renewing.',
+    );
+    setSignInError(SESSION_CANNOT_REFRESH_MESSAGE);
+  }
+}
 
 function isSessionRevokedOrExpiredError(e: unknown): boolean {
   if (e instanceof SessionRevokedError) return true;
@@ -76,15 +94,8 @@ const MySocialAuthContext = createContext<MySocialAuthContextValue | null>(null)
 export function MySocialAuthProvider({
   children,
 }: Readonly<{ children: ReactNode }>) {
-  const { config: authConfig, error: configErrorFromEnv } = useMemo(
-    () => readMySocialAuthConfig(),
-    [],
-  );
-
-  const auth = useMemo(() => {
-    if (!authConfig) return null;
-    return createMySocialAuth(authConfig);
-  }, [authConfig]);
+  const auth = useMemo(() => getMySocialAuth(), []);
+  const configErrorFromEnv = useMemo(() => getMySocialAuthConfigError(), []);
 
   const saltUrl =
     import.meta.env.VITE_MYSOCIAL_SALT_URL ||
@@ -120,6 +131,7 @@ export function MySocialAuthProvider({
       if (!cancelled) {
         setSession(s);
         hadSessionRef.current = Boolean(s);
+        applyRefreshTokenGuard(s, setSignInError);
       }
     });
 
@@ -129,6 +141,8 @@ export function MySocialAuthProvider({
         setKeypair(null);
         setIsUsingDevMessengerSigner(false);
         setDeriveKeyError(null);
+      } else if (s) {
+        applyRefreshTokenGuard(s, setSignInError);
       }
       hadSessionRef.current = Boolean(s);
       setSession(s);
@@ -137,9 +151,11 @@ export function MySocialAuthProvider({
 
     const onBroadcast = () => {
       void auth.getSession().then((s) => {
-        if (s) {
+        if (cancelled) return;
+        if (s && !sessionLacksRefreshToken(s)) {
           setSignInError(null);
         }
+        applyRefreshTokenGuard(s, setSignInError);
         hadSessionRef.current = Boolean(s);
         setSession(s);
         setDeriveNonce((n) => n + 1);
@@ -152,9 +168,10 @@ export function MySocialAuthProvider({
       if (document.visibilityState !== 'visible') return;
       void auth.getSession().then((s) => {
         if (cancelled) return;
-        if (s) {
+        if (s && !sessionLacksRefreshToken(s)) {
           setSignInError(null);
         }
+        applyRefreshTokenGuard(s, setSignInError);
         hadSessionRef.current = Boolean(s);
         setSession(s);
         setDeriveNonce((n) => n + 1);
@@ -279,6 +296,8 @@ export function MySocialAuthProvider({
               if (parsed.salt !== salt) {
                 parsed.salt = salt;
                 sessionStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(parsed));
+                // Re-sync singleton after out-of-band storage write.
+                void auth.getSession();
               }
             }
           } catch {
@@ -338,10 +357,16 @@ export function MySocialAuthProvider({
     const mode = shouldUseRedirectAuth() ? 'redirect' : 'popup';
     void a
       .signIn({ mode, provider: 'google' })
+      .then((s) => {
+        if (mode === 'popup' && s) {
+          applyRefreshTokenGuard(s, setSignInError);
+        }
+      })
       .catch((e: unknown) => {
         if (mode === 'popup') {
           void a.getSession().then((s) => {
             if (s?.user?.address) {
+              applyRefreshTokenGuard(s, setSignInError);
               setSession(s);
               hadSessionRef.current = true;
               setDeriveNonce((n) => n + 1);

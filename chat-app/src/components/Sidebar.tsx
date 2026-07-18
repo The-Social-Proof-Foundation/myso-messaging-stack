@@ -1,5 +1,6 @@
 import type { StoredGroup } from '../lib/group-store';
 import type { ReactNode } from 'react';
+import { ChevronRight } from 'lucide-react';
 
 interface SidebarProps {
   groups: StoredGroup[];
@@ -8,7 +9,6 @@ interface SidebarProps {
   /** Groups whose unread messages are paid-DM requests (reply claims escrow). */
   paidDmGroupIds?: Set<string>;
   onSelectGroup: (uuid: string) => void;
-  onCreateGroup: () => void;
   loading?: boolean;
   agentPanel?: ReactNode;
 }
@@ -19,30 +19,11 @@ export function Sidebar({
   unreadCounts = {},
   paidDmGroupIds,
   onSelectGroup,
-  onCreateGroup,
   loading = false,
   agentPanel,
 }: Readonly<SidebarProps>) {
   return (
-    <aside className="flex w-72 shrink-0 flex-col border-r border-secondary-200/80 bg-white dark:border-secondary-700 dark:bg-secondary-900">
-      {/* Header */}
-      <div className="flex h-14 shrink-0 items-center justify-between border-b border-secondary-200/80 px-4 dark:border-secondary-700">
-        <div className="flex items-center gap-2">
-          <h2 className="text-[15px] font-semibold tracking-tight text-secondary-800 dark:text-secondary-200">
-            Groups
-          </h2>
-          {loading && (
-            <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-bubble-sent border-t-transparent dark:border-bubble-sent-dark" />
-          )}
-        </div>
-        <button
-          onClick={onCreateGroup}
-          className="rounded-full bg-bubble-sent px-3 py-1.5 text-xs font-medium text-white hover:bg-bubble-sent/90 dark:bg-bubble-sent-dark dark:hover:bg-bubble-sent-dark/90"
-        >
-          + New
-        </button>
-      </div>
-
+    <aside className="flex h-full min-h-0 w-full flex-1 flex-col bg-white md:w-72 md:shrink-0 md:border-r md:border-secondary-200/80 dark:bg-secondary-900 dark:md:border-secondary-700">
       {agentPanel}
 
       {/* Group list */}
@@ -60,7 +41,7 @@ export function Sidebar({
             )}
           </div>
         ) : (
-          <ul className="px-1.5 py-1.5">
+          <ul>
             {groups.map((group) => {
               const unread = unreadCounts[group.groupId] ?? 0;
               const isPaidRequest = paidDmGroupIds?.has(group.groupId) ?? false;
@@ -69,34 +50,45 @@ export function Sidebar({
                   selectedUuid === group.groupId) &&
                 !!selectedUuid;
               return (
-              <li key={group.uuid || group.groupId}>
-                <button
-                  onClick={() => onSelectGroup(group.uuid || group.groupId)}
-                  className={`w-full rounded-xl px-3 py-2.5 text-left transition-colors ${
-                    selected
-                      ? 'bg-bubble-sent/10 text-secondary-900 dark:bg-secondary-700 dark:text-secondary-50'
-                      : 'text-secondary-700 hover:bg-secondary-50 dark:text-secondary-300 dark:hover:bg-secondary-700/50'
-                  }`}
+                <li
+                  key={group.uuid || group.groupId}
+                  className="border-b border-secondary-200 dark:border-secondary-700"
                 >
-                  <div className="flex items-center justify-between gap-2">
-                    <p className="truncate text-sm font-medium">{group.name}</p>
-                    {unread > 0 &&
-                      (isPaidRequest ? (
-                        <span className="shrink-0 rounded-full bg-amber-500 px-2 py-0.5 text-[10px] font-semibold text-white">
-                          PAID
-                        </span>
-                      ) : (
-                        <span className="shrink-0 rounded-full bg-bubble-sent px-2 py-0.5 text-[10px] font-semibold text-white dark:bg-bubble-sent-dark">
-                          {unread > 99 ? '99+' : unread}
-                        </span>
-                      ))}
-                  </div>
-                  <p className="mt-0.5 font-mono text-[11px] text-secondary-400 dark:text-secondary-500">
-                    {group.groupId.slice(0, 8)}...{group.groupId.slice(-6)}
-                  </p>
-                </button>
-              </li>
-            );
+                  <button
+                    type="button"
+                    onClick={() => onSelectGroup(group.uuid || group.groupId)}
+                    className={`w-full px-4 py-3 text-left transition-colors ${
+                      selected
+                        ? 'bg-bubble-sent/10 text-secondary-900 dark:bg-secondary-700 dark:text-secondary-50'
+                        : 'text-secondary-700 hover:bg-secondary-50 dark:text-secondary-300 dark:hover:bg-secondary-700/50'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2">
+                      <p className="min-w-0 flex-1 truncate text-sm font-medium">
+                        {group.name}
+                      </p>
+                      {unread > 0 &&
+                        (isPaidRequest ? (
+                          <span className="shrink-0 rounded-full bg-amber-500 px-2 py-0.5 text-[10px] font-semibold text-white">
+                            PAID
+                          </span>
+                        ) : (
+                          <span className="shrink-0 rounded-full bg-bubble-sent px-2 py-0.5 text-[10px] font-semibold text-white dark:bg-bubble-sent-dark">
+                            {unread > 99 ? '99+' : unread}
+                          </span>
+                        ))}
+                      <ChevronRight
+                        className="h-4 w-4 shrink-0 text-secondary-400 dark:text-secondary-500"
+                        strokeWidth={2}
+                        aria-hidden
+                      />
+                    </div>
+                    <p className="mt-0.5 font-mono text-[11px] text-secondary-400 dark:text-secondary-500">
+                      {group.groupId.slice(0, 8)}...{group.groupId.slice(-6)}
+                    </p>
+                  </button>
+                </li>
+              );
             })}
           </ul>
         )}

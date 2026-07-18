@@ -1,3 +1,5 @@
+import { ReservationNavAvatar } from '../ReservationNavAvatar';
+
 interface PermType {
   key: string;
   value: string;
@@ -18,6 +20,11 @@ interface MemberItemProps {
   onRemoveMember: (address: string) => void;
   onRemoveAndRotate: (address: string) => void;
   onTogglePermission: (member: string, permType: string, has: boolean) => void;
+  avatarSrc?: string | null;
+  /** @username / display name / truncated wallet */
+  label?: string;
+  showRing?: boolean;
+  ringPercent?: number;
 }
 
 function permissionLabel(permType: string): string {
@@ -40,6 +47,8 @@ function truncateAddress(address: string): string {
   return `${address.slice(0, 6)}...${address.slice(-4)}`;
 }
 
+const MEMBER_AVATAR_SIZE = 28;
+
 export function MemberItem({
   address,
   permissions,
@@ -54,30 +63,56 @@ export function MemberItem({
   onRemoveMember,
   onRemoveAndRotate,
   onTogglePermission,
+  avatarSrc = null,
+  label,
+  showRing = false,
+  ringPercent = 0,
 }: Readonly<MemberItemProps>) {
+  const displayLabel = label?.trim() || truncateAddress(address);
+  const isWalletLabel = displayLabel === truncateAddress(address);
+
   return (
     <li className="rounded-lg border border-secondary-100 p-2 dark:border-secondary-600">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-2">
         <button
+          type="button"
           onClick={onToggleExpand}
-          className="flex items-center font-mono text-xs text-secondary-700 hover:text-primary-500 dark:text-secondary-300"
+          className="flex min-w-0 flex-1 items-center gap-2 text-left text-xs text-secondary-700 hover:text-primary-500 dark:text-secondary-300"
+          title={address}
         >
           <span
-            className={`mr-1.5 inline-block h-1.5 w-1.5 shrink-0 rounded-full ${
+            className={`inline-block h-1.5 w-1.5 shrink-0 rounded-full ${
               online ? 'bg-green-500' : 'bg-secondary-300 dark:bg-secondary-600'
             }`}
             title={online ? 'Online' : 'Offline'}
           />
-          {truncateAddress(address)}
-          {isSelf && <span className="ml-1 text-primary-500">(you)</span>}
-          <span className="ml-1 text-secondary-300">
+          <ReservationNavAvatar
+            address={address}
+            imageSrc={avatarSrc}
+            size={MEMBER_AVATAR_SIZE}
+            showRing={showRing}
+            ringPercent={ringPercent}
+            className="shrink-0"
+          />
+          <span
+            className={`min-w-0 truncate font-medium ${
+              isWalletLabel ? 'font-mono' : ''
+            }`}
+          >
+            {displayLabel}
+            {isSelf && (
+              <span className="ml-1 font-sans text-primary-500">(you)</span>
+            )}
+          </span>
+          <span className="shrink-0 text-secondary-300">
             {isExpanded ? '▾' : '▸'}
           </span>
         </button>
 
         {isAdmin && !isSelf && (
-          <div className="flex gap-1">
+          <div className="flex shrink-0 gap-1">
             <button
+              type="button"
               onClick={() => onRemoveAndRotate(address)}
               disabled={removingMember === address}
               className="text-[10px] text-danger-500 hover:text-danger-600 disabled:opacity-50"
@@ -86,6 +121,7 @@ export function MemberItem({
               {removingMember === address ? '...' : 'Remove+Key'}
             </button>
             <button
+              type="button"
               onClick={() => onRemoveMember(address)}
               disabled={removingMember === address}
               className="text-[10px] text-danger-400 hover:text-danger-500 disabled:opacity-50"
@@ -99,7 +135,7 @@ export function MemberItem({
 
       {/* Permission badges (collapsed view) */}
       {!isExpanded && (
-        <div className="mt-1 flex flex-wrap gap-1">
+        <div className="mt-1 flex flex-wrap gap-1 pl-8">
           {permissions.map((p) => (
             <span
               key={p}
@@ -128,6 +164,7 @@ export function MemberItem({
               >
                 <span>{perm.key}</span>
                 <button
+                  type="button"
                   onClick={() => onTogglePermission(address, perm.value, has)}
                   disabled={togglingPerm === toggleKey}
                   className={`rounded px-2 py-0.5 text-[10px] font-medium transition-colors disabled:opacity-50 ${

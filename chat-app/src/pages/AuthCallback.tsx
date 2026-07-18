@@ -1,8 +1,11 @@
 import { useEffect, useState } from 'react';
-import { createMySocialAuth } from '@socialproof/mysocial-auth';
 import type { AuthResultMessage } from '../lib/auth-session-build';
-import { buildSessionFromAuthResult } from '../lib/auth-session-build';
-import { readMySocialAuthConfig } from '../lib/mysocial-auth-config';
+import {
+  buildSessionFromAuthResult,
+  SESSION_CANNOT_REFRESH_MESSAGE,
+  sessionLacksRefreshToken,
+} from '../lib/auth-session-build';
+import { getMySocialAuth } from '../lib/mysocial-auth-client';
 import { SESSION_STORAGE_KEY } from '../lib/auth-utils';
 
 async function handlePopupFallback(): Promise<boolean> {
@@ -97,15 +100,23 @@ export default function AuthCallback() {
     const run = async () => {
       if (await handlePopupFallback()) return;
 
-      const { config } = readMySocialAuthConfig();
-      if (!config) {
+      const auth = getMySocialAuth();
+      if (!auth) {
         if (!cancelled) setError('MySocial auth is not configured.');
         return;
       }
 
       try {
-        const auth = createMySocialAuth(config);
-        await auth.handleRedirectCallback();
+        const session = await auth.handleRedirectCallback();
+        if (sessionLacksRefreshToken(session)) {
+          console.warn(
+            '[MySocialAuth] Redirect session has no refresh_token; access JWT will expire in ~30 minutes without renewing.',
+          );
+          if (!cancelled) {
+            setError(SESSION_CANNOT_REFRESH_MESSAGE);
+            return;
+          }
+        }
         window.dispatchEvent(new CustomEvent('mysocial-auth-session-changed'));
         if (cancelled) return;
         window.location.replace('/');

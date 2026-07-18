@@ -9,6 +9,8 @@ import {
 } from './contexts/MySocialAuthContext';
 import { MySocialAuthBroadcastListener } from './components/MySocialAuthBroadcastListener';
 import { ErrorBoundary } from './components/ErrorBoundary';
+import { CreateMessageProvider } from './contexts/CreateMessageContext';
+import { MobileChatNavProvider } from './contexts/MobileChatNavContext';
 import { ThemeProvider } from './contexts/ThemeContext';
 import AuthCallback from './pages/AuthCallback';
 import App from './App';
@@ -52,7 +54,11 @@ createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <BrowserRouter>
       <ThemeProvider>
-        <Root />
+        <CreateMessageProvider>
+          <MobileChatNavProvider>
+            <Root />
+          </MobileChatNavProvider>
+        </CreateMessageProvider>
       </ThemeProvider>
     </BrowserRouter>
   </StrictMode>,

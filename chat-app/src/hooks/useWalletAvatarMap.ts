@@ -3,6 +3,8 @@ import { useGraphQLClient } from '../contexts/MessagingClientContext';
 import {
   PROFILE_FULL_QUERY,
   mapGraphqlProfile,
+  reservationPoolFillPercentFromGraphqlProfile,
+  type WalletProfile,
 } from '../lib/wallet-profile';
 
 function truncateAddress(address: string): string {
@@ -21,17 +23,43 @@ function labelFromProfile(
   return truncateAddress(address);
 }
 
+/** GraphQL-only ring bits (no per-peer social-server indexer fetch). */
+function ringBitsFromProfile(
+  mapped: WalletProfile | null,
+  rawProfile: Record<string, unknown> | null,
+): { showRing: boolean; ringPercent: number } {
+  if (!mapped) return { showRing: false, ringPercent: 0 };
+
+  const reservationPoolAddr = mapped.reservation_pool_address?.trim() ?? null;
+  const hasLaunchedSpt = Boolean(mapped.social_proof_token_address?.trim());
+  const inReservationPhase = Boolean(reservationPoolAddr && !hasLaunchedSpt);
+  const gqlPct = reservationPoolFillPercentFromGraphqlProfile(rawProfile);
+
+  const showRing = Boolean(reservationPoolAddr && inReservationPhase) || hasLaunchedSpt;
+  const ringPercent = hasLaunchedSpt ? 100 : (gqlPct ?? 0);
+
+  return { showRing, ringPercent };
+}
+
 type CachedProfile = {
   photo: string | null;
   label: string;
+  showRing: boolean;
+  ringPercent: number;
 };
 
 /** Session-wide cache so repeated group views don't re-fetch. */
 const profileCache = new Map<string, CachedProfile>();
 
+export type WalletRingBits = {
+  showRing: boolean;
+  ringPercent: number;
+};
+
 export type WalletProfileBits = {
   photoFor: (address: string) => string | null;
   labelFor: (address: string) => string;
+  ringFor: (address: string) => WalletRingBits;
 };
 
 /**
@@ -59,7 +87,10 @@ export function useWalletAvatarMap(
     const list = uniqueKey ? uniqueKey.split(',') : [];
     if (list.length === 0) return;
 
-    const missing = list.filter((a) => !profileCache.has(a));
+    const missing = list.filter((a) => {
+      const cached = profileCache.get(a);
+      return !cached || typeof cached.showRing !== 'boolean';
+    });
     if (missing.length === 0) {
       setVersion((v) => v + 1);
       return;
@@ -80,15 +111,21 @@ export function useWalletAvatarMap(
             const data = result.data as
               | { profile?: Record<string, unknown> | null }
               | undefined;
-            const mapped = mapGraphqlProfile(data?.profile ?? null);
+            const raw = data?.profile ?? null;
+            const mapped = mapGraphqlProfile(raw);
+            const ring = ringBitsFromProfile(mapped, raw);
             profileCache.set(address, {
               photo: mapped?.profile_photo ?? null,
               label: labelFromProfile(address, mapped),
+              showRing: ring.showRing,
+              ringPercent: ring.ringPercent,
             });
           } catch {
             profileCache.set(address, {
               photo: null,
               label: truncateAddress(address),
+              showRing: false,
+              ringPercent: 0,
             });
           }
         }),
@@ -115,5 +152,17 @@ export function useWalletAvatarMap(
     [version],
   );
 
-  return { photoFor, labelFor };
+  const ringFor = useCallback(
+    (address: string): WalletRingBits => {
+      const cached = profileCache.get(address);
+      return {
+        showRing: cached?.showRing ?? false,
+        ringPercent: cached?.ringPercent ?? 0,
+      };
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [version],
+  );
+
+  return { photoFor, labelFor, ringFor };
 }

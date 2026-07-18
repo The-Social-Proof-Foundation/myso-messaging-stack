@@ -1,5 +1,10 @@
 import type { Session } from '@socialproof/mysocial-auth';
-import { resolveOAuthSubForKeypair, SESSION_STORAGE_KEY } from './auth-utils';
+import {
+  isTrueWalletOnlySession,
+  resolveOAuthSubForKeypair,
+  SESSION_STORAGE_KEY,
+} from './auth-utils';
+import { getMySocialAuth } from './mysocial-auth-client';
 
 /** Shape of MYSOCIAL_AUTH_RESULT from BroadcastChannel / popup fallback. */
 export type AuthResultMessage = {
@@ -12,6 +17,16 @@ export type AuthResultMessage = {
   expires_in?: number;
   user?: { address?: string; sub?: string; id?: string; email?: string };
 };
+
+export const SESSION_CANNOT_REFRESH_MESSAGE =
+  'Session cannot be refreshed — sign in again';
+
+/** OAuth sessions need a refresh_token for ~30-day continuity (access JWT is ~30 min). */
+export function sessionLacksRefreshToken(session: Session | null | undefined): boolean {
+  if (!session) return false;
+  if (isTrueWalletOnlySession(session)) return false;
+  return !session.refresh_token?.trim();
+}
 
 /**
  * Build a Session matching the SDK shape from a MYSOCIAL_AUTH_RESULT payload.
@@ -57,7 +72,7 @@ export function buildSessionFromAuthResult(
 }
 
 /**
- * Persist session to sessionStorage and notify the auth provider.
+ * Persist session to sessionStorage, sync the singleton client, and notify React.
  * Returns true if the session was stored.
  */
 export function storeBroadcastAuthSession(msg: AuthResultMessage): boolean {
@@ -67,8 +82,16 @@ export function storeBroadcastAuthSession(msg: AuthResultMessage): boolean {
     return false;
   }
 
+  if (sessionLacksRefreshToken(session)) {
+    console.warn(
+      '[MySocialAuth] Broadcast session has no refresh_token; access JWT will expire in ~30 minutes without renewing.',
+    );
+  }
+
   try {
     sessionStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(session));
+    // Sync singleton cache + schedule proactive refresh (storage write bypasses SDK saveSession).
+    void getMySocialAuth()?.getSession();
     window.dispatchEvent(new CustomEvent('mysocial-auth-broadcast-session'));
     return true;
   } catch (err) {

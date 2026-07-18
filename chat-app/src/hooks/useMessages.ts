@@ -79,6 +79,11 @@ export interface UseMessagesResult {
   typingMembers: string[];
   /** Online state per member (presence snapshot + live events). */
   onlineMembers: Map<string, boolean>;
+  /**
+   * Relayer read watermark at open time (exclusive). Messages with
+   * `order > initialReadUpto` are unread for initial scroll positioning.
+   */
+  initialReadUpto: number;
   sendMessage: (text: string, files?: AttachmentFile[]) => Promise<void>;
   editMessage: (messageId: string, text: string) => Promise<void>;
   deleteMessage: (messageId: string) => Promise<void>;
@@ -223,6 +228,7 @@ export function useMessages(
   const [claiming, setClaiming] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [hasMore, setHasMore] = useState(false);
+  const [initialReadUpto, setInitialReadUpto] = useState(0);
   const [reactions, setReactions] = useState<MessageReactions>(new Map());
   /** Typing members mapped to their expiry (ms epoch) — TTL is the recovery path. */
   const [typingUntil, setTypingUntil] = useState<Map<string, number>>(new Map());
@@ -308,6 +314,7 @@ export function useMessages(
     setLoading(true);
     setError(null);
     setHasMore(false);
+    setInitialReadUpto(0);
     setReactions(new Map());
     setTypingUntil(new Map());
     setPresenceRecords(new Map());
@@ -321,15 +328,23 @@ export function useMessages(
 
     async function loadInitial() {
       try {
-        const result: SDKGetMessagesResult = await client.messaging.getMessages({
-          signer,
-          groupRef: {uuid},
-          limit: 50,
-          mydataApproveContext: undefined,
-        });
+        const [result, readState] = await Promise.all([
+          client.messaging.getMessages({
+            signer,
+            groupRef: { uuid },
+            limit: 50,
+            mydataApproveContext: undefined,
+          }) as Promise<SDKGetMessagesResult>,
+          client.messaging.getReadState({ signer }).catch((err) => {
+            console.warn('Failed to load read state:', err);
+            return null;
+          }),
+        ]);
 
         if (cancelled || uuidRef.current !== uuid) return;
 
+        const readUpto = readState?.groups[groupId]?.readUpto ?? 0;
+        setInitialReadUpto(readUpto);
         setMessages(sortMessagesByOrder(result.messages));
         setHasMore(result.hasNext);
 
@@ -374,7 +389,7 @@ export function useMessages(
     return () => {
       cancelled = true;
     };
-  }, [uuid, client, signer]);
+  }, [uuid, groupId, client, signer]);
 
   // ------------------------------------------------------------------
   // Real-time subscription (messages, reactions, typing, presence)
@@ -947,6 +962,7 @@ export function useMessages(
     reactions,
     typingMembers: [...typingUntil.keys()],
     onlineMembers,
+    initialReadUpto,
     sendMessage,
     editMessage,
     deleteMessage: deleteMessageFn,

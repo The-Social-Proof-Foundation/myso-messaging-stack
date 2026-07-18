@@ -10,6 +10,7 @@ import { GroupNameSection } from './admin/GroupNameSection';
 import { MemberList } from './admin/MemberList';
 import { AddMemberForm } from './admin/AddMemberForm';
 import { GroupActionsSection } from './admin/GroupActionsSection';
+import type { WalletRingBits } from '../hooks/useWalletAvatarMap';
 
 interface MemberWithPermissions {
   address: string;
@@ -32,6 +33,9 @@ interface AdminPanelProps {
   onLeaveGroup?: () => Promise<void>;
   leaving?: boolean;
   leaveError?: string | null;
+  photoFor?: (address: string) => string | null;
+  labelFor?: (address: string) => string;
+  ringFor?: (address: string) => WalletRingBits;
 }
 
 export function AdminPanel({
@@ -48,6 +52,9 @@ export function AdminPanel({
   onLeaveGroup,
   leaving = false,
   leaveError = null,
+  photoFor,
+  labelFor,
+  ringFor,
 }: Readonly<AdminPanelProps>) {
   const { client, signer } = useRequiredMessagingClient();
 
@@ -342,6 +349,9 @@ export function AdminPanel({
           onRemoveAndRotate={handleRemoveAndRotate}
           onTogglePermission={handleTogglePermission}
           onlineMembers={onlineMembers}
+          photoFor={photoFor}
+          labelFor={labelFor}
+          ringFor={ringFor}
         />
 
         {permissions.isAdmin && (

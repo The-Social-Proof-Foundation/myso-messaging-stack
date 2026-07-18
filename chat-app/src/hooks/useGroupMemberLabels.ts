@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRequiredMessagingClient } from '../contexts/MessagingClientContext';
 
 function truncateAddress(address: string): string {
@@ -11,6 +11,8 @@ const labelCache = new Map<string, Map<string, string>>();
 
 export interface UseGroupMemberLabelsResult {
   labelFor: (address: string) => string;
+  /** Member wallet addresses for the group (excludes system objects). */
+  memberAddresses: string[];
   refresh: () => void;
 }
 
@@ -75,9 +77,11 @@ export function useGroupMemberLabels(
     [labels],
   );
 
+  const memberAddresses = useMemo(() => [...labels.keys()], [labels]);
+
   const refresh = useCallback(() => {
     labelCache.delete(groupId);
   }, [groupId]);
 
-  return { labelFor, refresh };
+  return { labelFor, memberAddresses, refresh };
 }

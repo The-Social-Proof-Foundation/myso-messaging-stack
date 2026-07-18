@@ -6,7 +6,10 @@ import { useGroupDiscovery } from '../hooks/useGroupDiscovery';
 import { usePaidDmRequests } from '../hooks/usePaidDmRequests';
 import { useGroupActivityOrder } from '../hooks/useGroupActivityOrder';
 import { useUserFeed } from '../hooks/useUserFeed';
+import { useRegisterCreateMessageHandler } from '../contexts/CreateMessageContext';
+import { useMobileChatNav } from '../contexts/MobileChatNavContext';
 import { useAuthenticatedAddress, useMySocialAuth } from '../contexts/MySocialAuthContext';
+import { useIsMobileNav } from '../hooks/useMediaQuery';
 import { AgentConversationsPanel } from './AgentConversationsPanel';
 import { AgentDevSendPanel } from './AgentDevSendPanel';
 import { useAgentConversations } from '../hooks/useAgentConversations';
@@ -53,6 +56,17 @@ export function AuthenticatedApp({
     getSelectedGroupKey(address),
   );
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const openCreateModal = useCallback(() => setShowCreateModal(true), []);
+  useRegisterCreateMessageHandler(openCreateModal);
+
+  const isMobileNav = useIsMobileNav();
+  const { setHideAppHeader } = useMobileChatNav();
+  const mobileChatOpen = isMobileNav && Boolean(selectedUuid);
+
+  useEffect(() => {
+    setHideAppHeader(mobileChatOpen);
+    return () => setHideAppHeader(false);
+  }, [mobileChatOpen, setHideAppHeader]);
 
   // Re-hydrate selection when the wallet address becomes available / changes.
   useEffect(() => {
@@ -134,44 +148,63 @@ export function AuthenticatedApp({
         </div>
       )}
       <div className="flex flex-1 overflow-hidden">
-        <Sidebar
-          groups={sortedGroups}
-          selectedUuid={selectedUuid}
-          unreadCounts={activity.counts}
-          paidDmGroupIds={paidDmGroupIds}
-          onSelectGroup={selectGroup}
-          onCreateGroup={() => setShowCreateModal(true)}
-          loading={discoveryLoading}
-          agentPanel={
-            <AgentConversationsPanel
-              conversations={agentConversations.conversations}
-              loading={agentConversations.loading}
-              error={agentConversations.error}
-              onSelectGroup={(groupId) => {
-                const match = groups.find((g) => g.groupId === groupId);
-                selectGroup(match?.uuid ?? groupId);
-              }}
-            />
+        <div
+          className={
+            mobileChatOpen
+              ? 'hidden md:flex md:w-72 md:shrink-0 md:flex-col'
+              : 'flex min-h-0 w-full flex-col md:w-72 md:shrink-0'
           }
-        />
-        <ChatArea
-          selectedGroup={selectedGroup}
-          onLeaveGroup={handleLeaveGroup}
-          onReadStateChanged={activity.markRead}
-          onGroupActivity={
-            selectedGroup
-              ? (order) => activity.recordActivity(selectedGroup.groupId, order)
-              : undefined
-          }
-          devAgentPanel={
-            keypair && selectedGroup ? (
-              <AgentDevSendPanel
-                humanSigner={keypair}
-                groupUuid={selectedGroup.uuid}
+        >
+          <Sidebar
+            groups={sortedGroups}
+            selectedUuid={selectedUuid}
+            unreadCounts={activity.counts}
+            paidDmGroupIds={paidDmGroupIds}
+            onSelectGroup={selectGroup}
+            loading={discoveryLoading}
+            agentPanel={
+              <AgentConversationsPanel
+                conversations={agentConversations.conversations}
+                loading={agentConversations.loading}
+                error={agentConversations.error}
+                onSelectGroup={(groupId) => {
+                  const match = groups.find((g) => g.groupId === groupId);
+                  selectGroup(match?.uuid ?? groupId);
+                }}
               />
-            ) : null
+            }
+          />
+        </div>
+        <div
+          className={
+            isMobileNav && !selectedUuid
+              ? 'hidden md:flex md:min-w-0 md:flex-1 md:flex-col'
+              : 'flex min-h-0 min-w-0 flex-1 flex-col'
           }
-        />
+        >
+          <ChatArea
+            selectedGroup={selectedGroup}
+            onLeaveGroup={handleLeaveGroup}
+            onReadStateChanged={activity.markRead}
+            onGroupActivity={
+              selectedGroup
+                ? (order) =>
+                    activity.recordActivity(selectedGroup.groupId, order)
+                : undefined
+            }
+            onMobileBack={
+              isMobileNav ? () => selectGroup(null) : undefined
+            }
+            devAgentPanel={
+              keypair && selectedGroup ? (
+                <AgentDevSendPanel
+                  humanSigner={keypair}
+                  groupUuid={selectedGroup.uuid}
+                />
+              ) : null
+            }
+          />
+        </div>
       </div>
       {showCreateModal && (
         <CreateGroupModal

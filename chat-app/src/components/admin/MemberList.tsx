@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useAuthenticatedAddress } from '../../contexts/MySocialAuthContext';
+import type { WalletRingBits } from '../../hooks/useWalletAvatarMap';
 import { MemberItem } from './MemberItem';
 
 interface MemberWithPermissions {
@@ -25,6 +26,9 @@ interface MemberListProps {
   onTogglePermission: (member: string, permType: string, has: boolean) => void;
   /** Presence per member for the online dots. */
   onlineMembers?: Map<string, boolean>;
+  photoFor?: (address: string) => string | null;
+  labelFor?: (address: string) => string;
+  ringFor?: (address: string) => WalletRingBits;
 }
 
 export function MemberList({
@@ -39,6 +43,9 @@ export function MemberList({
   onRemoveAndRotate,
   onTogglePermission,
   onlineMembers,
+  photoFor,
+  labelFor,
+  ringFor,
 }: Readonly<MemberListProps>) {
   const accountAddress = useAuthenticatedAddress();
   const [expandedMember, setExpandedMember] = useState<string | null>(null);
@@ -64,6 +71,7 @@ export function MemberList({
         <ul className="space-y-2">
           {members.map((m) => {
             const isSelf = m.address === accountAddress;
+            const ring = ringFor?.(m.address);
             return (
               <MemberItem
                 key={m.address}
@@ -84,6 +92,10 @@ export function MemberList({
                 onRemoveMember={onRemoveMember}
                 onRemoveAndRotate={onRemoveAndRotate}
                 onTogglePermission={onTogglePermission}
+                avatarSrc={photoFor?.(m.address) ?? null}
+                label={labelFor?.(m.address)}
+                showRing={ring?.showRing ?? false}
+                ringPercent={ring?.ringPercent ?? 0}
               />
             );
           })}
