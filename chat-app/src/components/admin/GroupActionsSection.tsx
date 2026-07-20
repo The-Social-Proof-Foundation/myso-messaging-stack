@@ -90,7 +90,7 @@ export function GroupActionsSection({
           <button
             type="button"
             onClick={() => setShowArchiveConfirm(true)}
-            className="mb-2 w-full rounded-lg border border-danger-300 py-1.5 text-xs font-medium text-danger-500 hover:bg-danger-400/10 dark:border-danger-700 dark:text-danger-400"
+            className="mb-2 w-full rounded-lg bg-[#E6E3EA] py-2 text-xs font-medium text-[#2D2D32] hover:bg-[#DDD9E4] active:bg-[#D2CDD9] dark:bg-[#3D3A45] dark:text-white dark:hover:bg-[#494653] dark:active:bg-[#34313B]"
           >
             Archive Group
           </button>
@@ -125,7 +125,7 @@ export function GroupActionsSection({
           type="button"
           onClick={() => setShowLeaveConfirm(true)}
           disabled={leaving}
-          className="w-full rounded-lg border border-danger-300 py-1.5 text-xs font-medium text-danger-500 hover:bg-danger-400/10 disabled:opacity-50 dark:border-danger-700 dark:text-danger-400"
+          className="w-full rounded-lg bg-[#C97A7A] py-2 text-xs font-medium text-white hover:bg-[#D58787] active:bg-[#B96C6C] disabled:opacity-50 dark:bg-[#9A5C5C] dark:hover:bg-[#A96969] dark:active:bg-[#875050]"
         >
           Leave Group
         </button>

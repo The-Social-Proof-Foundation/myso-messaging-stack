@@ -1,7 +1,9 @@
 /**
  * Slide-out admin panel for group management.
+ * Desktop: side panel without chrome header. Mobile: full-view with back.
  */
 import { useState, useEffect, useCallback } from 'react';
+import { ChevronLeft } from 'lucide-react';
 import { useRequiredMessagingClient } from '../contexts/MessagingClientContext';
 import { signAndExecuteTransactionAndWait } from '../lib/sign-and-wait';
 import { updateStoredGroupName } from '../lib/group-store';
@@ -308,22 +310,27 @@ export function AdminPanel({
 
   if (!open) return null;
 
+  const title = 'Details';
+
   return (
-    <div className="flex w-80 flex-col border-l border-secondary-200 bg-white dark:border-secondary-700 dark:bg-secondary-900">
-      {/* Header */}
-      <div className="flex items-center justify-between border-b border-secondary-200 px-4 py-3 dark:border-secondary-700">
-        <h3 className="text-sm font-semibold text-secondary-800 dark:text-secondary-200">
-          {permissions.isAdmin ? 'Admin Panel' : 'Group Info'}
-        </h3>
+    <div className="flex min-h-0 w-full min-w-0 flex-1 flex-col bg-white dark:bg-secondary-900 md:w-80 md:flex-none md:shrink-0 md:border-l md:border-secondary-200 dark:md:border-secondary-700">
+      {/* Mobile-only header: back + title (desktop has no chrome) */}
+      <div className="relative flex h-14 shrink-0 items-center justify-center border-b border-secondary-200/40 px-5 dark:border-secondary-700/40 md:hidden">
         <button
+          type="button"
           onClick={onClose}
-          className="rounded p-1 text-secondary-400 hover:text-secondary-600 dark:hover:text-secondary-300"
+          aria-label="Back to chat"
+          className="absolute left-2 top-1/2 z-10 inline-flex h-11 min-w-11 -translate-y-1/2 items-center justify-center gap-0.5 rounded-full px-2 text-sm font-medium text-secondary-600 hover:bg-secondary-100/80 dark:text-secondary-300 dark:hover:bg-secondary-800/80"
         >
-          ✕
+          <ChevronLeft className="h-5 w-5 shrink-0" strokeWidth={2} />
+          <span className="pr-1">Back</span>
         </button>
+        <h3 className="mx-auto max-w-[calc(100%-9.5rem)] truncate text-center text-[15px] font-semibold text-secondary-900 dark:text-secondary-100">
+          {title}
+        </h3>
       </div>
 
-      <div className="flex-1 overflow-y-auto">
+      <div className="min-h-0 flex-1 overflow-y-auto">
         {permissions.canEditMetadata && (
           <GroupNameSection
             groupName={groupName}

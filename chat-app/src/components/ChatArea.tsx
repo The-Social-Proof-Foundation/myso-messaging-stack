@@ -480,7 +480,12 @@ function ChatView({
 
   return (
     <div className="flex min-w-0 flex-1 overflow-hidden">
-      <div className="flex min-w-0 flex-1 flex-col">
+      {/* On mobile, Group Info is its own full view — hide chat while open */}
+      <div
+        className={`min-w-0 flex-1 flex-col ${
+          adminPanelOpen ? 'hidden md:flex' : 'flex'
+        }`}
+      >
       {/* Messages area — header sticky so content can scroll under the blur */}
       <div
         ref={scrollRef}

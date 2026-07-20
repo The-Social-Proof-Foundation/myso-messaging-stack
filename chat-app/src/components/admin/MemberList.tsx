@@ -51,8 +51,8 @@ export function MemberList({
   const [expandedMember, setExpandedMember] = useState<string | null>(null);
 
   return (
-    <section className="border-b border-secondary-100 p-4 dark:border-secondary-700">
-      <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-secondary-500 dark:text-secondary-400">
+    <section className="p-4">
+      <h4 className="font-chakra mb-2 text-sm font-medium capitalize tracking-wide text-secondary-500 dark:text-secondary-400">
         Members ({members.length})
       </h4>
 
@@ -68,7 +68,7 @@ export function MemberList({
       )}
 
       {!loading && members.length > 0 && (
-        <ul className="space-y-2">
+        <ul className="overflow-hidden rounded-xl border border-secondary-200 bg-secondary-100 dark:border-secondary-700 dark:bg-secondary-800">
           {members.map((m) => {
             const isSelf = m.address === accountAddress;
             const ring = ringFor?.(m.address);
