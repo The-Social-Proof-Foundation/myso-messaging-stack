@@ -3,6 +3,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from 'react';
@@ -21,6 +22,8 @@ import {
   logClientDeriveIds,
   logFullGenesisClientMismatch,
 } from '../lib/messaging-genesis-debug';
+import { clearMessageCache } from '../lib/message-session-cache';
+import { registerMessagingPresenceTeardown } from '../lib/messaging-presence-teardown';
 import { useMySocialAuth } from './MySocialAuthContext';
 
 interface MessagingClientContextValue {
@@ -56,11 +59,52 @@ export function MessagingClientProvider({
 
   const [client, setClient] = useState<MessagingClient | null>(null);
   const [clientInitError, setClientInitError] = useState<string | null>(null);
+  const cachedSignerAddressRef = useRef<string | null>(null);
+  const clientRef = useRef<MessagingClient | null>(null);
+  const keypairRef = useRef(keypair);
+  clientRef.current = client;
+  keypairRef.current = keypair;
 
   // Synchronous: true on the same render keypair appears, before useEffect runs.
   const clientLoading = Boolean(keypair && !client && !clientInitError);
 
+  // Logout (and identity clear) must close WS sockets while we still have a client.
   useEffect(() => {
+    registerMessagingPresenceTeardown(async () => {
+      const activeClient = clientRef.current;
+      const activeSigner = keypairRef.current;
+      if (!activeClient || !activeSigner) return;
+      try {
+        await activeClient.messaging.transport.postPresence({
+          signer: activeSigner,
+          active: false,
+        });
+      } catch {
+        // Best-effort last-seen; live offline comes from WS close.
+      }
+      activeClient.messaging.disconnect();
+    });
+    return () => registerMessagingPresenceTeardown(null);
+  }, []);
+
+  useEffect(() => {
+    const address = keypair?.toMySoAddress() ?? null;
+    // Wipe plaintext when the signing identity changes (logout or account switch).
+    if (address !== cachedSignerAddressRef.current) {
+      const prev = clientRef.current;
+      if (prev && !address) {
+        // Keypair cleared without going through teardownMessagingPresence —
+        // still drop sockets so peers see offline.
+        try {
+          prev.messaging.disconnect();
+        } catch {
+          // ignore
+        }
+      }
+      clearMessageCache();
+      cachedSignerAddressRef.current = address;
+    }
+
     if (!keypair) {
       setClient(null);
       setClientInitError(null);

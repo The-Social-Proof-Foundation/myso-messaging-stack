@@ -184,12 +184,10 @@ pub struct PresenceEntry {
     pub online: bool,
 }
 
-/// Seconds since last heartbeat within which a member counts as online.
-const PRESENCE_ONLINE_WINDOW_SECS: i64 = 60;
-
-/// Presence snapshot for initial render — storage-backed (shared heartbeat
-/// table), so it is correct across relayer instances. Live transitions arrive
-/// as `presence.updated` events on the group WebSocket.
+/// Presence snapshot for initial render. `online` comes from the live
+/// WebSocket registry on this instance; `last_seen` is storage-backed for
+/// “last online …” labels. Live transitions also arrive as `presence.updated`
+/// on the group WebSocket.
 pub async fn get_group_presence(
     State(state): State<AppState>,
     Path(group_id): Path<String>,
@@ -197,7 +195,6 @@ pub async fn get_group_presence(
 ) -> Result<Json<Vec<PresenceEntry>>, ApiError> {
     ensure_group(&auth, &group_id)?;
 
-    let now = chrono::Utc::now();
     let mut entries = Vec::new();
     for member in state.membership_store.list_member_addresses(&group_id) {
         let last_seen = state
@@ -205,9 +202,7 @@ pub async fn get_group_presence(
             .get_presence_last_seen(&member)
             .await
             .map_err(ApiError::from)?;
-        let online = last_seen
-            .map(|t| (now - t).num_seconds() < PRESENCE_ONLINE_WINDOW_SECS)
-            .unwrap_or(false);
+        let online = state.presence_registry.is_online(&member);
         entries.push(PresenceEntry {
             member,
             last_seen: last_seen.map(|t| t.to_rfc3339()),

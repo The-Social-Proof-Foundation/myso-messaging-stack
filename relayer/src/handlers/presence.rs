@@ -38,6 +38,14 @@ pub async fn post_presence(
             .update_presence(&auth.sender_address)
             .await
             .map_err(ApiError::from)?;
+    } else {
+        // Explicit logout / teardown — drop sticky last_seen so GET snapshots
+        // and push gating do not treat the wallet as recently active.
+        state
+            .storage
+            .clear_presence(&auth.sender_address)
+            .await
+            .map_err(ApiError::from)?;
     }
 
     Ok(Json(serde_json::json!({ "ok": true })))

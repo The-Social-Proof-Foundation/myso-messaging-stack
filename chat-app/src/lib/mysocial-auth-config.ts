@@ -6,9 +6,18 @@ export type ReadMySocialAuthConfigResult = {
   error: string | null;
 };
 
+function originHost(url: string): string | null {
+  try {
+    return new URL(url.trim()).host.toLowerCase();
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Read Vite env into createMySocialAuth config.
- * apiBaseUrl = salt service origin (/auth/refresh, /auth/logout).
+ * apiBaseUrl = salt service origin (/auth/refresh, /auth/logout) — must allow browser CORS.
+ * authOrigin = OAuth UI host only (not used for refresh).
  */
 export function readMySocialAuthConfig(): ReadMySocialAuthConfigResult {
   const apiBaseUrl = import.meta.env.VITE_MYSOCIAL_AUTH_API_BASE_URL;
@@ -37,14 +46,28 @@ export function readMySocialAuthConfig(): ReadMySocialAuthConfigResult {
     };
   }
 
+  // Common misconfig: apiBaseUrl = authOrigin → CORS blocks /auth/refresh from localhost.
+  const apiHost = originHost(apiBaseUrl);
+  const authHost = originHost(authOrigin);
+  if (apiHost && authHost && apiHost === authHost) {
+    console.warn(
+      '[mysocial-auth] VITE_MYSOCIAL_AUTH_API_BASE_URL matches AUTH_ORIGIN (' +
+        apiHost +
+        '). Refresh/logout must use the salt service (e.g. https://salt.testnet.mysocial.network), ' +
+        'not the auth UI host — otherwise browser CORS fails and sessions die at JWT expiry.',
+    );
+  }
+
   return {
     config: {
-      apiBaseUrl,
-      authOrigin,
+      apiBaseUrl: apiBaseUrl.trim().replace(/\/+$/, ''),
+      authOrigin: authOrigin.trim().replace(/\/+$/, ''),
       clientId,
       redirectUri,
       storage: createLocalStorageAdapter(),
-      proactiveRefresh: true,
+      // App owns proactive refresh in MySocialAuthContext — SDK timers leak across
+      // resetMySocialAuthInstance() and can race /auth/refresh (SessionRevoked).
+      proactiveRefresh: false,
     },
     error: null,
   };

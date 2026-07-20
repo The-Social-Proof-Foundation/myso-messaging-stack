@@ -351,6 +351,9 @@ pub trait StorageAdapter: Send + Sync {
 
     async fn update_presence(&self, wallet: &str) -> StorageResult<()>;
 
+    /// Clears last-seen after explicit logout / confirmed WS offline.
+    async fn clear_presence(&self, wallet: &str) -> StorageResult<()>;
+
     async fn get_presence_last_seen(&self, wallet: &str) -> StorageResult<Option<chrono::DateTime<chrono::Utc>>>;
 
     /// Postgres pool for cross-instance NOTIFY when this backend uses Postgres.

@@ -141,6 +141,8 @@ export class WSRelayerTransport {
 	readonly #maxReconnectAttempts: number;
 	readonly #WebSocket: typeof WebSocket;
 	#disconnected = false;
+	/** Live sockets — closed immediately on {@link disconnect} so presence goes offline. */
+	readonly #openSockets = new Set<WebSocket>();
 
 	constructor(config: WSRelayerTransportConfig) {
 		this.#relayerUrl = config.relayerUrl.replace(/\/+$/, '');
@@ -246,7 +248,12 @@ export class WSRelayerTransport {
 		signal: AbortSignal | undefined,
 		parseFrame: (data: string) => TEvent | null,
 	): AsyncIterable<TEvent> {
+		if (this.#disconnected) {
+			return;
+		}
+
 		const socket = new this.#WebSocket(wsUrl);
+		this.#openSockets.add(socket);
 		const messageQueue: TEvent[] = [];
 		let resolveNext: ((value: TEvent | typeof STREAM_END) => void) | undefined;
 		let streamEnded = false;
@@ -261,27 +268,37 @@ export class WSRelayerTransport {
 			}
 		};
 
+		const onAbort = () => {
+			socket.close();
+			if (resolveNext) {
+				resolveNext(STREAM_END);
+				resolveNext = undefined;
+			}
+			streamEnded = true;
+		};
+		signal?.addEventListener('abort', onAbort, { once: true });
+
 		const waitForOpen = new Promise<void>((resolve, reject) => {
 			const timer = setTimeout(() => {
 				reject(new WsConnectionError('WebSocket connect timed out'));
 			}, CONNECT_TIMEOUT_MS);
 
-			const onAbort = () => {
+			const onAbortDuringOpen = () => {
 				clearTimeout(timer);
 				socket.close();
 				reject(new DOMException('Aborted', 'AbortError'));
 			};
-			signal?.addEventListener('abort', onAbort, { once: true });
+			signal?.addEventListener('abort', onAbortDuringOpen, { once: true });
 
 			socket.onopen = () => {
 				clearTimeout(timer);
-				signal?.removeEventListener('abort', onAbort);
+				signal?.removeEventListener('abort', onAbortDuringOpen);
 				resolve();
 			};
 
 			socket.onerror = () => {
 				clearTimeout(timer);
-				signal?.removeEventListener('abort', onAbort);
+				signal?.removeEventListener('abort', onAbortDuringOpen);
 				reject(new WsConnectionError('WebSocket connection failed'));
 			};
 		});
@@ -299,6 +316,7 @@ export class WSRelayerTransport {
 		};
 
 		socket.onclose = () => {
+			this.#openSockets.delete(socket);
 			if (!streamEnded) {
 				if (resolveNext) {
 					resolveNext(STREAM_END);
@@ -335,6 +353,8 @@ export class WSRelayerTransport {
 				yield next;
 			}
 		} finally {
+			signal?.removeEventListener('abort', onAbort);
+			this.#openSockets.delete(socket);
 			const openState = this.#WebSocket.OPEN ?? 1;
 			const connectingState = this.#WebSocket.CONNECTING ?? 0;
 			if (socket.readyState === openState || socket.readyState === connectingState) {
@@ -345,5 +365,13 @@ export class WSRelayerTransport {
 
 	disconnect(): void {
 		this.#disconnected = true;
+		const openState = this.#WebSocket.OPEN ?? 1;
+		const connectingState = this.#WebSocket.CONNECTING ?? 0;
+		for (const socket of this.#openSockets) {
+			if (socket.readyState === openState || socket.readyState === connectingState) {
+				socket.close();
+			}
+		}
+		this.#openSockets.clear();
 	}
 }

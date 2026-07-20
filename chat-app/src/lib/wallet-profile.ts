@@ -140,7 +140,7 @@ export function groupNameLabelForRecipient(
 }
 
 /**
- * Join recipient labels with ", " until {@link GROUP_NAME_MAX_LENGTH}.
+ * Join member labels with ", " until {@link GROUP_NAME_MAX_LENGTH}.
  * Fits as many full labels as possible; never truncates mid-label except a
  * single oversized first label.
  */
@@ -158,4 +158,113 @@ export function buildAutoGroupName(
     name = next;
   }
   return name;
+}
+
+function normalizeGroupNameLabel(label: string): string {
+  return label.trim().replace(/^@/, '').toLowerCase();
+}
+
+/**
+ * Labels that identify the signed-in user in an official group name
+ * (`@username` and/or abbreviated wallet).
+ */
+export function selfGroupNameLabels(
+  address: string | null | undefined,
+  profile: WalletProfile | null | undefined,
+): string[] {
+  if (!address) return [];
+  const labels: string[] = [];
+  const username = profile?.username?.trim();
+  if (username) {
+    labels.push(`@${username.replace(/^@/, '')}`);
+  }
+  labels.push(truncateWalletAddress(address));
+  const seen = new Set<string>();
+  return labels.filter((label) => {
+    const key = normalizeGroupNameLabel(label);
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+/**
+ * UI title from the official on-chain name with the current user's segment(s)
+ * removed so DMs show the other person, not yourself.
+ * Falls back to `officialName` when filtering would leave an empty string
+ * (legacy names that were only the viewer's label).
+ */
+export function displayGroupTitle(
+  officialName: string,
+  selfLabels: readonly string[],
+): string {
+  const trimmed = officialName.trim();
+  if (!trimmed) return 'New Group';
+  if (selfLabels.length === 0) return trimmed;
+
+  const selfKeys = new Set(
+    selfLabels.map(normalizeGroupNameLabel).filter(Boolean),
+  );
+  const parts = trimmed
+    .split(', ')
+    .map((p) => p.trim())
+    .filter(Boolean);
+  const others = parts.filter(
+    (part) => !selfKeys.has(normalizeGroupNameLabel(part)),
+  );
+  if (others.length === 0) return trimmed;
+  return others.join(', ');
+}
+
+/**
+ * The single peer wallet in a 1:1 chat, or `null` when membership is unknown
+ * or this is a multi-member group.
+ */
+export function dmPeerAddress(
+  memberAddresses: readonly string[],
+  selfAddress: string | null | undefined,
+): string | null {
+  if (!selfAddress || memberAddresses.length === 0) return null;
+  const selfKey = selfAddress.toLowerCase();
+  const others = memberAddresses.filter(
+    (addr) => addr.toLowerCase() !== selfKey,
+  );
+  return others.length === 1 ? others[0]! : null;
+}
+
+/**
+ * Sidebar / chat-header title.
+ * True 1:1 dialogues always show the other member's label (profile / wallet),
+ * never the logged-in user — even when the on-chain name is only self.
+ * Multi-member groups keep {@link displayGroupTitle}.
+ */
+export function conversationDisplayTitle(options: {
+  officialName: string;
+  selfLabels: readonly string[];
+  memberAddresses: readonly string[];
+  selfAddress: string | null | undefined;
+  /** Preferred peer label (`@username` / display name / truncated wallet). */
+  peerLabel?: string | null;
+}): string {
+  const peer = dmPeerAddress(options.memberAddresses, options.selfAddress);
+  if (peer) {
+    const label = options.peerLabel?.trim();
+    return label || truncateWalletAddress(peer);
+  }
+  return displayGroupTitle(options.officialName, options.selfLabels);
+}
+
+/** Deduplicate MySo addresses (case-insensitive), preserving order. */
+export function dedupeAddresses(addresses: readonly string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of addresses) {
+    const addr = raw.trim();
+    if (!addr) continue;
+    const key = addr.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(addr);
+  }
+  return out;
 }

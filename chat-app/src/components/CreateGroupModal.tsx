@@ -8,6 +8,7 @@ import {
 import { signAndExecuteTransactionAndWait } from '../lib/sign-and-wait';
 import { addStoredGroup } from '../lib/group-store';
 import { formatCreateGroupError } from '../lib/format-create-group-error';
+import { grantDefaultPeerPermissions } from '../lib/grant-default-peer-permissions';
 import { waitForGroupReady } from '../lib/wait-for-relayer-membership';
 import {
   assertMemoryRegistryConfigured,
@@ -25,6 +26,7 @@ import {
 import {
   PROFILE_FULL_QUERY,
   buildAutoGroupName,
+  dedupeAddresses,
   groupNameLabelForRecipient,
   mapGraphqlProfile,
 } from '../lib/wallet-profile';
@@ -110,7 +112,11 @@ export function CreateGroupModal({
     setLoading(true);
 
     try {
-      const groupName = await resolveGroupName(initialMembers);
+      const sender = signer.toMySoAddress();
+      // Official name: recipients first, then creator (all members), ≤128 chars.
+      const groupName = await resolveGroupName(
+        dedupeAddresses([...initialMembers, sender]),
+      );
       const uuid = crypto.randomUUID();
 
       // Fresh client so packageConfig matches live genesis (not a stale init snapshot).
@@ -131,8 +137,6 @@ export function CreateGroupModal({
       await verifyCreateGroupObjectsOnRpc('create-group', expectedObjects, client);
       await logMyDataKeyServers('create-group', client);
       await logSignerGasCoins('create-group', client, signer);
-
-      const sender = signer.toMySoAddress();
 
       // New 1:1 DM: advisory paid-DM gate pre-check. The relayer enforces
       // authoritatively on first send (402), this just avoids a doomed create.
@@ -197,6 +201,17 @@ export function CreateGroupModal({
         groupId,
         uuid,
         memberAddress: sender,
+      });
+
+      // Peers only get MessagingReader on-chain at create — grant send/edit/
+      // delete/handle/metadata so they can collaborate by default.
+      await grantDefaultPeerPermissions({
+        client,
+        signer,
+        groupId,
+        peers: initialMembers.filter(
+          (addr) => addr.toLowerCase() !== sender.toLowerCase(),
+        ),
       });
 
       addStoredGroup({
@@ -308,6 +323,13 @@ export function CreateGroupModal({
         groupId,
         uuid,
         memberAddress: sender,
+      });
+
+      await grantDefaultPeerPermissions({
+        client,
+        signer,
+        groupId,
+        peers: [pendingPaidDm.recipient],
       });
 
       addStoredGroup({

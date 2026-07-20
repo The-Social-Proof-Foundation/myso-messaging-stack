@@ -2,10 +2,12 @@ import { useEffect, useState } from 'react';
 import type { AuthResultMessage } from '../lib/auth-session-build';
 import {
   buildSessionFromAuthResult,
+  rejectNonRefreshableSession,
   SESSION_CANNOT_REFRESH_MESSAGE,
   sessionLacksRefreshToken,
 } from '../lib/auth-session-build';
 import { getMySocialAuth } from '../lib/mysocial-auth-client';
+import { removeAuthSession } from '../lib/mysocial-auth-storage';
 
 async function handlePopupFallback(): Promise<boolean> {
   if (typeof BroadcastChannel === 'undefined') return false;
@@ -67,10 +69,22 @@ async function handlePopupFallback(): Promise<boolean> {
   };
 
   // Validate payload shape before broadcasting (main window stores via listener)
-  if (!buildSessionFromAuthResult(authResult)) {
+  const built = buildSessionFromAuthResult(authResult);
+  if (!built) {
     channel.postMessage({
       type: 'MYSOCIAL_AUTH_ERROR',
       error: 'Invalid auth result payload',
+      state: state || '',
+    });
+    channel.close();
+    window.close();
+    return true;
+  }
+
+  if (sessionLacksRefreshToken(built)) {
+    channel.postMessage({
+      type: 'MYSOCIAL_AUTH_ERROR',
+      error: SESSION_CANNOT_REFRESH_MESSAGE,
       state: state || '',
     });
     channel.close();
@@ -108,13 +122,15 @@ export default function AuthCallback() {
       try {
         const session = await auth.handleRedirectCallback();
         if (sessionLacksRefreshToken(session)) {
-          console.warn(
-            '[MySocialAuth] Redirect session has no refresh_token; access JWT will expire in ~30 minutes without renewing.',
+          console.error(
+            '[MySocialAuth] Redirect session has no refresh_token; clearing session.',
           );
+          await rejectNonRefreshableSession(session);
+          removeAuthSession();
           if (!cancelled) {
             setError(SESSION_CANNOT_REFRESH_MESSAGE);
-            return;
           }
+          return;
         }
         window.dispatchEvent(new CustomEvent('mysocial-auth-session-changed'));
         if (cancelled) return;

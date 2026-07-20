@@ -7,7 +7,7 @@ import {
   getMySocialAuth,
   resetMySocialAuthInstance,
 } from './mysocial-auth-client';
-import { setAuthSessionRaw } from './mysocial-auth-storage';
+import { removeAuthSession, setAuthSessionRaw } from './mysocial-auth-storage';
 
 /** Shape of MYSOCIAL_AUTH_RESULT from BroadcastChannel / popup fallback. */
 export type AuthResultMessage = {
@@ -24,11 +24,49 @@ export type AuthResultMessage = {
 export const SESSION_CANNOT_REFRESH_MESSAGE =
   'Session cannot be refreshed — sign in again';
 
+/** Match @socialproof/mysocial-auth REFRESH_BUFFER_MS (refresh ~2 min before expiry). */
+export const REFRESH_BUFFER_MS = 120_000;
+
 /** OAuth sessions need a refresh_token for ~30-day continuity (access JWT is ~30 min). */
 export function sessionLacksRefreshToken(session: Session | null | undefined): boolean {
   if (!session) return false;
   if (isTrueWalletOnlySession(session)) return false;
   return !session.refresh_token?.trim();
+}
+
+function decodeJwtExpMs(jwt: string | undefined): number | undefined {
+  if (!jwt?.trim()) return undefined;
+  try {
+    const parts = jwt.trim().split('.');
+    if (parts.length !== 3 || !parts[1]) return undefined;
+    const base64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+    const padded = base64.padEnd(
+      base64.length + ((4 - (base64.length % 4)) % 4),
+      '=',
+    );
+    const payload = JSON.parse(atob(padded)) as { exp?: unknown };
+    if (typeof payload.exp !== 'number' || !Number.isFinite(payload.exp)) {
+      return undefined;
+    }
+    return payload.exp * 1000;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Earliest of session.expires_at and session_access_token JWT exp (when decodable).
+ * Aligns app proactive refresh with SDK getSession() behavior.
+ */
+export function getEffectiveExpiryMs(session: Session): number {
+  const jwtMs = decodeJwtExpMs(session.session_access_token);
+  if (jwtMs != null) return Math.min(session.expires_at, jwtMs);
+  return session.expires_at;
+}
+
+/** Delay until we should call getSession() to renew (clamped ≥ 0). */
+export function msUntilProactiveRefresh(session: Session): number {
+  return Math.max(0, getEffectiveExpiryMs(session) - Date.now() - REFRESH_BUFFER_MS);
 }
 
 /**
@@ -86,9 +124,10 @@ export function storeBroadcastAuthSession(msg: AuthResultMessage): boolean {
   }
 
   if (sessionLacksRefreshToken(session)) {
-    console.warn(
-      '[MySocialAuth] Broadcast session has no refresh_token; access JWT will expire in ~30 minutes without renewing.',
+    console.error(
+      '[MySocialAuth] Broadcast session has no refresh_token; refusing to persist.',
     );
+    return false;
   }
 
   try {
@@ -102,4 +141,22 @@ export function storeBroadcastAuthSession(msg: AuthResultMessage): boolean {
     console.error('Failed to store broadcast auth session:', err);
     return false;
   }
+}
+
+/** Clear a non-refreshable OAuth session from storage (and notify SDK if present). */
+export async function rejectNonRefreshableSession(
+  session: Session | null | undefined,
+): Promise<boolean> {
+  if (!sessionLacksRefreshToken(session)) return false;
+  const auth = getMySocialAuth();
+  try {
+    if (auth) {
+      await auth.signOut();
+    }
+  } catch {
+    // ignore remote logout failures
+  } finally {
+    removeAuthSession();
+  }
+  return true;
 }

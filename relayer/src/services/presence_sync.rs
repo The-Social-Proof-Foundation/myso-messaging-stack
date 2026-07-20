@@ -10,8 +10,9 @@
 //! Fan-out targets every group the wallet belongs to via
 //! `MembershipStore::groups_for_member`; cross-instance delivery uses a single
 //! `presence.changed` NOTIFY that each instance expands through its own
-//! membership store. Presence is ephemeral — never persisted (the existing
-//! `presence` last-seen table for push gating is unrelated and unchanged).
+//! membership store. Live online is ephemeral (in-memory registry). Storage
+//! last-seen remains for “last online …” labels and push gating; explicit
+//! logout clears it via `POST /devices/presence` with `active: false`.
 
 use std::collections::HashMap;
 use std::sync::RwLock;
@@ -26,6 +27,10 @@ use crate::state::AppState;
 /// this window suppresses the offline event entirely.
 const OFFLINE_GRACE: Duration = Duration::from_secs(10);
 
+fn wallet_key(wallet: &str) -> String {
+    wallet.to_ascii_lowercase()
+}
+
 /// Refcount of live WebSocket connections per wallet.
 #[derive(Default)]
 pub struct PresenceRegistry {
@@ -39,20 +44,22 @@ impl PresenceRegistry {
 
     /// Registers a connection. Returns `true` on the 0->1 (online) transition.
     pub fn connect(&self, wallet: &str) -> bool {
+        let key = wallet_key(wallet);
         let mut connections = self.connections.write().expect("presence registry poisoned");
-        let count = connections.entry(wallet.to_string()).or_insert(0);
+        let count = connections.entry(key).or_insert(0);
         *count += 1;
         *count == 1
     }
 
     /// Unregisters a connection. Returns `true` on the 1->0 (offline) transition.
     pub fn disconnect(&self, wallet: &str) -> bool {
+        let key = wallet_key(wallet);
         let mut connections = self.connections.write().expect("presence registry poisoned");
-        match connections.get_mut(wallet) {
+        match connections.get_mut(&key) {
             Some(count) => {
                 *count = count.saturating_sub(1);
                 if *count == 0 {
-                    connections.remove(wallet);
+                    connections.remove(&key);
                     true
                 } else {
                     false
@@ -63,8 +70,9 @@ impl PresenceRegistry {
     }
 
     pub fn is_online(&self, wallet: &str) -> bool {
+        let key = wallet_key(wallet);
         let connections = self.connections.read().expect("presence registry poisoned");
-        connections.get(wallet).copied().unwrap_or(0) > 0
+        connections.get(&key).copied().unwrap_or(0) > 0
     }
 }
 

@@ -849,10 +849,13 @@ export function MessageBubble({
         })
       : null;
 
+  const showOwnEditDelete =
+    isOwnMessage && !editing && Boolean(onEdit || onDelete);
+
   return (
     <div
       data-message-order={message.order}
-      className={`group flex min-w-0 max-w-full px-4 ${
+      className={`group/msg flex min-w-0 max-w-full px-4 ${
         isFirstInGroup ? 'mt-2.5' : 'mt-0.5'
       } ${isOwnMessage ? 'justify-end' : 'justify-start'}`}
     >
@@ -899,14 +902,15 @@ export function MessageBubble({
         >
           {/* Content + overlays — reactions track image + text column */}
           <div className="relative w-fit max-w-full">
-            {/* Mid-cluster time (+ own edit/delete): hover only, beside bubble */}
-            {!isLastInGroup && (
+            {/* Hover chrome beside the bubble (left of own messages) — avoids
+                sitting under the avatar in the meta row. */}
+            {(showOwnEditDelete || !isLastInGroup) && (
               <div
-                className={`absolute top-1/2 z-10 flex -translate-y-1/2 items-center gap-2 whitespace-nowrap text-[11px] text-secondary-400 opacity-0 transition-opacity duration-150 group-hover:opacity-100 dark:text-secondary-500 ${
+                className={`absolute top-1/2 z-30 flex -translate-y-1/2 items-center gap-2 whitespace-nowrap text-[11px] text-secondary-400 opacity-0 transition-opacity duration-150 group-hover/msg:opacity-100 group-focus-within/msg:opacity-100 dark:text-secondary-500 ${
                   isOwnMessage ? 'right-full mr-2' : 'left-full ml-2'
                 }`}
               >
-                {isOwnMessage && !editing && (onEdit || onDelete) && (
+                {showOwnEditDelete && (
                   <span className="inline-flex items-center gap-2.5">
                     {onEdit && (
                       <button
@@ -933,10 +937,12 @@ export function MessageBubble({
                     )}
                   </span>
                 )}
-                <span className="pointer-events-none">
-                  {timeLabel}
-                  {editedSuffix ? <> {editedSuffix}</> : null}
-                </span>
+                {!isLastInGroup && (
+                  <span className="pointer-events-none">
+                    {timeLabel}
+                    {editedSuffix ? <> {editedSuffix}</> : null}
+                  </span>
+                )}
               </div>
             )}
 
@@ -1087,33 +1093,6 @@ export function MessageBubble({
             >
               {isOwnMessage ? (
                 <>
-                  {!editing && (onEdit || onDelete) && (
-                    <span className="mr-0.5 inline-flex items-center gap-2.5 opacity-0 transition-opacity duration-150 group-hover:opacity-100">
-                      {onEdit && (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setEditText(message.text);
-                            setEditing(true);
-                          }}
-                          className="border-0 bg-transparent p-0 text-xs leading-none text-secondary-400 hover:text-bubble-sent dark:text-secondary-500 dark:hover:text-bubble-sent-dark"
-                          title="Edit"
-                        >
-                          ✎
-                        </button>
-                      )}
-                      {onDelete && (
-                        <button
-                          type="button"
-                          onClick={() => setShowDeleteConfirm(true)}
-                          className="border-0 bg-transparent p-0 text-xs leading-none text-secondary-400 hover:text-danger-500 dark:text-secondary-500 dark:hover:text-danger-400"
-                          title="Delete"
-                        >
-                          ✕
-                        </button>
-                      )}
-                    </span>
-                  )}
                   {verifiedCheck}
                   <span>{timeLabel}</span>
                   {editedSuffix}
@@ -1122,8 +1101,10 @@ export function MessageBubble({
                 <>
                   {senderLabel && (
                     <span
-                      className={`font-medium text-secondary-500 dark:text-secondary-400 ${
-                        senderLabelIsWallet ? 'font-mono' : ''
+                      className={`font-sans font-medium tracking-tight text-secondary-500 dark:text-secondary-400 ${
+                        senderLabelIsWallet
+                          ? 'text-[10px] tabular-nums'
+                          : 'text-[11px]'
                       }`}
                       title={message.senderAddress ?? undefined}
                     >

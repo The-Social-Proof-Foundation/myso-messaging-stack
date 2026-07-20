@@ -36,7 +36,7 @@ export function ProfileDropdown() {
         <button
           type="button"
           aria-label="Open profile menu"
-          className="inline-flex shrink-0 items-center justify-center rounded-full border-0 bg-transparent p-0 outline-none ring-offset-2 focus-visible:ring-2 focus-visible:ring-primary-500"
+          className="inline-flex shrink-0 items-center justify-center rounded-full border-0 bg-transparent p-0 outline-none ring-0 focus:outline-none focus:ring-0 focus-visible:outline-none focus-visible:ring-0 [-webkit-tap-highlight-color:transparent]"
         >
           <ReservationNavAvatar
             address={connectedAddress}

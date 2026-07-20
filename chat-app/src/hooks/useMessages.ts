@@ -36,9 +36,14 @@ import {
   applySnapshotEntries,
   applyWsPresence,
   presenceRecordsToOnlineMap,
-  sweepStaleWsPresence,
   type PresenceRecord,
 } from '../lib/presence-utils';
+import {
+  getCachedThread,
+  setCachedThread,
+  type CachedMessage,
+} from '../lib/message-session-cache';
+import { publishSidebarMessagePreview } from './useSidebarMessagePreviews';
 
 export interface Message {
   messageId: string;
@@ -80,6 +85,8 @@ export interface UseMessagesResult {
   typingMembers: string[];
   /** Online state per member (presence snapshot + live events). */
   onlineMembers: Map<string, boolean>;
+  /** Full presence records (includes lastSeenAt for offline peers). */
+  presenceRecords: Map<string, PresenceRecord>;
   /**
    * Relayer read watermark at open time (exclusive). Messages with
    * `order > initialReadUpto` are unread for initial scroll positioning.
@@ -316,21 +323,29 @@ export function useMessages(
   }, [messages]);
 
   // ------------------------------------------------------------------
-  // Load initial messages
+  // Load initial messages (stale-while-revalidate via session memory cache)
   // ------------------------------------------------------------------
   useEffect(() => {
-    setMessages([]);
-    setLoading(true);
+    const cached = getCachedThread(uuid);
+    if (cached) {
+      setMessages(cached.messages as Message[]);
+      setHasMore(cached.hasMore);
+      setReactions(cached.reactions);
+      setLoading(false);
+    } else {
+      setMessages([]);
+      setHasMore(false);
+      setReactions(new Map());
+      setLoading(true);
+    }
     setError(null);
-    setHasMore(false);
     setInitialReadUpto(0);
-    setReactions(new Map());
     setTypingUntil(new Map());
     setPresenceRecords(new Map());
     setPaymentRequired(null);
     setPaymentError(null);
     pendingPaidSendRef.current = null;
-    lastOrderRef.current = undefined;
+    lastOrderRef.current = cached?.messages.at(-1)?.order;
     lastSentReadUptoRef.current = 0;
 
     let cancelled = false;
@@ -377,20 +392,48 @@ export function useMessages(
           }
         }
 
+        // Keep any deeper pages already in the session cache when reconciling
+        // the latest page from the server.
+        if (cached && cached.messages.length > 0) {
+          initial = mergeMessages(cached.messages as Message[], initial);
+        }
+
+        let nextHasMore = result.hasNext;
+        if (cached && cached.messages.length > 0 && result.messages.length > 0) {
+          const oldestFetched = Math.min(
+            ...result.messages.map((m) => m.order),
+          );
+          const hasOlderCached = cached.messages.some(
+            (m) => m.order < oldestFetched,
+          );
+          if (hasOlderCached) {
+            nextHasMore = cached.hasMore;
+          }
+        }
+
         setMessages(initial);
-        setHasMore(result.hasNext);
+        setHasMore(nextHasMore);
 
         // One listing covers all messages in the group (including older pages).
+        let nextReactions: MessageReactions = new Map();
         try {
           const rows = await client.messaging.listReactions({
             signer,
             groupRef: {uuid},
           });
           if (cancelled || uuidRef.current !== uuid) return;
-          setReactions(groupReactionsByOrder(rows));
+          nextReactions = groupReactionsByOrder(rows);
+          setReactions(nextReactions);
         } catch (err) {
           console.warn('Failed to load reactions:', err);
+          if (cached) nextReactions = cached.reactions;
         }
+
+        setCachedThread(uuid, {
+          messages: initial as CachedMessage[],
+          hasMore: nextHasMore,
+          reactions: nextReactions,
+        });
 
         // Presence snapshot; live transitions arrive on the group stream.
         try {
@@ -422,6 +465,20 @@ export function useMessages(
       cancelled = true;
     };
   }, [uuid, groupId, client, signer, recoveryEnabled]);
+
+  // Write-through: keep session cache warm across remounts (subscribe/send/edit/pages).
+  useEffect(() => {
+    if (loading && messages.length === 0) return;
+    setCachedThread(uuid, {
+      messages: messages as CachedMessage[],
+      hasMore,
+      reactions,
+    });
+    const tip = messages[messages.length - 1];
+    if (tip && groupId) {
+      publishSidebarMessagePreview(groupId, tip);
+    }
+  }, [uuid, groupId, messages, hasMore, reactions, loading]);
 
   // ------------------------------------------------------------------
   // Real-time subscription (messages, reactions, typing, presence)
@@ -500,7 +557,7 @@ export function useMessages(
     };
   }, [uuid, client, signer, loading, resyncPresence]);
 
-  // Periodic presence reconciliation + stale WS sweep.
+  // Periodic presence reconciliation (snapshot). Live transitions arrive via WS.
   useEffect(() => {
     if (loading) return;
 
@@ -508,13 +565,8 @@ export function useMessages(
       resyncPresence().then();
     }, 30_000);
 
-    const sweepTimer = setInterval(() => {
-      setPresenceRecords((prev) => sweepStaleWsPresence(prev));
-    }, 5_000);
-
     return () => {
       clearInterval(reconcileTimer);
-      clearInterval(sweepTimer);
     };
   }, [loading, resyncPresence]);
 
@@ -1020,6 +1072,7 @@ export function useMessages(
     reactions,
     typingMembers: [...typingUntil.keys()],
     onlineMembers,
+    presenceRecords,
     initialReadUpto,
     sendMessage,
     editMessage,

@@ -24,6 +24,9 @@ import { TypingIndicator } from './TypingIndicator';
 import { AdminPanel } from './AdminPanel';
 import { PaymentConfirmDialog } from './PaymentConfirmDialog';
 import { useGroupMemberLabels } from '../hooks/useGroupMemberLabels';
+import { useDisplayGroupTitle } from '../hooks/useDisplayGroupTitle';
+import { dmPeerPresenceStatus } from '../lib/presence-utils';
+import { dmPeerAddress } from '../lib/wallet-profile';
 
 interface ChatAreaProps {
   selectedGroup: StoredGroup | null;
@@ -81,7 +84,10 @@ export function ChatArea({
   if (!selectedGroup.uuid) {
     return (
       <div className="flex flex-1 flex-col">
-        <ChatHeader name={selectedGroup.name} onMobileBack={onMobileBack} />
+        <DisplayChatHeader
+          officialName={selectedGroup.name}
+          onMobileBack={onMobileBack}
+        />
         <div className="flex flex-1 items-center justify-center px-8 text-center">
           <p className="text-sm text-secondary-400 dark:text-secondary-500">
             This group was discovered via on-chain events.
@@ -106,9 +112,34 @@ export function ChatArea({
   );
 }
 
+type DmPresenceView =
+  | { kind: 'online' }
+  | { kind: 'lastOnline'; label: string }
+  | null;
+
+/** Header title: 1:1 → peer label; groups → official name minus self. */
+function DisplayChatHeader(
+  props: Readonly<{
+    officialName: string;
+    memberAddresses?: readonly string[];
+    dmPresence?: DmPresenceView;
+    permissionsLoading?: boolean;
+    onToggleAdmin?: () => void;
+    adminPanelOpen?: boolean;
+    onMobileBack?: () => void;
+    recoveryEnabled?: boolean;
+    restoring?: boolean;
+    onRestoreHistory?: () => void;
+  }>,
+) {
+  const { officialName, memberAddresses = [], ...rest } = props;
+  const name = useDisplayGroupTitle(officialName, memberAddresses);
+  return <ChatHeader name={name} {...rest} />;
+}
+
 function ChatHeader({
   name,
-  onlineCount,
+  dmPresence,
   permissionsLoading,
   onToggleAdmin,
   adminPanelOpen,
@@ -118,7 +149,7 @@ function ChatHeader({
   onRestoreHistory,
 }: Readonly<{
   name: string;
-  onlineCount?: number;
+  dmPresence?: DmPresenceView;
   permissionsLoading?: boolean;
   onToggleAdmin?: () => void;
   adminPanelOpen?: boolean;
@@ -154,15 +185,16 @@ function ChatHeader({
           <span className="text-[11px] leading-none text-secondary-400 dark:text-secondary-500">
             Checking permissions…
           </span>
-        ) : (
-          onlineCount !== undefined &&
-          onlineCount > 0 && (
-            <span className="flex items-center justify-center gap-1.5 text-[11px] leading-none text-secondary-400 dark:text-secondary-500">
-              <span className="inline-block h-1.5 w-1.5 rounded-full bg-green-500" />
-              {onlineCount} online
-            </span>
-          )
-        )}
+        ) : dmPresence?.kind === 'online' ? (
+          <span className="flex items-center justify-center gap-1.5 text-[11px] leading-none text-secondary-400 dark:text-secondary-500">
+            <span className="inline-block h-1.5 w-1.5 rounded-full bg-green-500" />
+            online
+          </span>
+        ) : dmPresence?.kind === 'lastOnline' ? (
+          <span className="text-[11px] leading-none text-secondary-400 dark:text-secondary-500">
+            last online {dmPresence.label}
+          </span>
+        ) : null}
       </div>
       <div className="absolute right-2 top-1/2 z-10 flex -translate-y-1/2 items-center gap-1 md:right-4">
         {recoveryEnabled && onRestoreHistory ? (
@@ -240,6 +272,7 @@ function ChatView({
     reactions,
     typingMembers,
     onlineMembers,
+    presenceRecords,
     initialReadUpto,
     sendMessage,
     editMessage,
@@ -292,6 +325,17 @@ function ChatView({
     label: profileLabelFor(address) || labelFor(address),
     avatarSrc: photoFor(address),
   }));
+
+  const dmPresence = useMemo((): DmPresenceView => {
+    const peer = dmPeerAddress(memberAddresses, myAddress);
+    if (!peer) return null;
+    const status = dmPeerPresenceStatus(presenceRecords, peer);
+    if (status.kind === 'online') return { kind: 'online' };
+    if (status.kind === 'lastOnline') {
+      return { kind: 'lastOnline', label: status.label };
+    }
+    return null;
+  }, [memberAddresses, myAddress, presenceRecords]);
 
   const [leaving, setLeaving] = useState(false);
   const [leaveError, setLeaveError] = useState<string | null>(null);
@@ -444,9 +488,10 @@ function ChatView({
         className="relative flex min-w-0 flex-1 flex-col overflow-x-hidden overflow-y-auto"
       >
         <div className="sticky top-0 z-30">
-          <ChatHeader
-            name={group.name}
-            onlineCount={[...onlineMembers.values()].filter(Boolean).length}
+          <DisplayChatHeader
+            officialName={group.name}
+            memberAddresses={memberAddresses}
+            dmPresence={dmPresence}
             permissionsLoading={permissionsLoading}
             onToggleAdmin={() => setAdminPanelOpen((o) => !o)}
             adminPanelOpen={adminPanelOpen}
@@ -518,7 +563,9 @@ function ChatView({
                   message={msg}
                   isOwnMessage={isOwn}
                   onEdit={isOwn && permissions.canEdit ? editMessage : undefined}
-                  onDelete={isOwn && permissions.canDelete ? deleteMessage : undefined}
+                  onDelete={
+                    isOwn && permissions.canDelete ? deleteMessage : undefined
+                  }
                   reactions={reactions.get(msg.order)}
                   onToggleReaction={
                     permissions.canSend ? toggleReaction : undefined

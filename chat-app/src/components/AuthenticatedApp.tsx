@@ -10,9 +10,7 @@ import { useRegisterCreateMessageHandler } from '../contexts/CreateMessageContex
 import { useMobileChatNav } from '../contexts/MobileChatNavContext';
 import { useAuthenticatedAddress, useMySocialAuth } from '../contexts/MySocialAuthContext';
 import { useIsMobileNav } from '../hooks/useMediaQuery';
-import { AgentConversationsPanel } from './AgentConversationsPanel';
 import { AgentDevSendPanel } from './AgentDevSendPanel';
-import { useAgentConversations } from '../hooks/useAgentConversations';
 import {
   getSelectedGroupKey,
   setSelectedGroupKey,
@@ -27,8 +25,6 @@ export function AuthenticatedApp({
 }: Readonly<AuthenticatedAppProps>) {
   const address = useAuthenticatedAddress();
   const { keypair } = useMySocialAuth();
-
-  const agentConversations = useAgentConversations();
 
   const {
     groups,
@@ -63,6 +59,7 @@ export function AuthenticatedApp({
   const { setHideAppHeader } = useMobileChatNav();
   const mobileChatOpen = isMobileNav && Boolean(selectedUuid);
 
+  // Hide AppHeader only while a mobile chat thread is open.
   useEffect(() => {
     setHideAppHeader(mobileChatOpen);
     return () => setHideAppHeader(false);
@@ -159,20 +156,10 @@ export function AuthenticatedApp({
             groups={sortedGroups}
             selectedUuid={selectedUuid}
             unreadCounts={activity.counts}
+            latestOrders={activity.latestOrders}
             paidDmGroupIds={paidDmGroupIds}
             onSelectGroup={selectGroup}
             loading={discoveryLoading}
-            agentPanel={
-              <AgentConversationsPanel
-                conversations={agentConversations.conversations}
-                loading={agentConversations.loading}
-                error={agentConversations.error}
-                onSelectGroup={(groupId) => {
-                  const match = groups.find((g) => g.groupId === groupId);
-                  selectGroup(match?.uuid ?? groupId);
-                }}
-              />
-            }
           />
         </div>
         <div

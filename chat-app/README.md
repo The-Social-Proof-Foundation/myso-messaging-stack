@@ -143,7 +143,8 @@ The app follows a 3-layer architecture:
 - **Group discovery via MySo GraphQL** — query `MemberAdded`/`MemberRemoved` events from the indexer, cached in localStorage for instant sidebar rendering
 - **Tier 1 session keys** — `encryption.sessionKey: { signer }` passes the derived `Ed25519Keypair` to the SDK (`SessionKey` + certificate flow is fully signer-driven)
 - **Atomic PTBs via SDK `call` layer** — composed admin operations in single transactions
-- **Distributed state** — React component state + localStorage caching (no centralized store needed)
+- **Distributed state** — React component state + localStorage caching for group metadata (no centralized store needed)
+- **In-session message plaintext cache** — decrypted threads stay in a RAM-only module Map for the tab session (stale-while-revalidate on group switch). Never written to disk; cleared when the messaging client tears down on logout. Attachment bytes are not cached.
 
 ---
 

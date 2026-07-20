@@ -23,6 +23,7 @@ Config: `MESSAGING_RELAYER_URL` in xcconfig / Info.plist as **host only** (e.g. 
 | Messages | `/messages` or `/v1/messages` (signed CRUD) |
 | User feed (wake) | `GET /v1/users/ws` (WebSocket, metadata only) |
 | Group realtime | `GET /v1/ws` (WebSocket, full encrypted wire JSON) |
+| Unread counts | `POST /v1/users/unread-counts` (body-signed batch) |
 | Read state | `GET/PUT /v1/users/read-state` |
 | Push token | `POST/DELETE /v1/devices/push-tokens` |
 | Presence | `POST /v1/devices/presence` |
@@ -69,9 +70,11 @@ Canonical: `{timestamp}:{sender_address}:{group_id}` plus optional `after_order`
 ## Unread badges
 
 1. `GET /v1/users/read-state` → decrypt blob → `readUpto` per group
-2. Fetch message heads → compute `unread = messages after readUpto`
-3. On thread open → merge blob → `PUT /v1/users/read-state`
+2. `POST /v1/users/unread-counts` with `{ items: [{ group_id, after_order }] }` → exact batch counts (preferred over paging message heads)
+3. On thread open → merge blob → `PUT /v1/users/read-state` (optional `expected_version` for CAS)
 4. Foreground: user-feed `group.activity` / `read_state.updated` wakes recompute (no ciphertext on the socket)
+
+iOS: `MessagingRelayerHTTPClient.fetchUnreadCounts` / `getUserReadState` / `putUserReadState` / `fetchMessages`.
 
 ## Push wake flow
 
@@ -148,10 +151,64 @@ SOCIAL_SERVER_URL=https://...
 | Type | Role |
 |------|------|
 | `WebSocketConnection` | Shared transport (ping, reconnect) |
-| `MessagingRelayerAuth` | Personal-message sign + query/header auth |
+| `MessagingRelayerAuth` | Personal-message sign + WS query + wallet/group/body REST auth |
 | `MessagingUserFeedService` | `/v1/users/ws` + typed events |
-| `MessagingSyncHub` | Extension points for unread / discovery |
-| `MessagingRelayerHTTPClient` | Stub for signed REST |
-| `MessagingGroupFeedService` | Stub for `/v1/ws` |
+| `MessagingSyncHub` | User-feed wakes → inbox callbacks |
+| `MessagingRelayerHTTPClient` | Signed REST via `Network.requestMessagingRelayer` |
+| `MessagingInboxService` | Singleton: discovery, unread, store (survives tab unmount) |
+| `MessagingGroupStore` | UserDefaults conversation cache |
+| `MessagingMessageStore` | Durable sealed thread history (Keychain vault key + AES-GCM Application Support files) |
+| `MessagingGroupDiscovery` | GraphQL `MemberAdded` / `MemberRemoved` net membership |
+| `MessagingGroupMetadata` | On-chain Metadata name/uuid via MySoKit dynamic fields |
+| `MessagingProfileResolver` | Wallet → GraphQL `ProfileFull` (username, displayName, photo, SPT address, reservation %); indexer fallback; `@username` via search then ProfileFull |
+| `MessagingAvatarView` | Shared list/bubble avatar + SPT ring |
+| `ChatTabView` / list / thread / detail | UIKit Messages tab: list → thread (nav `info.circle` → detail); encrypt send; typing; image bubbles; linkified URLs |
+| `MyDataCrypto` (SPM) | Native Swift MyData + messaging envelope encrypt/decrypt (blst BLS) |
+| `Services/MyData/*` | SessionKey, key-server HTTP, approve PTB, `MyDataClient` |
+| `MessagingEncryptionService` | DEK cache + EncryptionHistory + AES-GCM/AAD encrypt & decrypt + attachment meta/images |
+| `MessagingFileStorageClient` | Lazy `GET` File Storage aggregator quilt-patch download |
 
-Mirror the TypeScript SDK contracts in `auth-headers.ts` / `ws-transport.ts`. Ensure the messaging-relayer binary includes `/v1/users/ws` (stale release builds previously 401'd browser clients).
+### MyData decrypt (on-device)
+
+Canonical protocol: TypeScript `@socialproof/mydata`. Crypto lives in `myso-swift-kit` product `MyDataCrypto` (`Sources/MyDataCrypto`, portable blst + protocol port). DripDrop links the local package at `../myso-swift-kit`. **Milestone 0 gate:** TS-generated `EncryptedObject` → Swift DEK byte-for-byte (`swift test --filter MyDataCryptoTests` in `myso-swift-kit`).
+
+xcconfig / Info.plist:
+
+| Key | Purpose |
+|-----|---------|
+| `MYDATA_KEY_SERVER_OBJECT_IDS` | Comma-separated KeyServer object IDs |
+| `MYDATA_THRESHOLD` | Threshold (localnet often `1`) |
+| `MYDATA_KEY_SERVER_URLS` | Optional URL overrides (`http:/$()/127.0.0.1:2024` in xcconfig) |
+| `MESSAGING_NAMESPACE_ID` | `deriveObjectID` parent for EncryptionHistory |
+| `MESSAGING_VERSION_OBJECT_ID` | `mydata_approve_reader` Version object |
+| `MESSAGING_ORIGINAL_PACKAGE_ID` / `MESSAGING_LATEST_PACKAGE_ID` | SessionKey namespace / approve package |
+| `FILE_STORAGE_AGGREGATOR_URL` | Host for attachment download (`/v1/blobs/by-quilt-patch-id/{id}`) |
+
+After localnet regenesis, refresh Dev xcconfig (`ProjectYZDevelopment.xcconfig`):
+
+1. Key server — match chat-app `VITE_MYDATA_KEY_SERVER_OBJECT_IDS` / `myso start --with-mydata` output (`key_server::KeyServer`).
+2. Namespace / Version — GraphQL: filter `0xe110::messaging::MessagingNamespace` and `0xe110::version::Version`.
+3. Rebuild the Dev scheme (plist values are baked at build time).
+
+Decrypt `missingObject(0x…)` usually means a stale `MESSAGING_NAMESPACE_ID` (wrong EncryptionHistory derivation), not the key-server URL. Pre-regenesis messages in the relayer cannot be decrypted on a new chain — create new groups after reset.
+
+Security: plaintext, DEKs, session keys stay on device; cleared on logout via `MessagingEncryptionService.clear` + `MessagingMessageStore.clear(wallet:)`. Relayer never sees plaintext.
+
+### Sealed message store (durable, privacy-first)
+
+After the first MyData decrypt, thread plaintext is sealed with a per-wallet AES-256 vault key in Keychain (`messagingVaultKey`, `WhenUnlockedThisDeviceOnly`, non-sync) and written under Application Support (`MessagingMessages/{wallet}/{groupId}.json.sealed`, file protection until first unlock). Disk never holds unsealed plaintext. On thread open: hydrate from sealed store → paint → background `fetchMessages` reconcile (decrypt only missing ids) → write-through. Caps ~150 messages/group. Attachment **bytes** stay session/RAM (lazy File Storage); only attachment **metadata** may be sealed with the thread. Logout wipes sealed files + vault key via `MessagingInboxService.clear()`.
+
+### Chat tab lifecycle
+
+1. **Login / scene active** — user feed connects; `MessagingInboxService.start` loads cache, GraphQL discovery, metadata, `POST /v1/users/unread-counts` (local `localReadUpto` as `after_order`). If GraphQL returns `FEATURE_UNAVAILABLE` for event indexes (common on public testnet), discovery is skipped and the list relies on UserDefaults + `group.discovered` user-feed wakes.
+2. **Chat tab appears** — bind list UI; reconcile unread; 60s timer while mounted.
+3. **Chat tab destroyed** (custom tab bar) — stop timer / group WS; **keep** inbox singleton + store.
+4. **Open thread** — hydrate sealed store if present; then `fetchMessages` + GraphQL `ProfileFull` for senders; decrypt only missing plaintext; lazy image download; group WS; local `markRead`; persist sealed snapshot.
+5. **Send** — composer encrypts (DEK + AAD AES-GCM) → signs canonical content → `POST /v1/messages`; optimistic bubble then WS/fetch reconcile; write-through sealed store.
+6. **Typing** — throttled `POST /v1/groups/{id}/typing`; WS `typing.start`/`stop` drives indicator above composer.
+7. **List profiles** — `@handle` DM names resolve via indexer search → `ProfileFull`; list title/photo/SPT ring from `MessagingProfile`.
+8. **Encrypted read-state CAS / attachment upload-from-composer** — still deferred.
+
+Unread badges stay on the relayer path (not product backend). Merge with likes/comments badges only at the UI if needed.
+
+Mirror the TypeScript SDK contracts in `auth-headers.ts` / `http-transport.ts` / `ws-transport.ts`. Ensure the messaging-relayer binary includes `/v1/users/ws` (stale release builds previously 401'd browser clients).

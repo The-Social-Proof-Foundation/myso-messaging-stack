@@ -1,6 +1,8 @@
+import { ArrowRight } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { useCreateMessage } from '../contexts/CreateMessageContext';
 import { useMySocialAuth } from '../contexts/MySocialAuthContext';
+import { CalloutButton } from './CalloutButton';
 import { ProfileDropdown } from './ProfileDropdown';
 
 export function AppHeader() {
@@ -35,13 +37,17 @@ export function AppHeader() {
         {session ? (
           <ProfileDropdown />
         ) : auth ? (
-          <button
+          <CalloutButton
             type="button"
+            className="h-9 px-4 group/btn lg:inline-flex lg:size-auto lg:px-10 lg:py-2"
+            borderOpacity={false}
             onClick={login}
-            className="rounded-lg bg-primary-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-primary-700"
           >
-            Sign in with MySocial
-          </button>
+            <div className="flex items-center gap-2 px-1.5 sm:px-2">
+              <span className="font-chakra">Sign In</span>
+              <ArrowRight className="h-4 w-4 shrink-0 stroke-current" />
+            </div>
+          </CalloutButton>
         ) : null}
       </div>
     </header>

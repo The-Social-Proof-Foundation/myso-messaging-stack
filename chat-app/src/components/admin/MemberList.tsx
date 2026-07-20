@@ -79,7 +79,11 @@ export function MemberList({
                 permissions={m.permissions}
                 isSelf={isSelf}
                 isAdmin={isAdmin}
-                online={onlineMembers?.get(m.address) ?? false}
+                online={
+                  onlineMembers?.get(m.address.toLowerCase()) ??
+                  onlineMembers?.get(m.address) ??
+                  false
+                }
                 isExpanded={expandedMember === m.address}
                 removingMember={removingMember}
                 togglingPerm={togglingPerm}

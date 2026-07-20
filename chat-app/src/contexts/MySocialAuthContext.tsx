@@ -15,6 +15,8 @@ import {
 } from '@socialproof/mysocial-auth';
 import { Ed25519Keypair } from '@socialproof/myso/keypairs/ed25519';
 import {
+  msUntilProactiveRefresh,
+  rejectNonRefreshableSession,
   SESSION_CANNOT_REFRESH_MESSAGE,
   sessionLacksRefreshToken,
 } from '../lib/auth-session-build';
@@ -26,6 +28,7 @@ import {
   getMySocialAuthConfigError,
   resetMySocialAuthInstance,
 } from '../lib/mysocial-auth-client';
+import { teardownMessagingPresence } from '../lib/messaging-presence-teardown';
 import {
   getAuthSessionRaw,
   removeAuthSession,
@@ -48,7 +51,7 @@ function applyRefreshTokenGuard(
 ): void {
   if (sessionLacksRefreshToken(s)) {
     console.warn(
-      '[MySocialAuth] Session has no refresh_token; access JWT will expire in ~30 minutes without renewing.',
+      '[MySocialAuth] Session has no refresh_token; rejecting non-refreshable OAuth session.',
     );
     setSignInError(SESSION_CANNOT_REFRESH_MESSAGE);
   }
@@ -120,6 +123,16 @@ export function MySocialAuthProvider({
   authRef.current = auth;
 
   const hadSessionRef = useRef(false);
+  const proactiveRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
+
+  const clearProactiveRefreshTimer = useCallback(() => {
+    if (proactiveRefreshTimerRef.current != null) {
+      clearTimeout(proactiveRefreshTimerRef.current);
+      proactiveRefreshTimerRef.current = null;
+    }
+  }, []);
 
   const retryKeypairDerivation = useCallback(() => {
     setDeriveNonce((n) => n + 1);
@@ -128,32 +141,11 @@ export function MySocialAuthProvider({
   useEffect(() => {
     if (!auth) {
       setSession(null);
+      clearProactiveRefreshTimer();
       return;
     }
 
     let cancelled = false;
-
-    void auth.getSession().then((s) => {
-      if (!cancelled) {
-        setSession(s);
-        hadSessionRef.current = Boolean(s);
-        applyRefreshTokenGuard(s, setSignInError);
-      }
-    });
-
-    const unsub = auth.onAuthStateChange((s) => {
-      if (!s && hadSessionRef.current) {
-        setSignInError(SESSION_EXPIRED_MESSAGE);
-        setKeypair(null);
-        setIsUsingDevMessengerSigner(false);
-        setDeriveKeyError(null);
-      } else if (s) {
-        applyRefreshTokenGuard(s, setSignInError);
-      }
-      hadSessionRef.current = Boolean(s);
-      setSession(s);
-      setDeriveNonce((n) => n + 1);
-    });
 
     const applySession = (s: Session | null) => {
       if (cancelled) return;
@@ -166,21 +158,7 @@ export function MySocialAuthProvider({
       setDeriveNonce((n) => n + 1);
     };
 
-    const onBroadcast = () => {
-      // Prefer live singleton — broadcast write may have reset the instance.
-      const current = getMySocialAuth() ?? auth;
-      void current.getSession().then(applySession);
-    };
-    window.addEventListener('mysocial-auth-broadcast-session', onBroadcast);
-    window.addEventListener('mysocial-auth-session-changed', onBroadcast);
-
-    const onStorage = (event: StorageEvent) => {
-      if (event.key !== SESSION_KEY && event.key !== null) return;
-      // Cross-tab logout: avoid "session expired" toast from hadSessionRef.
-      if (event.newValue == null) {
-        hadSessionRef.current = false;
-        setSignInError(null);
-      }
+    const rebindToSingletonAndSync = () => {
       resetMySocialAuthInstance();
       const next = getMySocialAuth();
       authRef.current = next;
@@ -189,7 +167,79 @@ export function MySocialAuthProvider({
         applySession(null);
         return;
       }
+      // setAuth triggers this effect to re-subscribe; also sync immediately if
+      // the singleton identity did not change (shouldn't happen after reset).
       void next.getSession().then(applySession);
+    };
+
+    const onBroadcastOrSessionChanged = () => {
+      // Broadcast / redirect wrote storage out-of-band and may have reset the
+      // singleton — rebind React to the live client so we do not listen to orphans.
+      const next = getMySocialAuth();
+      if (next !== auth) {
+        authRef.current = next;
+        setAuth(next);
+        if (!next) {
+          applySession(null);
+          return;
+        }
+      }
+      const current = next ?? auth;
+      void current.getSession().then(applySession);
+    };
+
+    void auth.getSession().then(async (s) => {
+      if (cancelled) return;
+      if (await rejectNonRefreshableSession(s)) {
+        applySession(null);
+        setSignInError(SESSION_CANNOT_REFRESH_MESSAGE);
+        return;
+      }
+      applySession(s);
+    });
+
+    const unsub = auth.onAuthStateChange((s) => {
+      if (!s && hadSessionRef.current) {
+        setSignInError(SESSION_EXPIRED_MESSAGE);
+        setKeypair(null);
+        setIsUsingDevMessengerSigner(false);
+        setDeriveKeyError(null);
+      } else if (s) {
+        if (sessionLacksRefreshToken(s)) {
+          void rejectNonRefreshableSession(s).then(() => {
+            if (cancelled) return;
+            setSignInError(SESSION_CANNOT_REFRESH_MESSAGE);
+            hadSessionRef.current = false;
+            setSession(null);
+            setKeypair(null);
+            setDeriveNonce((n) => n + 1);
+          });
+          return;
+        }
+        applyRefreshTokenGuard(s, setSignInError);
+      }
+      hadSessionRef.current = Boolean(s);
+      setSession(s);
+      setDeriveNonce((n) => n + 1);
+    });
+
+    window.addEventListener(
+      'mysocial-auth-broadcast-session',
+      onBroadcastOrSessionChanged,
+    );
+    window.addEventListener(
+      'mysocial-auth-session-changed',
+      onBroadcastOrSessionChanged,
+    );
+
+    const onStorage = (event: StorageEvent) => {
+      if (event.key !== SESSION_KEY && event.key !== null) return;
+      // Cross-tab logout: avoid "session expired" toast from hadSessionRef.
+      if (event.newValue == null) {
+        hadSessionRef.current = false;
+        setSignInError(null);
+      }
+      rebindToSingletonAndSync();
     };
     window.addEventListener('storage', onStorage);
 
@@ -203,12 +253,44 @@ export function MySocialAuthProvider({
     return () => {
       cancelled = true;
       unsub();
-      window.removeEventListener('mysocial-auth-broadcast-session', onBroadcast);
-      window.removeEventListener('mysocial-auth-session-changed', onBroadcast);
+      clearProactiveRefreshTimer();
+      window.removeEventListener(
+        'mysocial-auth-broadcast-session',
+        onBroadcastOrSessionChanged,
+      );
+      window.removeEventListener(
+        'mysocial-auth-session-changed',
+        onBroadcastOrSessionChanged,
+      );
       window.removeEventListener('storage', onStorage);
       document.removeEventListener('visibilitychange', onVisibilityChange);
     };
-  }, [auth]);
+  }, [auth, clearProactiveRefreshTimer]);
+
+  // Single app-owned proactive refresh (SDK proactiveRefresh is disabled).
+  useEffect(() => {
+    clearProactiveRefreshTimer();
+    if (!auth || !session?.refresh_token?.trim()) return;
+
+    const delay = msUntilProactiveRefresh(session);
+    proactiveRefreshTimerRef.current = setTimeout(() => {
+      proactiveRefreshTimerRef.current = null;
+      const current = getMySocialAuth() ?? auth;
+      void current.getSession().then((s) => {
+        if (s && !sessionLacksRefreshToken(s)) {
+          setSignInError(null);
+        }
+        applyRefreshTokenGuard(s, setSignInError);
+        hadSessionRef.current = Boolean(s);
+        setSession(s);
+        if (s) setDeriveNonce((n) => n + 1);
+      });
+    }, delay);
+
+    return () => {
+      clearProactiveRefreshTimer();
+    };
+  }, [auth, session, clearProactiveRefreshTimer]);
 
   const walletOnlyBlocked = Boolean(
     session && isTrueWalletOnlySession(session) && !devUnblockEnabled(),
@@ -379,15 +461,28 @@ export function MySocialAuthProvider({
     const mode = shouldUseRedirectAuth() ? 'redirect' : 'popup';
     void a
       .signIn({ mode, provider: 'google' })
-      .then((s) => {
-        if (mode === 'popup' && s) {
-          applyRefreshTokenGuard(s, setSignInError);
+      .then(async (s) => {
+        if (mode !== 'popup' || !s) return;
+        if (await rejectNonRefreshableSession(s)) {
+          setSignInError(SESSION_CANNOT_REFRESH_MESSAGE);
+          hadSessionRef.current = false;
+          setSession(null);
+          setKeypair(null);
+          return;
         }
+        applyRefreshTokenGuard(s, setSignInError);
       })
       .catch((e: unknown) => {
         if (mode === 'popup') {
-          void a.getSession().then((s) => {
+          void a.getSession().then(async (s) => {
             if (s?.user?.address) {
+              if (await rejectNonRefreshableSession(s)) {
+                setSignInError(SESSION_CANNOT_REFRESH_MESSAGE);
+                hadSessionRef.current = false;
+                setSession(null);
+                setKeypair(null);
+                return;
+              }
               applyRefreshTokenGuard(s, setSignInError);
               setSession(s);
               hadSessionRef.current = true;
@@ -410,6 +505,10 @@ export function MySocialAuthProvider({
     // Clear before signOut so onAuthStateChange(null) does not show "session expired"
     hadSessionRef.current = false;
     setSignInError(null);
+    clearProactiveRefreshTimer();
+    // Close relayer WS (group + user feed) so peers see offline even if we
+    // stay on the sign-in page after logout.
+    await teardownMessagingPresence();
     const a = authRef.current;
     try {
       if (a) {
@@ -423,7 +522,7 @@ export function MySocialAuthProvider({
       setIsUsingDevMessengerSigner(false);
       setDeriveKeyError(null);
     }
-  }, []);
+  }, [clearProactiveRefreshTimer]);
 
   const configError = auth ? null : configErrorFromEnv;
 

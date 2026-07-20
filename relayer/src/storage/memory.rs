@@ -616,6 +616,15 @@ impl StorageAdapter for InMemoryStorage {
         Ok(())
     }
 
+    async fn clear_presence(&self, wallet: &str) -> StorageResult<()> {
+        let mut presence = self
+            .presence
+            .write()
+            .map_err(|e| StorageError::OperationFailed(format!("Lock poisoned: {}", e)))?;
+        presence.remove(wallet);
+        Ok(())
+    }
+
     async fn get_presence_last_seen(
         &self,
         wallet: &str,

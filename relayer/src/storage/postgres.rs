@@ -846,6 +846,15 @@ impl StorageAdapter for PostgresStorage {
         Ok(())
     }
 
+    async fn clear_presence(&self, wallet: &str) -> StorageResult<()> {
+        sqlx::query("DELETE FROM presence WHERE wallet = $1")
+            .bind(wallet)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| StorageError::OperationFailed(e.to_string()))?;
+        Ok(())
+    }
+
     async fn get_presence_last_seen(
         &self,
         wallet: &str,
