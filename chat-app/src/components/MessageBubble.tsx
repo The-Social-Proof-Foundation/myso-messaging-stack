@@ -2,6 +2,7 @@ import {
   useState,
   useRef,
   useEffect,
+  useLayoutEffect,
   useCallback,
   type CSSProperties,
   type KeyboardEvent,
@@ -35,6 +36,8 @@ const REACTION_PICKER_EXIT_MS = 280;
 const AVATAR_SIZE = 28;
 /** Pull the bubble + meta stack under the avatar corner. */
 const AVATAR_OVERLAP_PX = 14;
+/** Inset from the chat scroller edge for the reaction chip clamp. */
+const REACTION_CHIP_CLIP_PAD = 8;
 
 interface MessageBubbleProps {
   message: Message;
@@ -60,6 +63,13 @@ interface MessageBubbleProps {
   /** SPT reservation ring for the sender avatar (when GraphQL indicates SPT/pool). */
   avatarShowRing?: boolean;
   avatarRingPercent?: number;
+  /**
+   * Extra top pad (px) when same-sender reaction chips would collide with the
+   * wider bubble above (iOS ReactionStackClearance parity).
+   */
+  reactionTopClearancePx?: number;
+  /** Report measured content-column width for clearance refine. */
+  onBubbleWidthChange?: (messageId: string, width: number) => void;
 }
 
 /** Uniform bubble radius for every message (no cluster corner edits). */
@@ -156,6 +166,19 @@ function getScrollParent(el: HTMLElement | null): Element | null {
   while (node) {
     const { overflowY } = getComputedStyle(node);
     if (overflowY === 'auto' || overflowY === 'scroll') return node;
+    node = node.parentElement;
+  }
+  return null;
+}
+
+/** Nearest ancestor that clips overflow-x (chat column uses overflow-x-hidden). */
+function getOverflowXClipParent(el: HTMLElement | null): HTMLElement | null {
+  let node = el?.parentElement ?? null;
+  while (node) {
+    const {overflowX} = getComputedStyle(node);
+    if (overflowX === 'auto' || overflowX === 'scroll' || overflowX === 'hidden') {
+      return node;
+    }
     node = node.parentElement;
   }
   return null;
@@ -339,14 +362,83 @@ function ImageAttachmentTile({
       </div>
 
       {reactionOverlay ? (
-        <div
-          className={`absolute z-10 flex w-max max-w-none flex-nowrap gap-1 ${
-            isOwnMessage ? '-top-3.5 -right-2' : '-top-3.5 -left-2'
-          }`}
-        >
+        <ReactionChipRow isOwnMessage={isOwnMessage} topClass="-top-3.5">
           {reactionOverlay}
-        </div>
+        </ReactionChipRow>
       ) : null}
+    </div>
+  );
+}
+
+/**
+ * Chip row with double-ratchet placement:
+ * 1) Pin inner corner (own leading / peer trailing), grow over the bubble.
+ * 2) Translate to stay inside the chat scroller (overflow-x-hidden), so chips
+ *    hang into open gutter instead of being clipped.
+ */
+function ReactionChipRow({
+  isOwnMessage,
+  topClass = '-top-4',
+  children,
+}: Readonly<{
+  isOwnMessage: boolean;
+  topClass?: string;
+  children: ReactNode;
+}>) {
+  const ref = useRef<HTMLDivElement>(null);
+  const shiftXRef = useRef(0);
+  const [shiftX, setShiftX] = useState(0);
+
+  const clampToClipParent = useCallback(() => {
+    const el = ref.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    // Undo the active shift so we ratchet from the natural inner-corner layout.
+    const naturalLeft = rect.left - shiftXRef.current;
+    const naturalRight = rect.right - shiftXRef.current;
+    const clip = getOverflowXClipParent(el);
+    const clipRect = clip?.getBoundingClientRect();
+    const minLeft = (clipRect?.left ?? 0) + REACTION_CHIP_CLIP_PAD;
+    const maxRight =
+      (clipRect?.right ?? window.innerWidth) - REACTION_CHIP_CLIP_PAD;
+    let shift = 0;
+    if (naturalRight > maxRight) shift = maxRight - naturalRight;
+    if (naturalLeft + shift < minLeft) {
+      shift += minLeft - (naturalLeft + shift);
+    }
+    if (shift === shiftXRef.current) return;
+    shiftXRef.current = shift;
+    setShiftX(shift);
+  }, []);
+
+  useLayoutEffect(() => {
+    clampToClipParent();
+    const el = ref.current;
+    const clip = el ? getOverflowXClipParent(el) : null;
+    if (!el || typeof ResizeObserver === 'undefined') {
+      window.addEventListener('resize', clampToClipParent);
+      return () => window.removeEventListener('resize', clampToClipParent);
+    }
+    const ro = new ResizeObserver(() => clampToClipParent());
+    ro.observe(el);
+    if (clip) ro.observe(clip);
+    window.addEventListener('resize', clampToClipParent);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener('resize', clampToClipParent);
+    };
+  }, [clampToClipParent, children]);
+
+  // Inner corner: own leading / peer trailing — grow over the bubble first.
+  const anchorClass = isOwnMessage ? '-left-3' : '-right-3';
+
+  return (
+    <div
+      ref={ref}
+      className={`absolute z-10 flex w-max max-w-none flex-nowrap gap-1 ${topClass} ${anchorClass}`}
+      style={shiftX !== 0 ? {transform: `translateX(${shiftX}px)`} : undefined}
+    >
+      {children}
     </div>
   );
 }
@@ -578,6 +670,8 @@ export function MessageBubble({
   labelForAddress,
   avatarShowRing = false,
   avatarRingPercent = 0,
+  reactionTopClearancePx = 0,
+  onBubbleWidthChange,
 }: Readonly<MessageBubbleProps>) {
   const [editing, setEditing] = useState(false);
   const [editText, setEditText] = useState(message.text);
@@ -592,12 +686,36 @@ export function MessageBubble({
   const editRef = useRef<HTMLTextAreaElement>(null);
   // Wraps bubble + picker so outside-close doesn't race.
   const bubbleWrapperRef = useRef<HTMLDivElement>(null);
+  /** Bubble / image column — measured for width-aware reaction clearance. */
+  const contentColumnRef = useRef<HTMLDivElement>(null);
+  const lastReportedWidthRef = useRef(0);
+
+  useLayoutEffect(() => {
+    if (!onBubbleWidthChange) return;
+    const el = contentColumnRef.current;
+    if (!el) return;
+    const report = () => {
+      const w = el.getBoundingClientRect().width;
+      if (w < 1) return;
+      const rounded = Math.round(w);
+      if (rounded === lastReportedWidthRef.current) return;
+      lastReportedWidthRef.current = rounded;
+      onBubbleWidthChange(message.messageId, rounded);
+    };
+    report();
+    if (typeof ResizeObserver === 'undefined') {
+      window.addEventListener('resize', report);
+      return () => window.removeEventListener('resize', report);
+    }
+    const ro = new ResizeObserver(() => report());
+    ro.observe(el);
+    window.addEventListener('resize', report);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener('resize', report);
+    };
+  }, [message.messageId, onBubbleWidthChange, message.text, reactions?.length]);
   const hoveredReactionRef = useRef<string | null>(null);
-  // Grow into open gutter: own anchors right (extends left); peer anchors left (extends right).
-  // First-message picker/delete go below so they aren't clipped by the scroll edge.
-  const reactionAnchorClass = isOwnMessage
-    ? '-top-4 -right-3'
-    : '-top-4 -left-3';
   const popoverVerticalClass = preferReactionBelow
     ? 'top-full mt-1'
     : '-top-11';
@@ -837,12 +955,16 @@ export function MessageBubble({
   const showOwnEditDelete =
     isOwnMessage && !editing && Boolean(onEdit || onDelete);
 
+  const baseStackGapPx = isFirstInGroup ? 10 : 2;
+  const marginTopPx = baseStackGapPx + Math.max(0, reactionTopClearancePx);
+
   return (
     <div
       data-message-order={message.order}
       className={`group/msg flex min-w-0 max-w-full px-4 ${
-        isFirstInGroup ? 'mt-2.5' : 'mt-0.5'
-      } ${isOwnMessage ? 'justify-end' : 'justify-start'}`}
+        isOwnMessage ? 'justify-end' : 'justify-start'
+      }`}
+      style={{marginTop: marginTopPx}}
     >
       <div
         className={`flex max-w-[85%] items-end gap-0 sm:max-w-[75%] ${
@@ -932,6 +1054,7 @@ export function MessageBubble({
             )}
 
             <div
+              ref={contentColumnRef}
               className={`flex w-fit max-w-full flex-col gap-0.5 ${
                 isOwnMessage ? 'items-end' : 'items-start'
               }`}
@@ -1004,11 +1127,9 @@ export function MessageBubble({
                     )}
                   </div>
                   {imageAttachments.length === 0 && reactionChipItems ? (
-                    <div
-                      className={`absolute z-10 flex w-max max-w-none flex-nowrap gap-1 ${reactionAnchorClass}`}
-                    >
+                    <ReactionChipRow isOwnMessage={isOwnMessage}>
                       {reactionChipItems}
-                    </div>
+                    </ReactionChipRow>
                   ) : null}
                 </div>
               )}

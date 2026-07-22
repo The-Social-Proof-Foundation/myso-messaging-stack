@@ -157,7 +157,9 @@ SOCIAL_SERVER_URL=https://...
 | `MessagingRelayerHTTPClient` | Signed REST via `Network.requestMessagingRelayer` |
 | `MessagingInboxService` | Singleton: discovery, unread, store (survives tab unmount) |
 | `MessagingGroupStore` | UserDefaults conversation cache |
-| `MessagingMessageStore` | Durable sealed thread history (Keychain vault key + AES-GCM Application Support files) |
+| `MessagingMessageStore` | SQLite ciphertext store (WAL + File Protection) + vault helpers; plaintext only in RAM LRU |
+| `MessagingPlaintextCache` | Process-wide LRU of decrypted bodies (~20 groups × ~150 msgs) |
+| `MessagingVault` | Keychain AES vault key; wraps DEKs + seals inbox chrome |
 | `MessagingGroupDiscovery` | GraphQL `MemberAdded` / `MemberRemoved` net membership |
 | `MessagingGroupMetadata` | On-chain Metadata name/uuid via MySoKit dynamic fields |
 | `MessagingProfileResolver` | Wallet → GraphQL `ProfileFull` (username, displayName, photo, SPT address, reservation %); indexer fallback; `@username` via search then ProfileFull |
@@ -192,20 +194,26 @@ After localnet regenesis, refresh Dev xcconfig (`ProjectYZDevelopment.xcconfig`)
 
 Decrypt `missingObject(0x…)` usually means a stale `MESSAGING_NAMESPACE_ID` (wrong EncryptionHistory derivation), not the key-server URL. Pre-regenesis messages in the relayer cannot be decrypted on a new chain — create new groups after reset.
 
-Security: plaintext, DEKs, session keys stay on device; cleared on logout via `MessagingEncryptionService.clear` + `MessagingMessageStore.clear(wallet:)`. Relayer never sees plaintext.
+Security: plaintext lives only in RAM (`MessagingPlaintextCache`); DEKs are RAM-cached and Keychain-wrapped with the vault key after first MyData unwrap; session keys stay on device. Cleared on logout via `MessagingEncryptionService.clear` + `MessagingMessageStore.clear(wallet:)`. Relayer never sees plaintext. **No SQLCipher** — messages are already E2E ciphertext; SQLite adds indexes/WAL under iOS File Protection + sandbox.
 
-### Sealed message store (durable, privacy-first)
+### SQLite ciphertext store + RAM plaintext (Signal-like load path)
 
-After the first MyData decrypt, thread plaintext is sealed with a per-wallet AES-256 vault key in Keychain (`messagingVaultKey`, `WhenUnlockedThisDeviceOnly`, non-sync) and written under Application Support (`MessagingMessages/{wallet}/{groupId}.json.sealed`, file protection until first unlock). Disk never holds unsealed plaintext. On thread open: hydrate from sealed store → paint → background `fetchMessages` reconcile (decrypt only missing ids) → write-through. Caps ~150 messages/group. Attachment **bytes** stay session/RAM (lazy File Storage); only attachment **metadata** may be sealed with the thread. Logout wipes sealed files + vault key via `MessagingInboxService.clear()`.
+Wire ciphertext + metadata persist in SQLite under Application Support (`MessagingMessages/{wallet}/messages.sqlite`): `PRAGMA journal_mode=WAL`, file protection `completeUntilFirstUserAuthentication`. **No plaintext column.** After decrypt, bodies go to `MessagingPlaintextCache` (LRU ~20 groups × ~150 msgs). DEKs: RAM → Keychain-wrapped (`messagingWrappedDEK`, sealed with `messagingVaultKey`) → MyData last resort. Reaction absolute-state rows (`reactions` table: order/emoji/count/reactors) are public metadata and cached for instant chip paint. Inbox chrome (preview text) is vault-sealed on disk — not UserDefaults cleartext. Legacy `.json.sealed` plaintext blobs migrate into SQLite once then delete. Caps ~150 messages/group. Attachment **bytes** stay session/RAM. Logout wipes DB dir + vault key + RAM caches.
+
+Open thread: hydrate SQLite tip page + cached reactions → local AES for missing plaintext (Keychain DEK, before tip REST) → paint → `fetchMessages` + `listReactions` in parallel → decrypt only still-missing ids → write ciphertext + reaction rows + RAM cache. Gap-fill / catch-up never block first message or chip paint. Inbox warm is incremental (skip groups already at tip order).
+
+### Create Conversation (UI-only)
+
+Messages list **+** opens a SwiftUI sheet (`CreateConversationSheet`): following suggestions (`ProfileFollowing`), MySo `/search` for username/name, and `0x`+64-hex wallet lookup via `ProfileFull` with **cardless** selectable rows when no profile exists. Next inserts a local draft group (`groupId` prefix `local-`) via `MessagingInboxService.insertLocalDraft`, seeds inbox chrome for 1:1 peers, republishes the inbox row at the top, and pushes `ChatThreadViewController` with composer focused. Discovery/`replaceActive` preserves `local-*` drafts. **Does not** call `createAndShareGroup`, share PTBs, or relayer create-group — wire those in a later milestone.
 
 ### Chat tab lifecycle
 
-1. **Login / scene active** — user feed connects; `MessagingInboxService.start` loads cache, GraphQL discovery, metadata, `POST /v1/users/unread-counts` (local `localReadUpto` as `after_order`). If GraphQL returns `FEATURE_UNAVAILABLE` for event indexes (common on public testnet), discovery is skipped and the list relies on UserDefaults + `group.discovered` user-feed wakes.
-2. **Foreground wakes** — `group.activity` on the user feed updates sort order immediately, bumps unread optimistically, then coalesced unread REST + tip preview decrypt (same model as web sidebar). Group feed (`MessagingGroupFeedService`) is used only while a thread is open.
-3. **Chat tab appears** — bind list UI; reconcile unread; 60s timer while mounted.
+1. **Login / scene active** — user feed connects; `MessagingInboxService.start` (idempotent) hydrates sealed chrome, GraphQL discovery, metadata, `POST /v1/users/unread-counts` (local `localReadUpto` as `after_order`). Incremental tip warm only for missing/stale previews. If GraphQL returns `FEATURE_UNAVAILABLE` for event indexes (common on public testnet), discovery is skipped and the list relies on cache + `group.discovered` user-feed wakes.
+2. **Foreground wakes** — `group.activity` on the user feed updates sort order immediately, bumps unread optimistically, then coalesced unread REST + targeted tip preview when chrome is behind. Group feed (`MessagingGroupFeedService`) is used only while a thread is open.
+3. **Chat tab appears** — bind list UI; reconcile unread; 60s timer while mounted; incremental preview warm.
 4. **Chat tab destroyed** (custom tab bar) — stop timer / group WS; **keep** inbox singleton + store.
-5. **Open thread** — hydrate sealed store if present; then `fetchMessages` + GraphQL `ProfileFull` for senders; decrypt only missing plaintext; lazy image download; group WS; local `markRead`; persist sealed snapshot.
-6. **Send** — composer encrypts (DEK + AAD AES-GCM) → signs canonical content → `POST /v1/messages`; optimistic bubble then WS/fetch reconcile; write-through sealed store.
+5. **Open thread** — hydrate SQLite + reaction cache + plaintext LRU; local AES for missing bodies (Keychain DEK); parallel `fetchMessages` + `listReactions`; decrypt only still-missing; lazy images; group WS; local `markRead`; write-through ciphertext + reactions + RAM cache. Opening cancels inbox tip refresh tasks.
+6. **Send** — composer encrypts (DEK + AAD AES-GCM) → signs canonical content → `POST /v1/messages`; optimistic bubble then WS/fetch reconcile; write-through SQLite + RAM cache.
 7. **Typing** — throttled `POST /v1/groups/{id}/typing`; WS `typing.start`/`stop` drives indicator above composer.
 8. **List profiles** — `@handle` DM names resolve via indexer search → `ProfileFull`; list title/photo/SPT ring from `MessagingProfile`.
 9. **Encrypted read-state CAS / attachment upload-from-composer** — still deferred.

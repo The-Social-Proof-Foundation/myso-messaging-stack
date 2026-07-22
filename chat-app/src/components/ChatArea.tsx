@@ -37,6 +37,12 @@ import {
   chatInfoWidthBand,
   type ChatInfoWidthBand,
 } from '../lib/chat-layout';
+import {
+  REACTION_CHIP_CLEARANCE_PX,
+  estimatedBubbleWidth,
+  needsClearance,
+  visibleReactionCount,
+} from '../lib/reaction-stack-clearance';
 
 interface ChatAreaProps {
   selectedGroup: StoredGroup | null;
@@ -339,6 +345,39 @@ function ChatView({
   }, [isMobileNav, group.groupId]);
   const paidGate = usePaidDmGate(group);
   const scrollRef = useRef<HTMLDivElement>(null);
+  /** Measured bubble column widths for reaction stack clearance refine. */
+  const [measuredBubbleWidths, setMeasuredBubbleWidths] = useState<
+    Map<string, number>
+  >(() => new Map());
+  const [scrollContentWidth, setScrollContentWidth] = useState(0);
+
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const update = () => setScrollContentWidth(el.clientWidth);
+    update();
+    if (typeof ResizeObserver === 'undefined') {
+      window.addEventListener('resize', update);
+      return () => window.removeEventListener('resize', update);
+    }
+    const ro = new ResizeObserver(() => update());
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [group.groupId]);
+
+  // Drop stale measurements when the thread changes.
+  useEffect(() => {
+    setMeasuredBubbleWidths(new Map());
+  }, [group.groupId]);
+
+  const onBubbleWidthChange = useCallback((messageId: string, width: number) => {
+    setMeasuredBubbleWidths((prev) => {
+      if (prev.get(messageId) === width) return prev;
+      const next = new Map(prev);
+      next.set(messageId, width);
+      return next;
+    });
+  }, []);
   /**
    * Snapshot right before older messages merge (post-fetch). Restored in
    * useLayoutEffect so mid-flight scroll isn’t snapped back.
@@ -762,10 +801,55 @@ function ChatView({
                 !prev ||
                 !sameAddress(prev.senderAddress, msg.senderAddress) ||
                 breakAfterPrev;
-              const isLastInGroup =
-                !next ||
-                !sameAddress(next.senderAddress, msg.senderAddress) ||
-                breakBeforeNext;
+              // Same-sender typing owns pack tip chrome — tip message is mid-stack.
+              const typingContinuesPack =
+                index === messages.length - 1 && stackTypers.length > 0;
+              const isLastInGroup = typingContinuesPack
+                ? false
+                : !next ||
+                  !sameAddress(next.senderAddress, msg.senderAddress) ||
+                  breakBeforeNext;
+              // Same-sender stack clearance (iOS ReactionStackClearance).
+              const olderSameSender = !isFirstInGroup;
+              const msgReactions = reactions.get(msg.order);
+              const reactionCount = visibleReactionCount(msgReactions);
+              const maxBubbleW = Math.max(
+                (scrollContentWidth || 360) * 0.78,
+                80,
+              );
+              const hasImage = (msg.attachments ?? []).some((a) =>
+                a.mimeType?.startsWith('image/'),
+              );
+              const currWidth =
+                measuredBubbleWidths.get(msg.messageId) ??
+                estimatedBubbleWidth({
+                  text: msg.isDeleted ? '' : msg.text,
+                  isDeleted: msg.isDeleted,
+                  hasImage,
+                  maxWidth: maxBubbleW,
+                });
+              let prevWidth = 0;
+              if (olderSameSender && prev) {
+                const prevHasImage = (prev.attachments ?? []).some((a) =>
+                  a.mimeType?.startsWith('image/'),
+                );
+                prevWidth =
+                  measuredBubbleWidths.get(prev.messageId) ??
+                  estimatedBubbleWidth({
+                    text: prev.isDeleted ? '' : prev.text,
+                    isDeleted: prev.isDeleted,
+                    hasImage: prevHasImage,
+                    maxWidth: maxBubbleW,
+                  });
+              }
+              const reactionTopClearancePx = needsClearance({
+                olderSameSender,
+                prevWidth,
+                currWidth,
+                reactionCount,
+              })
+                ? REACTION_CHIP_CLEARANCE_PX
+                : 0;
               return (
                 <div key={msg.messageId}>
                   {marker && (
@@ -784,7 +868,7 @@ function ChatView({
                     onDelete={
                       isOwn && permissions.canDelete ? deleteMessage : undefined
                     }
-                    reactions={reactions.get(msg.order)}
+                    reactions={msgReactions}
                     onToggleReaction={
                       permissions.canSend ? toggleReaction : undefined
                     }
@@ -792,6 +876,8 @@ function ChatView({
                     preferReactionBelow={index === 0}
                     isFirstInGroup={isFirstInGroup}
                     isLastInGroup={isLastInGroup}
+                    reactionTopClearancePx={reactionTopClearancePx}
+                    onBubbleWidthChange={onBubbleWidthChange}
                     avatarSrc={
                       msg.senderAddress
                         ? photoFor(msg.senderAddress)

@@ -254,23 +254,6 @@ export function MessageInput({
         <p className="mb-1.5 px-1 text-xs text-danger-500">{fileError}</p>
       )}
 
-      {showEmojiPicker && (
-        <div
-          ref={emojiPickerRef}
-          className="absolute bottom-full left-3 z-40 mb-2 overflow-hidden rounded-xl border border-secondary-200 shadow-xl dark:border-secondary-600"
-        >
-          <EmojiPicker
-            onEmojiClick={handleEmojiClick}
-            autoFocusSearch={false}
-            emojiStyle={EmojiStyle.APPLE}
-            theme={emojiTheme}
-            width={320}
-            height={360}
-            lazyLoadEmojis
-          />
-        </div>
-      )}
-
       <div className="flex items-end gap-1.5">
         {/* Attachment button */}
         <button
@@ -304,37 +287,64 @@ export function MessageInput({
           }}
         />
 
-        {/* Emoji — same light-gray treatment as paperclip */}
-        <button
-          ref={emojiButtonRef}
-          type="button"
-          onClick={() => setShowEmojiPicker((open) => !open)}
-          disabled={disabled || sending}
-          className={`mb-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-secondary-400 hover:bg-secondary-100 hover:text-secondary-600 disabled:opacity-50 dark:hover:bg-secondary-700 dark:hover:text-secondary-300 ${
-            showEmojiPicker
-              ? 'bg-secondary-100 text-secondary-600 dark:bg-secondary-700 dark:text-secondary-200'
-              : ''
-          }`}
-          title="Emoji"
-          aria-label="Toggle emoji picker"
-          aria-expanded={showEmojiPicker}
-        >
-          <Smile className="h-5 w-5" strokeWidth={1.75} aria-hidden="true" />
-        </button>
-
-        <textarea
-          ref={textareaRef}
-          value={text}
-          onChange={(e) => {
-            setText(e.target.value);
-            noteTyping(e.target.value);
-          }}
-          onKeyDown={handleKeyDown}
-          placeholder="Message"
-          rows={1}
-          disabled={disabled || sending}
-          className="max-h-[none] flex-1 resize-none overflow-hidden rounded-[1.25rem] border border-secondary-200 bg-secondary-50 px-4 py-2 text-[15px] leading-snug text-secondary-900 placeholder:text-secondary-400 focus:border-bubble-sent focus:outline-none focus:ring-2 focus:ring-bubble-sent/20 disabled:opacity-50 dark:border-secondary-600 dark:bg-secondary-800 dark:text-secondary-100 dark:placeholder:text-secondary-500 dark:focus:border-bubble-sent-dark dark:focus:ring-bubble-sent-dark/20"
-        />
+        {/* Pill: textarea + emoji as flex peers so the smile is truly centered. */}
+        <div className="relative min-w-0 flex-1">
+          {showEmojiPicker && (
+            <div
+              ref={emojiPickerRef}
+              className="absolute bottom-full right-0 z-40 mb-2 overflow-hidden rounded-xl border border-secondary-200 shadow-xl dark:border-secondary-600"
+            >
+              <EmojiPicker
+                onEmojiClick={handleEmojiClick}
+                autoFocusSearch={false}
+                emojiStyle={EmojiStyle.APPLE}
+                theme={emojiTheme}
+                width={320}
+                height={360}
+                lazyLoadEmojis
+              />
+            </div>
+          )}
+          <div
+            className={`flex min-w-0 items-center rounded-[1.25rem] border border-secondary-200 bg-secondary-50 focus-within:border-bubble-sent focus-within:ring-2 focus-within:ring-bubble-sent/20 dark:border-secondary-600 dark:bg-secondary-800 dark:focus-within:border-bubble-sent-dark dark:focus-within:ring-bubble-sent-dark/20 ${
+              disabled || sending ? 'opacity-50' : ''
+            }`}
+          >
+            <textarea
+              ref={textareaRef}
+              value={text}
+              onChange={(e) => {
+                setText(e.target.value);
+                noteTyping(e.target.value);
+              }}
+              onKeyDown={handleKeyDown}
+              placeholder="Message"
+              rows={1}
+              disabled={disabled || sending}
+              className="max-h-[none] min-w-0 flex-1 resize-none overflow-hidden border-0 bg-transparent py-2 pl-4 pr-1 text-[15px] leading-snug text-secondary-900 placeholder:text-secondary-400 focus:outline-none focus:ring-0 disabled:cursor-not-allowed dark:text-secondary-100 dark:placeholder:text-secondary-500"
+            />
+            <button
+              ref={emojiButtonRef}
+              type="button"
+              onClick={() => setShowEmojiPicker((open) => !open)}
+              disabled={disabled || sending}
+              className={`mr-1.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-secondary-400 hover:bg-secondary-200/80 hover:text-secondary-600 disabled:opacity-50 dark:hover:bg-secondary-700 dark:hover:text-secondary-300 ${
+                showEmojiPicker
+                  ? 'bg-secondary-200/80 text-secondary-600 dark:bg-secondary-700 dark:text-secondary-200'
+                  : ''
+              }`}
+              title="Emoji"
+              aria-label="Toggle emoji picker"
+              aria-expanded={showEmojiPicker}
+            >
+              <Smile
+                className="block h-4 w-4"
+                strokeWidth={1.75}
+                aria-hidden="true"
+              />
+            </button>
+          </div>
+        </div>
         <button
           onClick={handleSend}
           disabled={!canSend}
