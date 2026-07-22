@@ -1,23 +1,42 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMessagingClient } from '../contexts/MessagingClientContext';
-import { useMySocialAuth } from '../contexts/MySocialAuthContext';
+import {
+  useAuthenticatedAddress,
+  useMySocialAuth,
+} from '../contexts/MySocialAuthContext';
 import type { StoredGroup } from '../lib/group-store';
 import { getCachedThread } from '../lib/message-session-cache';
+import {
+  loadSidebarPreviews,
+  saveSidebarPreviews,
+  type StoredSidebarPreview,
+} from '../lib/sidebar-chrome-store';
 
-type PreviewEntry = {
-  text: string;
-  order: number;
-  /** Set after a successful relayer fetch (or live publish from an open thread). */
-  verified: boolean;
-};
+type PreviewEntry = StoredSidebarPreview;
 
 /** Session cache of last-message previews keyed by groupId. */
 const previewCache = new Map<string, PreviewEntry>();
+let hydratedWallet: string | null = null;
 
 const listeners = new Set<() => void>();
 
 function notifyPreviewListeners() {
   for (const listener of listeners) listener();
+}
+
+function ensureHydrated(wallet: string | null | undefined) {
+  const key = wallet?.trim().toLowerCase() || null;
+  if (!key || hydratedWallet === key) return;
+  previewCache.clear();
+  for (const [groupId, entry] of loadSidebarPreviews(key)) {
+    previewCache.set(groupId, entry);
+  }
+  hydratedWallet = key;
+}
+
+function persistPreviews(wallet: string | null | undefined) {
+  if (!wallet) return;
+  saveSidebarPreviews(wallet, previewCache);
 }
 
 function formatPreview(message: {
@@ -82,13 +101,17 @@ export function publishSidebarMessagePreview(
     order: message.order,
     verified: true,
   });
-  if (changed) notifyPreviewListeners();
+  if (changed) {
+    // Best-effort persist under whatever wallet was last hydrated.
+    if (hydratedWallet) persistPreviews(hydratedWallet);
+    notifyPreviewListeners();
+  }
 }
 
 /**
  * Last-message preview text for sidebar rows.
- * Instant paint from the thread session cache, then always verifies against
- * the relayer (limit 5 → newest decryptable) so a stale cache cannot stick.
+ * Instant paint from localStorage + thread session cache, then verifies
+ * against the relayer (limit 1 tip) so a stale cache cannot stick.
  */
 export function useSidebarMessagePreviews(
   groups: readonly StoredGroup[],
@@ -96,6 +119,7 @@ export function useSidebarMessagePreviews(
 ): Map<string, string> {
   const client = useMessagingClient();
   const { keypair: signer } = useMySocialAuth();
+  const address = useAuthenticatedAddress();
   const [version, setVersion] = useState(0);
   const latestOrdersRef = useRef(latestOrders);
   latestOrdersRef.current = latestOrders;
@@ -117,6 +141,11 @@ export function useSidebarMessagePreviews(
   }, [groups, latestOrders]);
 
   useEffect(() => {
+    ensureHydrated(address);
+    setVersion((v) => v + 1);
+  }, [address]);
+
+  useEffect(() => {
     const onBump = () => setVersion((v) => v + 1);
     listeners.add(onBump);
     return () => {
@@ -126,6 +155,7 @@ export function useSidebarMessagePreviews(
 
   useEffect(() => {
     if (!client || !signer || groups.length === 0) return;
+    ensureHydrated(address);
 
     let cancelled = false;
 
@@ -136,7 +166,10 @@ export function useSidebarMessagePreviews(
       if (!fromCache) continue;
       if (applyPreview(group.groupId, fromCache)) seeded = true;
     }
-    if (seeded) setVersion((v) => v + 1);
+    if (seeded) {
+      persistPreviews(address);
+      setVersion((v) => v + 1);
+    }
 
     // Always hit the relayer until verified and caught up with activity.
     const toFetch = groups.filter((group) => {
@@ -155,11 +188,10 @@ export function useSidebarMessagePreviews(
       await Promise.all(
         toFetch.map(async (group) => {
           try {
-            // Fetch a small newest window so one decrypt failure cannot hide the tip.
             const result = await client.messaging.getMessages({
               signer,
               groupRef: { uuid: group.uuid },
-              limit: 5,
+              limit: 1,
               mydataApproveContext: undefined,
             });
             if (cancelled) return;
@@ -193,7 +225,10 @@ export function useSidebarMessagePreviews(
           }
         }),
       );
-      if (!cancelled) setVersion((v) => v + 1);
+      if (!cancelled) {
+        persistPreviews(address);
+        setVersion((v) => v + 1);
+      }
     })();
 
     return () => {
@@ -201,9 +236,10 @@ export function useSidebarMessagePreviews(
     };
     // groups identity via groupKey; latest via ordersKey
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [client, signer, groupKey, ordersKey]);
+  }, [client, signer, groupKey, ordersKey, address]);
 
   return useMemo(() => {
+    ensureHydrated(address);
     const map = new Map<string, string>();
     for (const group of groups) {
       const entry = previewCache.get(group.groupId);
@@ -211,5 +247,5 @@ export function useSidebarMessagePreviews(
     }
     return map;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [groupKey, version]);
+  }, [groupKey, version, address]);
 }

@@ -1,4 +1,11 @@
-import { useState, useCallback, useRef, useMemo, useEffect } from 'react';
+import {
+  useState,
+  useCallback,
+  useRef,
+  useMemo,
+  useEffect,
+  useLayoutEffect,
+} from 'react';
 import { Sidebar } from './Sidebar';
 import { ChatArea } from './ChatArea';
 import { CreateGroupModal } from './CreateGroupModal';
@@ -15,6 +22,12 @@ import {
   getSelectedGroupKey,
   setSelectedGroupKey,
 } from '../lib/group-store';
+import {
+  CHAT_LIST_COLLAPSE_BELOW_PX,
+  CHAT_LIST_EXPAND_ABOVE_PX,
+  CHAT_LIST_WIDTH_PX,
+  CHAT_SIDEBAR_MOTION,
+} from '../lib/chat-layout';
 
 interface AuthenticatedAppProps {
   isUsingDevMessengerSigner: boolean;
@@ -58,12 +71,39 @@ export function AuthenticatedApp({
   const isMobileNav = useIsMobileNav();
   const { setHideAppHeader } = useMobileChatNav();
   const mobileChatOpen = isMobileNav && Boolean(selectedUuid);
+  const layoutRootRef = useRef<HTMLDivElement>(null);
+  /** Desktop: snappy collapse when the whole shell is too thin. */
+  const [desktopListOpen, setDesktopListOpen] = useState(true);
 
   // Hide AppHeader only while a mobile chat thread is open.
   useEffect(() => {
     setHideAppHeader(mobileChatOpen);
     return () => setHideAppHeader(false);
   }, [mobileChatOpen, setHideAppHeader]);
+
+  // Collapse / expand the conversation list by total layout width (desktop).
+  useLayoutEffect(() => {
+    if (isMobileNav) return;
+    const root = layoutRootRef.current;
+    if (!root) return;
+
+    const apply = () => {
+      const width = root.clientWidth;
+      if (width < 80) return;
+      if (width < CHAT_LIST_COLLAPSE_BELOW_PX) {
+        setDesktopListOpen(false);
+      } else if (width >= CHAT_LIST_EXPAND_ABOVE_PX) {
+        setDesktopListOpen(true);
+      }
+    };
+
+    apply();
+    const ro = new ResizeObserver(() => {
+      requestAnimationFrame(apply);
+    });
+    ro.observe(root);
+    return () => ro.disconnect();
+  }, [isMobileNav]);
 
   // Re-hydrate selection when the wallet address becomes available / changes.
   useEffect(() => {
@@ -144,23 +184,38 @@ export function AuthenticatedApp({
           needed.
         </div>
       )}
-      <div className="flex flex-1 overflow-hidden">
+      <div ref={layoutRootRef} className="flex flex-1 overflow-hidden">
         <div
           className={
-            mobileChatOpen
-              ? 'hidden md:flex md:w-72 md:shrink-0 md:flex-col'
-              : 'flex min-h-0 w-full flex-col md:w-72 md:shrink-0'
+            isMobileNav
+              ? mobileChatOpen
+                ? 'hidden'
+                : 'flex min-h-0 w-full flex-col'
+              : `min-h-0 shrink-0 overflow-hidden ${CHAT_SIDEBAR_MOTION} ${
+                  desktopListOpen ? 'w-72' : 'w-0'
+                }`
           }
         >
-          <Sidebar
-            groups={sortedGroups}
-            selectedUuid={selectedUuid}
-            unreadCounts={activity.counts}
-            latestOrders={activity.latestOrders}
-            paidDmGroupIds={paidDmGroupIds}
-            onSelectGroup={selectGroup}
-            loading={discoveryLoading}
-          />
+          <div
+            className={
+              isMobileNav
+                ? 'flex min-h-0 w-full flex-1 flex-col'
+                : 'flex h-full min-h-0 flex-col'
+            }
+            style={
+              isMobileNav ? undefined : { width: CHAT_LIST_WIDTH_PX }
+            }
+          >
+            <Sidebar
+              groups={sortedGroups}
+              selectedUuid={selectedUuid}
+              unreadCounts={activity.counts}
+              latestOrders={activity.latestOrders}
+              paidDmGroupIds={paidDmGroupIds}
+              onSelectGroup={selectGroup}
+              loading={discoveryLoading}
+            />
+          </div>
         </div>
         <div
           className={

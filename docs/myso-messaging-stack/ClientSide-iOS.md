@@ -9,8 +9,8 @@ DripDrop also keeps its **existing product WebSocket** (`WebSocketService`) to t
 | Socket | Service | Auth | Purpose |
 |--------|---------|------|---------|
 | DripDrop backend | `WebSocketService` | Bearer JWT JSON `{type:authenticate,token}` | Product realtime (unchanged) |
-| Messaging relayer user feed | `MessagingUserFeedService` | Wallet-signed query params | Unread / discovery wake signals |
-| Messaging relayer group feed | `MessagingGroupFeedService` (stub) | Wallet-signed query + `group_id` | Open-thread encrypted frames |
+| Messaging relayer user feed | `MessagingUserFeedService` | Wallet-signed query params | Unread / discovery wake signals (metadata only) |
+| Messaging relayer group feed | `MessagingGroupFeedService` | Wallet-signed query + `group_id` | Open-thread encrypted frames (`message.created`) |
 
 Lifecycle: on login / `sceneDidBecomeActive`, connect both DripDrop WS and user feed. On logout / background, disconnect both with `stopReconnect: true`.
 
@@ -31,7 +31,7 @@ Config: `MESSAGING_RELAYER_URL` in xcconfig / Info.plist as **host only** (e.g. 
 
 ## User feed WebSocket (`/v1/users/ws`)
 
-Wallet-scoped wake channel. Frames are **metadata only** — never ciphertext. After a wake, REST re-fetch is the source of truth (unread counts, message heads, read-state blob).
+Wallet-scoped wake channel. Frames are **metadata only** — never ciphertext. Inbox mirrors web: on `group.activity`, immediately refresh unread (`POST /v1/users/unread-counts`) and tip-decrypt the newest message via REST (`GET /v1/messages`). There is no always-on socket that streams every group's ciphertext into the sidebar.
 
 ### Auth (query string)
 
@@ -56,7 +56,7 @@ Swift: `MessagingRelayerAuth.createUserFeedQuery` (mirrors TS `createUserWsAuthQ
 
 | `type` | Meaning | Client action |
 |--------|---------|---------------|
-| `group.activity` | New message order in a group | REST re-fetch heads / messages for `group_id` |
+| `group.activity` | New message order in a group | Optimistic unread + immediate unread REST + tip preview decrypt for `group_id` |
 | `read_state.updated` | Encrypted read-state blob changed | `GET /v1/users/read-state` |
 | `group.discovered` | Conversation appeared (created/invited/joined) | Refresh group list |
 | `group.hidden` | Conversation should leave sidebar | Remove locally |
@@ -201,13 +201,14 @@ After the first MyData decrypt, thread plaintext is sealed with a per-wallet AES
 ### Chat tab lifecycle
 
 1. **Login / scene active** — user feed connects; `MessagingInboxService.start` loads cache, GraphQL discovery, metadata, `POST /v1/users/unread-counts` (local `localReadUpto` as `after_order`). If GraphQL returns `FEATURE_UNAVAILABLE` for event indexes (common on public testnet), discovery is skipped and the list relies on UserDefaults + `group.discovered` user-feed wakes.
-2. **Chat tab appears** — bind list UI; reconcile unread; 60s timer while mounted.
-3. **Chat tab destroyed** (custom tab bar) — stop timer / group WS; **keep** inbox singleton + store.
-4. **Open thread** — hydrate sealed store if present; then `fetchMessages` + GraphQL `ProfileFull` for senders; decrypt only missing plaintext; lazy image download; group WS; local `markRead`; persist sealed snapshot.
-5. **Send** — composer encrypts (DEK + AAD AES-GCM) → signs canonical content → `POST /v1/messages`; optimistic bubble then WS/fetch reconcile; write-through sealed store.
-6. **Typing** — throttled `POST /v1/groups/{id}/typing`; WS `typing.start`/`stop` drives indicator above composer.
-7. **List profiles** — `@handle` DM names resolve via indexer search → `ProfileFull`; list title/photo/SPT ring from `MessagingProfile`.
-8. **Encrypted read-state CAS / attachment upload-from-composer** — still deferred.
+2. **Foreground wakes** — `group.activity` on the user feed updates sort order immediately, bumps unread optimistically, then coalesced unread REST + tip preview decrypt (same model as web sidebar). Group feed (`MessagingGroupFeedService`) is used only while a thread is open.
+3. **Chat tab appears** — bind list UI; reconcile unread; 60s timer while mounted.
+4. **Chat tab destroyed** (custom tab bar) — stop timer / group WS; **keep** inbox singleton + store.
+5. **Open thread** — hydrate sealed store if present; then `fetchMessages` + GraphQL `ProfileFull` for senders; decrypt only missing plaintext; lazy image download; group WS; local `markRead`; persist sealed snapshot.
+6. **Send** — composer encrypts (DEK + AAD AES-GCM) → signs canonical content → `POST /v1/messages`; optimistic bubble then WS/fetch reconcile; write-through sealed store.
+7. **Typing** — throttled `POST /v1/groups/{id}/typing`; WS `typing.start`/`stop` drives indicator above composer.
+8. **List profiles** — `@handle` DM names resolve via indexer search → `ProfileFull`; list title/photo/SPT ring from `MessagingProfile`.
+9. **Encrypted read-state CAS / attachment upload-from-composer** — still deferred.
 
 Unread badges stay on the relayer path (not product backend). Merge with likes/comments badges only at the UI if needed.
 

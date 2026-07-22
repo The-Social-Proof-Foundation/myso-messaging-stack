@@ -27,6 +27,17 @@ import { useGroupMemberLabels } from '../hooks/useGroupMemberLabels';
 import { useDisplayGroupTitle } from '../hooks/useDisplayGroupTitle';
 import { dmPeerPresenceStatus } from '../lib/presence-utils';
 import { dmPeerAddress } from '../lib/wallet-profile';
+import {
+  formatBeginningCreated,
+  formatDaySeparator,
+  sameCalendarDay,
+  toDate,
+} from '../lib/message-time';
+import { useIsMobileNav } from '../hooks/useMediaQuery';
+import {
+  chatInfoWidthBand,
+  type ChatInfoWidthBand,
+} from '../lib/chat-layout';
 
 interface ChatAreaProps {
   selectedGroup: StoredGroup | null;
@@ -253,7 +264,15 @@ function ChatView({
   const { client, signer } = useRequiredMessagingClient();
   const { permissions, loading: permissionsLoading, refresh: refreshPermissions } =
     usePermissions(group.groupId);
+  const isMobileNav = useIsMobileNav();
   const [adminPanelOpen, setAdminPanelOpen] = useState(false);
+  const chatShellRef = useRef<HTMLDivElement>(null);
+  const chatColumnRef = useRef<HTMLDivElement>(null);
+  const adminPanelOpenRef = useRef(adminPanelOpen);
+  adminPanelOpenRef.current = adminPanelOpen;
+  const infoWidthBandRef = useRef<ChatInfoWidthBand | null>(null);
+  /** User closed Info while wide — honor until the shell leaves the wide band. */
+  const infoDismissedWhileWideRef = useRef(false);
   const {
     labelFor,
     memberAddresses,
@@ -261,6 +280,64 @@ function ChatView({
   } = useGroupMemberLabels(group.groupId, {
     refreshKey: adminPanelOpen ? 1 : 0,
   });
+
+  const toggleAdminPanel = useCallback(() => {
+    setAdminPanelOpen((open) => {
+      const next = !open;
+      if (!next && infoWidthBandRef.current === 'wide') {
+        infoDismissedWhileWideRef.current = true;
+      }
+      if (next) infoDismissedWhileWideRef.current = false;
+      return next;
+    });
+  }, []);
+
+  // Auto info: narrow → close, wide → open (unless user dismissed), mid → manual.
+  useLayoutEffect(() => {
+    if (isMobileNav) return;
+    const shell = chatShellRef.current;
+    if (!shell) return;
+    infoWidthBandRef.current = null;
+    infoDismissedWhileWideRef.current = false;
+
+    const applyBand = () => {
+      const shellWidth = shell.clientWidth;
+      // Skip pre-layout zeros so we don't lock into "narrow" forever.
+      if (shellWidth < 80) return;
+      const chatWidth = chatColumnRef.current?.clientWidth ?? shellWidth;
+      const band = chatInfoWidthBand(
+        shellWidth,
+        chatWidth,
+        adminPanelOpenRef.current,
+      );
+      const prev = infoWidthBandRef.current;
+      infoWidthBandRef.current = band;
+
+      if (band !== 'wide') {
+        infoDismissedWhileWideRef.current = false;
+      }
+
+      if (band === 'narrow') {
+        setAdminPanelOpen(false);
+      } else if (
+        band === 'wide' &&
+        !infoDismissedWhileWideRef.current &&
+        (prev !== 'wide' || !adminPanelOpenRef.current)
+      ) {
+        // Open on enter-wide and whenever wide but currently closed (e.g. mount).
+        setAdminPanelOpen(true);
+      }
+    };
+
+    applyBand();
+    const ro = new ResizeObserver(() => {
+      requestAnimationFrame(applyBand);
+    });
+    ro.observe(shell);
+    const column = chatColumnRef.current;
+    if (column) ro.observe(column);
+    return () => ro.disconnect();
+  }, [isMobileNav, group.groupId]);
   const paidGate = usePaidDmGate(group);
   const {
     messages,
@@ -479,9 +556,10 @@ function ChatView({
   }, [scrollToBottomSmooth]);
 
   return (
-    <div className="flex min-w-0 flex-1 overflow-hidden">
+    <div ref={chatShellRef} className="flex min-w-0 flex-1 overflow-hidden">
       {/* On mobile, Group Info is its own full view — hide chat while open */}
       <div
+        ref={chatColumnRef}
         className={`min-w-0 flex-1 flex-col ${
           adminPanelOpen ? 'hidden md:flex' : 'flex'
         }`}
@@ -498,7 +576,7 @@ function ChatView({
             memberAddresses={memberAddresses}
             dmPresence={dmPresence}
             permissionsLoading={permissionsLoading}
-            onToggleAdmin={() => setAdminPanelOpen((o) => !o)}
+            onToggleAdmin={toggleAdminPanel}
             adminPanelOpen={adminPanelOpen}
             onMobileBack={onMobileBack}
             recoveryEnabled={recoveryEnabled}
@@ -554,48 +632,83 @@ function ChatView({
         {/* Message list */}
         {!loading && messages.length > 0 && (
           <div className="flex flex-col pb-4 pt-6">
+            {!hasMore && (
+              <div className="mb-4 flex flex-col items-center gap-2 px-4 pt-2 text-center">
+                <p className="text-[13px] font-semibold text-secondary-600/80 dark:text-secondary-300/80">
+                  Beginning of Chat
+                </p>
+                <p className="text-xs text-secondary-400/80 dark:text-secondary-500/70">
+                  created on{' '}
+                  {formatBeginningCreated(
+                    group.createdAt > 0
+                      ? group.createdAt
+                      : messages[0]!.createdAt,
+                  )}
+                </p>
+              </div>
+            )}
             {messages.map((msg, index) => {
               const isOwn = sameAddress(msg.senderAddress, myAddress);
               const prev = messages[index - 1];
               const next = messages[index + 1];
+              // Day separators cut packs (iOS): tip before a day change gets avatar + meta.
+              const dayBreakAfterPrev =
+                Boolean(prev) &&
+                !sameCalendarDay(toDate(prev!.createdAt), toDate(msg.createdAt));
+              const dayBreakBeforeNext =
+                Boolean(next) &&
+                !sameCalendarDay(toDate(msg.createdAt), toDate(next!.createdAt));
               const isFirstInGroup =
-                !prev || !sameAddress(prev.senderAddress, msg.senderAddress);
+                !prev ||
+                !sameAddress(prev.senderAddress, msg.senderAddress) ||
+                dayBreakAfterPrev;
               const isLastInGroup =
-                !next || !sameAddress(next.senderAddress, msg.senderAddress);
+                !next ||
+                !sameAddress(next.senderAddress, msg.senderAddress) ||
+                dayBreakBeforeNext;
+              const showDaySeparator = dayBreakAfterPrev;
               return (
-                <MessageBubble
-                  key={msg.messageId}
-                  message={msg}
-                  isOwnMessage={isOwn}
-                  onEdit={isOwn && permissions.canEdit ? editMessage : undefined}
-                  onDelete={
-                    isOwn && permissions.canDelete ? deleteMessage : undefined
-                  }
-                  reactions={reactions.get(msg.order)}
-                  onToggleReaction={
-                    permissions.canSend ? toggleReaction : undefined
-                  }
-                  myAddress={myAddress ?? undefined}
-                  preferReactionBelow={index === 0}
-                  isFirstInGroup={isFirstInGroup}
-                  isLastInGroup={isLastInGroup}
-                  avatarSrc={
-                    msg.senderAddress
-                      ? photoFor(msg.senderAddress)
-                      : null
-                  }
-                  labelForAddress={profileLabelFor}
-                  avatarShowRing={
-                    msg.senderAddress
-                      ? ringFor(msg.senderAddress).showRing
-                      : false
-                  }
-                  avatarRingPercent={
-                    msg.senderAddress
-                      ? ringFor(msg.senderAddress).ringPercent
-                      : 0
-                  }
-                />
+                <div key={msg.messageId}>
+                  {showDaySeparator && (
+                    <div className="my-3 flex justify-center px-4">
+                      <p className="text-[13px] font-semibold text-secondary-600/80 dark:text-secondary-300/80">
+                        {formatDaySeparator(msg.createdAt)}
+                      </p>
+                    </div>
+                  )}
+                  <MessageBubble
+                    message={msg}
+                    isOwnMessage={isOwn}
+                    onEdit={isOwn && permissions.canEdit ? editMessage : undefined}
+                    onDelete={
+                      isOwn && permissions.canDelete ? deleteMessage : undefined
+                    }
+                    reactions={reactions.get(msg.order)}
+                    onToggleReaction={
+                      permissions.canSend ? toggleReaction : undefined
+                    }
+                    myAddress={myAddress ?? undefined}
+                    preferReactionBelow={index === 0}
+                    isFirstInGroup={isFirstInGroup}
+                    isLastInGroup={isLastInGroup}
+                    avatarSrc={
+                      msg.senderAddress
+                        ? photoFor(msg.senderAddress)
+                        : null
+                    }
+                    labelForAddress={profileLabelFor}
+                    avatarShowRing={
+                      msg.senderAddress
+                        ? ringFor(msg.senderAddress).showRing
+                        : false
+                    }
+                    avatarRingPercent={
+                      msg.senderAddress
+                        ? ringFor(msg.senderAddress).ringPercent
+                        : 0
+                    }
+                  />
+                </div>
               );
             })}
           </div>

@@ -56,10 +56,9 @@ export function MemberList({
         Members ({members.length})
       </h4>
 
-      {loading && (
-        <div className="flex items-center gap-2 py-4">
+      {loading && members.length === 0 && (
+        <div className="flex items-center justify-center py-6">
           <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-primary-500 border-t-transparent" />
-          <span className="text-xs text-secondary-400 dark:text-secondary-500">Loading...</span>
         </div>
       )}
 
@@ -67,7 +66,7 @@ export function MemberList({
         <p className="text-xs text-secondary-400 dark:text-secondary-500">No members found.</p>
       )}
 
-      {!loading && members.length > 0 && (
+      {members.length > 0 && (
         <ul className="overflow-hidden rounded-xl border border-secondary-200 bg-secondary-100 dark:border-secondary-700 dark:bg-secondary-800">
           {members.map((m) => {
             const isSelf = m.address === accountAddress;

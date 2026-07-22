@@ -1,8 +1,8 @@
 /**
  * Slide-out admin panel for group management.
- * Desktop: side panel without chrome header. Mobile: full-view with back.
+ * Desktop: animated width rail. Mobile: full-view with back.
  */
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { ChevronLeft } from 'lucide-react';
 import { useRequiredMessagingClient } from '../contexts/MessagingClientContext';
 import { signAndExecuteTransactionAndWait } from '../lib/sign-and-wait';
@@ -13,6 +13,11 @@ import { MemberList } from './admin/MemberList';
 import { AddMemberForm } from './admin/AddMemberForm';
 import { GroupActionsSection } from './admin/GroupActionsSection';
 import type { WalletRingBits } from '../hooks/useWalletAvatarMap';
+import { useIsMobileNav } from '../hooks/useMediaQuery';
+import {
+  CHAT_INFO_WIDTH_PX,
+  CHAT_SIDEBAR_MOTION,
+} from '../lib/chat-layout';
 
 interface MemberWithPermissions {
   address: string;
@@ -59,9 +64,12 @@ export function AdminPanel({
   ringFor,
 }: Readonly<AdminPanelProps>) {
   const { client, signer } = useRequiredMessagingClient();
+  const isMobileNav = useIsMobileNav();
 
   const [members, setMembers] = useState<MemberWithPermissions[]>([]);
   const [loadingMembers, setLoadingMembers] = useState(false);
+  const membersRef = useRef(members);
+  membersRef.current = members;
 
   // Add member form
   const [newAddress, setNewAddress] = useState('');
@@ -95,32 +103,38 @@ export function AdminPanel({
     { key: 'Group handle', value: client.messaging.bcs.GroupHandleAdmin.name },
   ];
 
-  // System object addresses (GroupLeaver, GroupManager) — not human members
-  const systemAddresses = client.messaging.derive.systemObjectAddresses();
-
-  // Fetch members
+  // Fetch members — keep existing rows mounted; only show the spinner on first load.
   const fetchMembers = useCallback(async () => {
-    setLoadingMembers(true);
+    const showSpinner = membersRef.current.length === 0;
+    if (showSpinner) setLoadingMembers(true);
     try {
+      // System objects (GroupLeaver, GroupManager) — not human members.
+      const systemAddresses = client.messaging.derive.systemObjectAddresses();
       const result = await client.groups.view.getMembers({
         groupId,
         exhaustive: true,
       });
-      setMembers(
-        (result.members as MemberWithPermissions[]).filter(
-          (m) => !systemAddresses.has(m.address),
-        ),
+      const next = (result.members as MemberWithPermissions[]).filter(
+        (m) => !systemAddresses.has(m.address),
       );
+      // Address keys stay stable — React adds/removes rows in place.
+      setMembers(next);
     } catch (err) {
       console.error('Failed to fetch members:', err);
     } finally {
-      setLoadingMembers(false);
+      if (showSpinner) setLoadingMembers(false);
     }
   }, [client, groupId]);
 
+  // Clear cache when switching groups so we don't flash the wrong roster.
+  useEffect(() => {
+    setMembers([]);
+    setLoadingMembers(false);
+  }, [groupId]);
+
   useEffect(() => {
     if (open) {
-      fetchMembers().then();
+      void fetchMembers();
       setNewName(groupName);
     }
   }, [open, fetchMembers, groupName]);
@@ -147,7 +161,13 @@ export function AdminPanel({
       await signAndExecuteTransactionAndWait(client, signer, tx);
       setNewAddress('');
       setSelectedPerms([]);
-      await fetchMembers();
+      // Append immediately; silent refetch reconciles permissions / ordering.
+      setMembers((prev) =>
+        prev.some((m) => m.address.toLowerCase() === address.toLowerCase())
+          ? prev
+          : [...prev, { address, permissions: selectedPerms }],
+      );
+      void fetchMembers();
       onPermissionsChanged?.();
     } catch (err) {
       console.error('Failed to add member:', err);
@@ -166,7 +186,10 @@ export function AdminPanel({
     try {
       const tx = client.groups.tx.removeMember({ groupId, member });
       await signAndExecuteTransactionAndWait(client, signer, tx);
-      await fetchMembers();
+      setMembers((prev) =>
+        prev.filter((m) => m.address.toLowerCase() !== member.toLowerCase()),
+      );
+      void fetchMembers();
       onPermissionsChanged?.();
     } catch (err) {
       console.error('Failed to remove member:', err);
@@ -224,7 +247,10 @@ export function AdminPanel({
         members: [member],
       });
       await signAndExecuteTransactionAndWait(client, signer, tx);
-      await fetchMembers();
+      setMembers((prev) =>
+        prev.filter((m) => m.address.toLowerCase() !== member.toLowerCase()),
+      );
+      void fetchMembers();
       onPermissionsChanged?.();
     } catch (err) {
       console.error('Failed to remove & rotate:', err);
@@ -308,12 +334,13 @@ export function AdminPanel({
     }
   }
 
-  if (!open) return null;
+  // Mobile: unmount when closed (full-screen takeover when open).
+  if (isMobileNav && !open) return null;
 
   const title = 'Details';
 
-  return (
-    <div className="flex min-h-0 w-full min-w-0 flex-1 flex-col bg-white dark:bg-secondary-900 md:w-80 md:flex-none md:shrink-0 md:border-l md:border-secondary-200 dark:md:border-secondary-700">
+  const body = (
+    <>
       {/* Mobile-only header: back + title (desktop has no chrome) */}
       <div className="relative flex h-14 shrink-0 items-center justify-center border-b border-secondary-200/40 px-5 dark:border-secondary-700/40 md:hidden">
         <button
@@ -338,7 +365,10 @@ export function AdminPanel({
             newName={newName}
             renaming={renaming}
             onEditStart={() => setEditingName(true)}
-            onEditCancel={() => { setEditingName(false); setNewName(groupName); }}
+            onEditCancel={() => {
+              setEditingName(false);
+              setNewName(groupName);
+            }}
             onNameChange={setNewName}
             onRename={handleRename}
           />
@@ -392,6 +422,31 @@ export function AdminPanel({
             leaveError={leaveError}
           />
         )}
+      </div>
+    </>
+  );
+
+  if (isMobileNav) {
+    return (
+      <div className="flex min-h-0 w-full min-w-0 flex-1 flex-col bg-white dark:bg-secondary-900">
+        {body}
+      </div>
+    );
+  }
+
+  // Desktop: keep mounted and tween width so open/close is snappy.
+  return (
+    <div
+      className={`hidden min-h-0 shrink-0 overflow-hidden border-secondary-200 bg-white dark:border-secondary-700 dark:bg-secondary-900 md:flex md:flex-col ${CHAT_SIDEBAR_MOTION} ${
+        open ? 'w-80 border-l' : 'w-0 border-l-0'
+      }`}
+      aria-hidden={!open}
+    >
+      <div
+        className="flex h-full min-h-0 flex-col"
+        style={{ width: CHAT_INFO_WIDTH_PX }}
+      >
+        {body}
       </div>
     </div>
   );

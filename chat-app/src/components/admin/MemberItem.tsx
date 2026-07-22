@@ -48,7 +48,7 @@ function truncateAddress(address: string): string {
   return `${address.slice(0, 6)}...${address.slice(-4)}`;
 }
 
-const MEMBER_AVATAR_SIZE = 28;
+const MEMBER_AVATAR_SIZE = 24;
 
 export function MemberItem({
   address,
@@ -77,7 +77,7 @@ export function MemberItem({
       <button
         type="button"
         onClick={onToggleExpand}
-        className="flex w-full items-center gap-2 px-3 py-2.5 text-left text-xs text-secondary-700 transition-colors hover:bg-secondary-200/80 dark:text-secondary-300 dark:hover:bg-secondary-700"
+        className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-secondary-700 transition-colors hover:bg-secondary-200/80 dark:text-secondary-300 dark:hover:bg-secondary-700"
         title={address}
         aria-expanded={isExpanded}
       >

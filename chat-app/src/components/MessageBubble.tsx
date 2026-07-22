@@ -24,6 +24,7 @@ import {
   ReservationNavAvatar,
   reservationAvatarShellSize,
 } from './ReservationNavAvatar';
+import { formatMessageTime } from '../lib/message-time';
 
 /** Quick reaction palette shown in the reaction tray. */
 const REACTION_EMOJIS = ['👍', '❤️', '😂', '😮', '😢', '🙏'];
@@ -117,25 +118,6 @@ function LinkifiedText({
     nodes.push(text.slice(lastIndex));
   }
   return <>{nodes.length > 0 ? nodes : text}</>;
-}
-
-/** Format Unix timestamp (seconds) to a short relative/absolute time string. */
-function formatTime(epochSeconds: number): string {
-  const date = new Date(epochSeconds * 1000);
-  const now = Date.now();
-  const diffMs = now - date.getTime();
-  const diffMin = Math.floor(diffMs / 60_000);
-
-  if (diffMin < 1) return 'just now';
-  if (diffMin < 60) return `${diffMin}m ago`;
-  if (diffMin < 1440) return `${Math.floor(diffMin / 60)}h ago`;
-
-  return date.toLocaleDateString(undefined, {
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
 }
 
 function truncateAddress(address: string): string {
@@ -776,7 +758,9 @@ export function MessageBubble({
     </span>
   ) : null;
 
-  const timeLabel = formatTime(message.createdAt);
+  const timeLabel = formatMessageTime(message.createdAt, {
+    always: isOwnMessage,
+  });
   const editedSuffix = message.isEdited ? (
     <span className="italic">(edited)</span>
   ) : null;
@@ -1094,7 +1078,11 @@ export function MessageBubble({
               {isOwnMessage ? (
                 <>
                   {verifiedCheck}
-                  <span>{timeLabel}</span>
+                  {timeLabel ? (
+                    <span className="text-secondary-400/70 dark:text-secondary-500/70">
+                      {timeLabel}
+                    </span>
+                  ) : null}
                   {editedSuffix}
                 </>
               ) : (
@@ -1123,7 +1111,11 @@ export function MessageBubble({
                       Agent
                     </span>
                   )}
-                  <span>{timeLabel}</span>
+                  {timeLabel ? (
+                    <span className="text-secondary-400/70 dark:text-secondary-500/70">
+                      {timeLabel}
+                    </span>
+                  ) : null}
                   {editedSuffix}
                   {verifiedCheck}
                 </>

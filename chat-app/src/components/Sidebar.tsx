@@ -45,7 +45,7 @@ export function Sidebar({
   const groupIds = useMemo(() => groups.map((g) => g.groupId), [groups]);
   const membersByGroup = useSidebarGroupMembers(groupIds);
   const previews = useSidebarMessagePreviews(groups, latestOrders);
-
+  // membersByGroup is seeded from persisted peers before getMembers returns.
   const profileAddresses = useMemo(() => {
     const addrs = new Set<string>();
     for (const members of membersByGroup.values()) {
@@ -56,11 +56,10 @@ export function Sidebar({
     }
     return [...addrs];
   }, [membersByGroup, address]);
-
   const profiles = useWalletAvatarMap(profileAddresses);
 
   return (
-    <aside className="flex h-full min-h-0 w-full flex-1 flex-col bg-white md:w-72 md:shrink-0 md:border-r md:border-secondary-200/80 dark:bg-secondary-900 dark:md:border-secondary-700">
+    <aside className="flex h-full min-h-0 w-full flex-1 flex-col border-r border-secondary-200/80 bg-white dark:border-secondary-700 dark:bg-secondary-900">
       {/* Group list */}
       <div className="flex-1 overflow-y-auto">
         {groups.length === 0 ? (
