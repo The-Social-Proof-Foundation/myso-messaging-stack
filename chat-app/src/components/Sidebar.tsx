@@ -85,12 +85,13 @@ export function Sidebar({
                 !!selectedUuid;
               const members = membersByGroup.get(group.groupId) ?? [];
               const peer = dmPeerAddress(members, address);
+              const peerHandle = peer ? profiles.handleFor(peer) : null;
               const title = conversationDisplayTitle({
                 officialName: group.name,
                 selfLabels,
                 memberAddresses: members,
                 selfAddress: address,
-                peerLabel: peer ? profiles.labelFor(peer) : null,
+                peerLabel: peer ? profiles.headerTitleFor(peer) : null,
               });
               const preview = previews.get(group.groupId) ?? '';
               return (
@@ -114,9 +115,16 @@ export function Sidebar({
                         profiles={profiles}
                       />
                       <div className="min-w-0 flex-1 pt-px">
-                        <p className="translate-y-px truncate text-sm font-medium leading-tight">
-                          {title}
-                        </p>
+                        <div className="flex min-w-0 items-baseline gap-1.5">
+                          <p className="translate-y-px min-w-0 truncate text-sm font-medium leading-tight">
+                            {title}
+                          </p>
+                          {peerHandle ? (
+                            <span className="shrink-0 text-xs font-medium leading-tight tracking-tight text-secondary-500 dark:text-secondary-400">
+                              {peerHandle}
+                            </span>
+                          ) : null}
+                        </div>
                         <p className="mt-0.5 line-clamp-2 text-xs font-medium leading-snug tracking-tight text-secondary-400 dark:text-secondary-500">
                           {preview || 'No messages yet'}
                         </p>

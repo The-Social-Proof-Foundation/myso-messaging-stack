@@ -28,10 +28,9 @@ import { useDisplayGroupTitle } from '../hooks/useDisplayGroupTitle';
 import { dmPeerPresenceStatus } from '../lib/presence-utils';
 import { dmPeerAddress } from '../lib/wallet-profile';
 import {
+  computeTimeMarkers,
   formatBeginningCreated,
   formatDaySeparator,
-  sameCalendarDay,
-  toDate,
 } from '../lib/message-time';
 import { useIsMobileNav } from '../hooks/useMediaQuery';
 import {
@@ -339,6 +338,28 @@ function ChatView({
     return () => ro.disconnect();
   }, [isMobileNav, group.groupId]);
   const paidGate = usePaidDmGate(group);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  /**
+   * Snapshot right before older messages merge (post-fetch). Restored in
+   * useLayoutEffect so mid-flight scroll isn’t snapped back.
+   */
+  const olderScrollAnchorRef = useRef<{
+    height: number;
+    top: number;
+    oldestId: string | null;
+  } | null>(null);
+  const oldestMessageIdRef = useRef<string | null>(null);
+
+  const captureOlderScrollAnchor = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    olderScrollAnchorRef.current = {
+      height: el.scrollHeight,
+      top: el.scrollTop,
+      oldestId: oldestMessageIdRef.current,
+    };
+  }, []);
+
   const {
     messages,
     loading,
@@ -346,6 +367,7 @@ function ChatView({
     claiming,
     error,
     hasMore,
+    loadingOlder,
     reactions,
     typingMembers,
     onlineMembers,
@@ -369,7 +391,10 @@ function ChatView({
     onReadStateChanged,
     claimPending: paidGate.claimPending,
     onGroupActivity,
+    onBeforeOlderMessagesApply: captureOlderScrollAnchor,
   });
+
+  oldestMessageIdRef.current = messages[0]?.messageId ?? null;
 
   const profileAddresses = useMemo(() => {
     const addrs = new Set<string>();
@@ -397,11 +422,41 @@ function ChatView({
     ringFor,
   } = useWalletAvatarMap(profileAddresses);
 
-  const typingTypers = typingMembers.map((address) => ({
-    address,
-    label: profileLabelFor(address) || labelFor(address),
-    avatarSrc: photoFor(address),
-  }));
+  const typingTypers = typingMembers.map((address) => {
+    const ring = ringFor(address);
+    return {
+      address,
+      label: profileLabelFor(address) || labelFor(address),
+      avatarSrc: photoFor(address),
+      showRing: ring.showRing,
+      ringPercent: ring.ringPercent,
+    };
+  });
+
+  /**
+   * Same-sender typers join the tip pack only when the latest message is from
+   * that peer (not after our own tip — that starts a new turn with avatar).
+   */
+  const timeMarkers = useMemo(
+    () => computeTimeMarkers(messages),
+    [messages],
+  );
+
+  const {stackTypers, newPackTypers} = useMemo(() => {
+    const tip = messages[messages.length - 1];
+    const tipIsPeer =
+      Boolean(tip?.senderAddress) && !sameAddress(tip!.senderAddress, myAddress);
+    if (!tip || !tipIsPeer) {
+      return {stackTypers: [] as typeof typingTypers, newPackTypers: typingTypers};
+    }
+    const stack: typeof typingTypers = [];
+    const fresh: typeof typingTypers = [];
+    for (const t of typingTypers) {
+      if (sameAddress(t.address, tip.senderAddress)) stack.push(t);
+      else fresh.push(t);
+    }
+    return {stackTypers: stack, newPackTypers: fresh};
+  }, [typingTypers, messages, myAddress]);
 
   const dmPresence = useMemo((): DmPresenceView => {
     const peer = dmPeerAddress(memberAddresses, myAddress);
@@ -443,7 +498,6 @@ function ChatView({
     }
   }, [client, group, signer, onLeaveGroup]);
 
-  const scrollRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const [isAtBottom, setIsAtBottom] = useState(true);
   const prevMessageCountRef = useRef(0);
@@ -514,8 +568,50 @@ function ChatView({
     return () => cancelAnimationFrame(raf);
   }, [loading, messages.length, performOpenScroll, handleScroll]);
 
+  // After older pages prepend, pin the viewport to the post-fetch anchor.
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    const anchor = olderScrollAnchorRef.current;
+    if (!el || !anchor) return;
+    const oldestId = messages[0]?.messageId ?? null;
+    // Wait until the oldest row changes — that’s the prepend, not a tip append.
+    if (oldestId === anchor.oldestId) return;
+
+    const apply = () => {
+      const node = scrollRef.current;
+      if (!node) return;
+      const diff = node.scrollHeight - anchor.height;
+      if (diff > 0) {
+        node.scrollTop = anchor.top + diff;
+      }
+    };
+    apply();
+    // Second pass after late cell height (images / fonts), same idea as iOS.
+    const raf = requestAnimationFrame(apply);
+    olderScrollAnchorRef.current = null;
+    prevMessageCountRef.current = messages.length;
+    handleScroll();
+    return () => cancelAnimationFrame(raf);
+  }, [messages.length, messages[0]?.messageId, handleScroll]);
+
+  // Drop a stale anchor if the older fetch finished without a prepend.
+  useEffect(() => {
+    if (loadingOlder) return;
+    if (!olderScrollAnchorRef.current) return;
+    const id = requestAnimationFrame(() => {
+      // Still waiting on oldestId change → fetch was a no-op / duplicate page.
+      olderScrollAnchorRef.current = null;
+    });
+    return () => cancelAnimationFrame(id);
+  }, [loadingOlder]);
+
   // Auto-scroll when new messages arrive (only if already at bottom)
   useEffect(() => {
+    // Never tip-scroll while restoring an older-page anchor.
+    if (olderScrollAnchorRef.current) {
+      prevMessageCountRef.current = messages.length;
+      return;
+    }
     if (
       !didInitialScrollRef.current ||
       !isAtBottom ||
@@ -536,20 +632,24 @@ function ChatView({
     }
   }, [typingMembers.length, isAtBottom, scrollToBottomSmooth]);
 
-  // Preserve scroll position when loading older messages (prepending)
-  const prevScrollHeightRef = useRef(0);
+  // Infinite scroll: load older when the top sentinel enters the scrollport.
+  const olderSentinelRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    const el = scrollRef.current;
-    if (!el) return;
-    // If scrollHeight grew and we're at the top, maintain position
-    if (el.scrollTop < 10 && prevScrollHeightRef.current > 0) {
-      const diff = el.scrollHeight - prevScrollHeightRef.current;
-      if (diff > 0) {
-        el.scrollTop = diff;
-      }
-    }
-    prevScrollHeightRef.current = el.scrollHeight;
-  }, [messages.length]);
+    const root = scrollRef.current;
+    const sentinel = olderSentinelRef.current;
+    if (!root || !sentinel || loading || !hasMore) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting) && !loadingOlder) {
+          void loadMore();
+        }
+      },
+      {root, rootMargin: '80px 0px 0px 0px', threshold: 0},
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [loading, hasMore, loadingOlder, loadMore, messages.length]);
 
   const scrollToBottom = useCallback(() => {
     scrollToBottomSmooth();
@@ -569,6 +669,7 @@ function ChatView({
         ref={scrollRef}
         onScroll={handleScroll}
         className="relative flex min-w-0 flex-1 flex-col overflow-x-hidden overflow-y-auto"
+        style={{overflowAnchor: 'none'}}
       >
         <div className="sticky top-0 z-30">
           <DisplayChatHeader
@@ -586,18 +687,6 @@ function ChatView({
             }}
           />
         </div>
-
-        {/* Load more */}
-        {hasMore && !loading && (
-          <div className="py-2 text-center">
-            <button
-              onClick={loadMore}
-              className="text-xs text-primary-500 hover:text-primary-600"
-            >
-              Load older messages
-            </button>
-          </div>
-        )}
 
         {/* Loading skeleton */}
         {loading && (
@@ -632,7 +721,18 @@ function ChatView({
         {/* Message list */}
         {!loading && messages.length > 0 && (
           <div className="flex flex-col pb-4 pt-6">
-            {!hasMore && (
+            {/* Older-page sentinel (iOS-style scroll-to-top paging) */}
+            {hasMore ? (
+              <div
+                ref={olderSentinelRef}
+                className="flex min-h-8 items-center justify-center py-2"
+                aria-hidden={!loadingOlder}
+              >
+                {loadingOlder ? (
+                  <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-primary-500 border-t-transparent" />
+                ) : null}
+              </div>
+            ) : (
               <div className="mb-4 flex flex-col items-center gap-2 px-4 pt-2 text-center">
                 <p className="text-[13px] font-semibold text-secondary-600/80 dark:text-secondary-300/80">
                   Beginning of Chat
@@ -651,28 +751,29 @@ function ChatView({
               const isOwn = sameAddress(msg.senderAddress, myAddress);
               const prev = messages[index - 1];
               const next = messages[index + 1];
-              // Day separators cut packs (iOS): tip before a day change gets avatar + meta.
-              const dayBreakAfterPrev =
-                Boolean(prev) &&
-                !sameCalendarDay(toDate(prev!.createdAt), toDate(msg.createdAt));
-              const dayBreakBeforeNext =
-                Boolean(next) &&
-                !sameCalendarDay(toDate(msg.createdAt), toDate(next!.createdAt));
+              const marker = timeMarkers.get(msg.messageId);
+              const nextMarker = next
+                ? timeMarkers.get(next.messageId)
+                : undefined;
+              // Time markers cut packs (same as iOS).
+              const breakAfterPrev = Boolean(marker);
+              const breakBeforeNext = Boolean(nextMarker);
               const isFirstInGroup =
                 !prev ||
                 !sameAddress(prev.senderAddress, msg.senderAddress) ||
-                dayBreakAfterPrev;
+                breakAfterPrev;
               const isLastInGroup =
                 !next ||
                 !sameAddress(next.senderAddress, msg.senderAddress) ||
-                dayBreakBeforeNext;
-              const showDaySeparator = dayBreakAfterPrev;
+                breakBeforeNext;
               return (
                 <div key={msg.messageId}>
-                  {showDaySeparator && (
+                  {marker && (
                     <div className="my-3 flex justify-center px-4">
                       <p className="text-[13px] font-semibold text-secondary-600/80 dark:text-secondary-300/80">
-                        {formatDaySeparator(msg.createdAt)}
+                        {formatDaySeparator(msg.createdAt, {
+                          includeTime: marker.includeTime,
+                        })}
                       </p>
                     </div>
                   )}
@@ -714,8 +815,11 @@ function ChatView({
           </div>
         )}
 
-        {typingTypers.length > 0 && (
-          <TypingIndicator typers={typingTypers} />
+        {stackTypers.length > 0 && (
+          <TypingIndicator typers={stackTypers} continueStack />
+        )}
+        {newPackTypers.length > 0 && (
+          <TypingIndicator typers={newPackTypers} />
         )}
 
         <div ref={bottomRef} />

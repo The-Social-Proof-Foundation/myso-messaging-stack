@@ -340,8 +340,8 @@ function ImageAttachmentTile({
 
       {reactionOverlay ? (
         <div
-          className={`absolute z-10 flex max-w-[min(100%,14rem)] flex-wrap gap-1 ${
-            isOwnMessage ? '-top-3.5 -left-2' : '-top-3.5 -right-2'
+          className={`absolute z-10 flex w-max max-w-none flex-nowrap gap-1 ${
+            isOwnMessage ? '-top-3.5 -right-2' : '-top-3.5 -left-2'
           }`}
         >
           {reactionOverlay}
@@ -593,11 +593,11 @@ export function MessageBubble({
   // Wraps bubble + picker so outside-close doesn't race.
   const bubbleWrapperRef = useRef<HTMLDivElement>(null);
   const hoveredReactionRef = useRef<string | null>(null);
-  // Chips always sit opposite the avatar at the top of the bubble.
+  // Grow into open gutter: own anchors right (extends left); peer anchors left (extends right).
   // First-message picker/delete go below so they aren't clipped by the scroll edge.
   const reactionAnchorClass = isOwnMessage
-    ? '-top-4 -left-3'
-    : '-top-4 -right-3';
+    ? '-top-4 -right-3'
+    : '-top-4 -left-3';
   const popoverVerticalClass = preferReactionBelow
     ? 'top-full mt-1'
     : '-top-11';
@@ -1005,7 +1005,7 @@ export function MessageBubble({
                   </div>
                   {imageAttachments.length === 0 && reactionChipItems ? (
                     <div
-                      className={`absolute z-10 flex max-w-[min(100%,14rem)] flex-wrap gap-1 ${reactionAnchorClass}`}
+                      className={`absolute z-10 flex w-max max-w-none flex-nowrap gap-1 ${reactionAnchorClass}`}
                     >
                       {reactionChipItems}
                     </div>

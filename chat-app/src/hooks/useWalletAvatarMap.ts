@@ -9,13 +9,16 @@ import {
 import {
   PROFILE_FULL_QUERY,
   mapGraphqlProfile,
+  profileHandleLabel,
+  profileHeaderTitle,
   reservationPoolFillPercentFromGraphqlProfile,
+  truncateWalletAddress,
   type WalletProfile,
 } from '../lib/wallet-profile';
 
 function truncateAddress(address: string): string {
   if (!address) return 'Someone';
-  return `${address.slice(0, 6)}...${address.slice(-4)}`;
+  return truncateWalletAddress(address);
 }
 
 function labelFromProfile(
@@ -27,6 +30,28 @@ function labelFromProfile(
   const display = profile?.display_name?.trim();
   if (display) return display;
   return truncateAddress(address);
+}
+
+function headerTitleFromCached(
+  address: string,
+  cached: StoredSidebarProfile | undefined,
+): string {
+  if (cached?.headerTitle?.trim()) return cached.headerTitle.trim();
+  // Legacy cache only stored `label` (@username preferred).
+  if (cached?.label?.startsWith('@')) return truncateAddress(address);
+  if (cached?.label?.trim()) return cached.label.trim();
+  return truncateAddress(address);
+}
+
+function handleFromCached(
+  cached: StoredSidebarProfile | undefined,
+): string | null {
+  if (cached && 'handle' in cached) {
+    const h = cached.handle?.trim();
+    return h || null;
+  }
+  if (cached?.label?.startsWith('@')) return cached.label;
+  return null;
 }
 
 /** GraphQL-only ring bits (no per-peer social-server indexer fetch). */
@@ -75,13 +100,19 @@ export type WalletRingBits = {
 
 export type WalletProfileBits = {
   photoFor: (address: string) => string | null;
+  /** Bubble / member lists: `@username` → display name → wallet. */
   labelFor: (address: string) => string;
+  /** Inbox header: display name → wallet. */
+  headerTitleFor: (address: string) => string;
+  /** `@username` when present. */
+  handleFor: (address: string) => string | null;
   ringFor: (address: string) => WalletRingBits;
 };
 
 /**
  * Resolves profile photos + display labels for wallet addresses via GraphQL.
- * Label preference: @username → display name → truncated address.
+ * `labelFor`: @username → display name → truncated address.
+ * `headerTitleFor` / `handleFor`: inbox row (name + optional @handle).
  * Hydrates from localStorage so sidebar avatars paint on return visits.
  */
 export function useWalletAvatarMap(
@@ -114,7 +145,11 @@ export function useWalletAvatarMap(
 
     const missing = list.filter((a) => {
       const cached = profileCache.get(a);
-      return !cached || typeof cached.showRing !== 'boolean';
+      return (
+        !cached ||
+        typeof cached.showRing !== 'boolean' ||
+        cached.headerTitle === undefined
+      );
     });
     if (missing.length === 0) {
       setVersion((v) => v + 1);
@@ -142,6 +177,8 @@ export function useWalletAvatarMap(
             profileCache.set(address, {
               photo: mapped?.profile_photo ?? null,
               label: labelFromProfile(address, mapped),
+              headerTitle: profileHeaderTitle(address, mapped),
+              handle: profileHandleLabel(mapped),
               showRing: ring.showRing,
               ringPercent: ring.ringPercent,
             });
@@ -149,6 +186,8 @@ export function useWalletAvatarMap(
             profileCache.set(address, {
               photo: null,
               label: truncateAddress(address),
+              headerTitle: truncateAddress(address),
+              handle: null,
               showRing: false,
               ringPercent: 0,
             });
@@ -182,6 +221,23 @@ export function useWalletAvatarMap(
     [version],
   );
 
+  const headerTitleFor = useCallback(
+    (address: string) =>
+      headerTitleFromCached(
+        address,
+        profileCache.get(address.trim().toLowerCase()),
+      ),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [version],
+  );
+
+  const handleFor = useCallback(
+    (address: string) =>
+      handleFromCached(profileCache.get(address.trim().toLowerCase())),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [version],
+  );
+
   const ringFor = useCallback(
     (address: string): WalletRingBits => {
       const cached = profileCache.get(address.trim().toLowerCase());
@@ -194,5 +250,5 @@ export function useWalletAvatarMap(
     [version],
   );
 
-  return { photoFor, labelFor, ringFor };
+  return { photoFor, labelFor, headerTitleFor, handleFor, ringFor };
 }

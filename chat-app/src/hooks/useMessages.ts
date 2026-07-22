@@ -43,6 +43,17 @@ import {
   setCachedThread,
   type CachedMessage,
 } from '../lib/message-session-cache';
+import {
+  MESSAGE_CATCHUP_MAX_PAGES,
+  MESSAGE_PAGE_SIZE,
+  applyNewerOrdersToLedger,
+  applyOlderPageToLedger,
+  emptyPageLedger,
+  ledgerFromMessages,
+  shouldFetchOlderPage,
+  shouldWarmCatchUpOnly,
+  type ThreadPageLedger,
+} from '../lib/message-page-ledger';
 import { publishSidebarMessagePreview } from './useSidebarMessagePreviews';
 
 export interface Message {
@@ -80,6 +91,8 @@ export interface UseMessagesResult {
   sending: boolean;
   error: string | null;
   hasMore: boolean;
+  /** Older page fetch in flight (scroll sentinel / loadMore). */
+  loadingOlder: boolean;
   reactions: MessageReactions;
   /** Members (excluding self) currently typing. */
   typingMembers: string[];
@@ -125,6 +138,11 @@ export interface UseMessagesOptions {
   claimPending?: boolean;
   /** Called when a message is sent or received — for sidebar activity ordering. */
   onGroupActivity?: (order: number) => void;
+  /**
+   * Called synchronously right before older-page messages are merged into state.
+   * Use to snapshot scroll position after the fetch, not before it starts.
+   */
+  onBeforeOlderMessagesApply?: () => void;
 }
 
 /** Shape returned by the SDK's getMessages method (messages may include attachments). */
@@ -239,6 +257,7 @@ export function useMessages(
   const recoveryEnabled = isMessageRecoveryEnabled();
   const [messages, setMessages] = useState<Message[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadingOlder, setLoadingOlder] = useState(false);
   const [restoring, setRestoring] = useState(false);
   const [sending, setSending] = useState(false);
   const [claiming, setClaiming] = useState(false);
@@ -262,6 +281,10 @@ export function useMessages(
   onReadStateChangedRef.current = options?.onReadStateChanged;
   const onGroupActivityRef = useRef(options?.onGroupActivity);
   onGroupActivityRef.current = options?.onGroupActivity;
+  const onBeforeOlderMessagesApplyRef = useRef(
+    options?.onBeforeOlderMessagesApply,
+  );
+  onBeforeOlderMessagesApplyRef.current = options?.onBeforeOlderMessagesApply;
   const claimPendingRef = useRef(options?.claimPending ?? false);
   claimPendingRef.current = options?.claimPending ?? false;
 
@@ -279,6 +302,11 @@ export function useMessages(
   const uuidRef = useRef(uuid);
   uuidRef.current = uuid;
   const lastOrderRef = useRef<number | undefined>(undefined);
+  const pageLedgerRef = useRef<ThreadPageLedger>(emptyPageLedger());
+  const messageCountRef = useRef(0);
+  const isLoadingInitialRef = useRef(false);
+  const isLoadingOlderRef = useRef(false);
+  const isCatchingUpRef = useRef(false);
   // Latest reactions for toggle decisions without re-creating callbacks.
   const reactionsRef = useRef<MessageReactions>(reactions);
   reactionsRef.current = reactions;
@@ -315,29 +343,44 @@ export function useMessages(
     }
   }, [client, signer, uuid]);
 
-  // Update lastOrderRef whenever messages change
+  // Keep tip cursor + ledger window bounds in sync with the live list.
   useEffect(() => {
-    if (messages.length > 0) {
-      lastOrderRef.current = messages.at(-1)?.order;
-    }
+    messageCountRef.current = messages.length;
+    if (messages.length === 0) return;
+    lastOrderRef.current = messages.at(-1)?.order;
+    const orders = messages.map((m) => m.order);
+    pageLedgerRef.current = {
+      ...pageLedgerRef.current,
+      minOrder: Math.min(...orders),
+      maxOrder: Math.max(...orders),
+    };
   }, [messages]);
 
   // ------------------------------------------------------------------
   // Load initial messages (stale-while-revalidate via session memory cache)
+  // Warm cache: after_order catch-up only (no tip re-query).
+  // Cold cache: tip window + seed page ledger.
   // ------------------------------------------------------------------
   useEffect(() => {
     const cached = getCachedThread(uuid);
-    if (cached) {
+    const warm =
+      Boolean(cached && cached.messages.length > 0) &&
+      shouldWarmCatchUpOnly(cached!.pageLedger);
+
+    if (cached && cached.messages.length > 0) {
+      pageLedgerRef.current = cached.pageLedger;
       setMessages(cached.messages as Message[]);
-      setHasMore(cached.hasMore);
+      setHasMore(cached.pageLedger.hasMoreOlder);
       setReactions(cached.reactions);
       setLoading(false);
     } else {
+      pageLedgerRef.current = emptyPageLedger();
       setMessages([]);
       setHasMore(false);
       setReactions(new Map());
       setLoading(true);
     }
+    setLoadingOlder(false);
     setError(null);
     setInitialReadUpto(0);
     setTypingUntil(new Map());
@@ -347,105 +390,190 @@ export function useMessages(
     pendingPaidSendRef.current = null;
     lastOrderRef.current = cached?.messages.at(-1)?.order;
     lastSentReadUptoRef.current = 0;
+    isLoadingInitialRef.current = true;
+    isLoadingOlderRef.current = false;
+    isCatchingUpRef.current = false;
 
     let cancelled = false;
 
+    async function loadReadState() {
+      try {
+        const readState = await client.messaging.getReadState({signer});
+        if (cancelled || uuidRef.current !== uuid) return;
+        const readUpto = readState?.groups[groupId]?.readUpto ?? 0;
+        setInitialReadUpto(readUpto);
+      } catch (err) {
+        console.warn('Failed to load read state:', err);
+      }
+    }
+
+    async function loadReactions(
+      fallback: MessageReactions | undefined,
+    ): Promise<MessageReactions> {
+      try {
+        const rows = await client.messaging.listReactions({
+          signer,
+          groupRef: {uuid},
+        });
+        if (cancelled || uuidRef.current !== uuid) {
+          return fallback ?? new Map();
+        }
+        const next = groupReactionsByOrder(rows);
+        setReactions(next);
+        return next;
+      } catch (err) {
+        console.warn('Failed to load reactions:', err);
+        if (fallback) {
+          setReactions(fallback);
+          return fallback;
+        }
+        return new Map();
+      }
+    }
+
+    async function loadPresence() {
+      try {
+        const entries = await client.messaging.getGroupPresence({
+          signer,
+          groupRef: {uuid},
+        });
+        if (cancelled || uuidRef.current !== uuid) return;
+        setPresenceRecords((prev) => applySnapshotEntries(prev, entries));
+      } catch (err) {
+        console.warn('Failed to load presence:', err);
+      }
+    }
+
+    async function catchUpFrom(
+      afterOrder: number,
+      base: Message[],
+      ledger: ThreadPageLedger,
+    ): Promise<{messages: Message[]; ledger: ThreadPageLedger}> {
+      let merged = base;
+      let nextLedger = ledger;
+      let cursor = afterOrder;
+      for (let i = 0; i < MESSAGE_CATCHUP_MAX_PAGES; i++) {
+        const result = (await client.messaging.getMessages({
+          signer,
+          groupRef: {uuid},
+          afterOrder: cursor,
+          limit: MESSAGE_PAGE_SIZE,
+          mydataApproveContext: undefined,
+        })) as SDKGetMessagesResult;
+        if (cancelled || uuidRef.current !== uuid) {
+          return {messages: merged, ledger: nextLedger};
+        }
+        if (result.messages.length === 0) {
+          nextLedger = applyNewerOrdersToLedger(nextLedger, []);
+          break;
+        }
+        const orders = result.messages.map((m) => m.order);
+        merged = mergeMessages(merged, result.messages);
+        nextLedger = applyNewerOrdersToLedger(nextLedger, orders);
+        cursor = nextLedger.maxOrder ?? cursor;
+        if (!result.hasNext) break;
+      }
+      return {messages: merged, ledger: nextLedger};
+    }
+
     async function loadInitial() {
       try {
-        const [result, readState] = await Promise.all([
-          client.messaging.getMessages({
+        void loadReadState();
+
+        let initial: Message[];
+        let nextLedger: ThreadPageLedger;
+
+        if (warm && cached) {
+          // Warm open: never re-fetch the tip window — catch up newer only.
+          const caught = await catchUpFrom(
+            cached.pageLedger.maxOrder!,
+            cached.messages as Message[],
+            cached.pageLedger,
+          );
+          initial = caught.messages;
+          nextLedger = caught.ledger;
+        } else {
+          const result = (await client.messaging.getMessages({
             signer,
-            groupRef: { uuid },
-            limit: 50,
+            groupRef: {uuid},
+            limit: MESSAGE_PAGE_SIZE,
             mydataApproveContext: undefined,
-          }) as Promise<SDKGetMessagesResult>,
-          client.messaging.getReadState({ signer }).catch((err) => {
-            console.warn('Failed to load read state:', err);
-            return null;
-          }),
-        ]);
+          })) as SDKGetMessagesResult;
+
+          if (cancelled || uuidRef.current !== uuid) return;
+
+          initial = sortMessagesByOrder(result.messages);
+          if (recoveryEnabled && initial.length === 0) {
+            try {
+              const recovered = await client.messaging.recoverMessages({
+                groupRef: {uuid},
+                limit: MESSAGE_PAGE_SIZE,
+                mydataApproveContext: undefined,
+              });
+              if (cancelled || uuidRef.current !== uuid) return;
+              const verified = recovered.messages.filter(
+                (m) => m.senderVerified !== false,
+              );
+              const dropped = recovered.messages.length - verified.length;
+              if (dropped > 0) {
+                console.warn(
+                  `Dropped ${dropped} unverified recovered message(s)`,
+                );
+              }
+              initial = mergeMessages(verified as Message[], initial);
+            } catch (err) {
+              console.warn('Silent history restore failed:', err);
+            }
+          }
+
+          if (cached && cached.messages.length > 0) {
+            initial = mergeMessages(cached.messages as Message[], initial);
+          }
+
+          let hasMoreOlder = result.hasNext;
+          if (cached && cached.messages.length > 0 && result.messages.length > 0) {
+            const oldestFetched = Math.min(
+              ...result.messages.map((m) => m.order),
+            );
+            const hasOlderCached = cached.messages.some(
+              (m) => m.order < oldestFetched,
+            );
+            if (hasOlderCached) {
+              hasMoreOlder = cached.pageLedger.hasMoreOlder;
+            }
+          }
+
+          nextLedger = ledgerFromMessages(
+            initial.map((m) => m.order),
+            hasMoreOlder,
+          );
+          // Preserve older-page cursors when merging a cold tip onto a partial cache.
+          if (cached?.pageLedger.fetchedBeforeOrders.length) {
+            nextLedger = {
+              ...nextLedger,
+              fetchedBeforeOrders: [...cached.pageLedger.fetchedBeforeOrders],
+              hasMoreOlder,
+            };
+          }
+        }
 
         if (cancelled || uuidRef.current !== uuid) return;
 
-        const readUpto = readState?.groups[groupId]?.readUpto ?? 0;
-        setInitialReadUpto(readUpto);
-
-        let initial = sortMessagesByOrder(result.messages);
-        // Silent archive fill when the live relayer has no history yet.
-        if (recoveryEnabled && initial.length === 0) {
-          try {
-            const recovered = await client.messaging.recoverMessages({
-              groupRef: { uuid },
-              limit: 50,
-              mydataApproveContext: undefined,
-            });
-            if (cancelled || uuidRef.current !== uuid) return;
-            const verified = recovered.messages.filter((m) => m.senderVerified !== false);
-            const dropped = recovered.messages.length - verified.length;
-            if (dropped > 0) {
-              console.warn(`Dropped ${dropped} unverified recovered message(s)`);
-            }
-            // Live rows win on conflict (none here); keep helper order consistent.
-            initial = mergeMessages(verified as Message[], initial);
-          } catch (err) {
-            console.warn('Silent history restore failed:', err);
-          }
-        }
-
-        // Keep any deeper pages already in the session cache when reconciling
-        // the latest page from the server.
-        if (cached && cached.messages.length > 0) {
-          initial = mergeMessages(cached.messages as Message[], initial);
-        }
-
-        let nextHasMore = result.hasNext;
-        if (cached && cached.messages.length > 0 && result.messages.length > 0) {
-          const oldestFetched = Math.min(
-            ...result.messages.map((m) => m.order),
-          );
-          const hasOlderCached = cached.messages.some(
-            (m) => m.order < oldestFetched,
-          );
-          if (hasOlderCached) {
-            nextHasMore = cached.hasMore;
-          }
-        }
-
+        pageLedgerRef.current = nextLedger;
         setMessages(initial);
-        setHasMore(nextHasMore);
+        setHasMore(nextLedger.hasMoreOlder);
 
-        // One listing covers all messages in the group (including older pages).
-        let nextReactions: MessageReactions = new Map();
-        try {
-          const rows = await client.messaging.listReactions({
-            signer,
-            groupRef: {uuid},
-          });
-          if (cancelled || uuidRef.current !== uuid) return;
-          nextReactions = groupReactionsByOrder(rows);
-          setReactions(nextReactions);
-        } catch (err) {
-          console.warn('Failed to load reactions:', err);
-          if (cached) nextReactions = cached.reactions;
-        }
+        const nextReactions = await loadReactions(cached?.reactions);
+        if (cancelled || uuidRef.current !== uuid) return;
 
         setCachedThread(uuid, {
           messages: initial as CachedMessage[],
-          hasMore: nextHasMore,
+          hasMore: nextLedger.hasMoreOlder,
+          pageLedger: nextLedger,
           reactions: nextReactions,
         });
 
-        // Presence snapshot; live transitions arrive on the group stream.
-        try {
-          const entries = await client.messaging.getGroupPresence({
-            signer,
-            groupRef: {uuid},
-          });
-          if (cancelled || uuidRef.current !== uuid) return;
-          setPresenceRecords((prev) => applySnapshotEntries(prev, entries));
-        } catch (err) {
-          console.warn('Failed to load presence:', err);
-        }
+        await loadPresence();
       } catch (err) {
         if (cancelled || uuidRef.current !== uuid) return;
         console.error('Failed to load messages:', err);
@@ -454,26 +582,34 @@ export function useMessages(
         );
       } finally {
         if (!cancelled && uuidRef.current === uuid) {
+          isLoadingInitialRef.current = false;
           setLoading(false);
         }
       }
     }
 
-    loadInitial().then();
+    void loadInitial();
 
     return () => {
       cancelled = true;
+      isLoadingInitialRef.current = false;
     };
   }, [uuid, groupId, client, signer, recoveryEnabled]);
 
   // Write-through: keep session cache warm across remounts (subscribe/send/edit/pages).
   useEffect(() => {
     if (loading && messages.length === 0) return;
-    setCachedThread(uuid, {
+    const stored = setCachedThread(uuid, {
       messages: messages as CachedMessage[],
-      hasMore,
+      hasMore: pageLedgerRef.current.hasMoreOlder,
+      pageLedger: pageLedgerRef.current,
       reactions,
     });
+    // Trim may invalidate older cursors — keep the live ref aligned.
+    pageLedgerRef.current = stored;
+    if (stored.hasMoreOlder !== hasMore) {
+      setHasMore(stored.hasMoreOlder);
+    }
     const tip = messages[messages.length - 1];
     if (tip && groupId) {
       publishSidebarMessagePreview(groupId, tip);
@@ -635,31 +771,110 @@ export function useMessages(
   );
 
   // ------------------------------------------------------------------
-  // Load older messages (pagination)
+  // Tip catch-up (after_order) — focus / visibility; never re-fetches tip window
+  // ------------------------------------------------------------------
+  const catchUpNewerMessages = useCallback(async () => {
+    if (
+      isCatchingUpRef.current ||
+      isLoadingInitialRef.current ||
+      loading ||
+      pageLedgerRef.current.maxOrder === null
+    ) {
+      return;
+    }
+    isCatchingUpRef.current = true;
+    try {
+      let cursor = pageLedgerRef.current.maxOrder;
+      for (let i = 0; i < MESSAGE_CATCHUP_MAX_PAGES; i++) {
+        const result = (await client.messaging.getMessages({
+          signer,
+          groupRef: {uuid: uuidRef.current},
+          afterOrder: cursor,
+          limit: MESSAGE_PAGE_SIZE,
+          mydataApproveContext: undefined,
+        })) as SDKGetMessagesResult;
+        if (uuidRef.current !== uuid) return;
+        if (result.messages.length === 0) {
+          pageLedgerRef.current = applyNewerOrdersToLedger(
+            pageLedgerRef.current,
+            [],
+          );
+          break;
+        }
+        const orders = result.messages.map((m) => m.order);
+        setMessages((prev) => mergeMessages(prev, result.messages));
+        pageLedgerRef.current = applyNewerOrdersToLedger(
+          pageLedgerRef.current,
+          orders,
+        );
+        cursor = pageLedgerRef.current.maxOrder ?? cursor;
+        if (!result.hasNext) break;
+      }
+    } catch (err) {
+      console.warn('Failed to catch up newer messages:', err);
+    } finally {
+      isCatchingUpRef.current = false;
+    }
+  }, [uuid, loading, client, signer]);
+
+  useEffect(() => {
+    if (loading) return;
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') {
+        void catchUpNewerMessages();
+      }
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    window.addEventListener('focus', onVisible);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener('focus', onVisible);
+    };
+  }, [loading, catchUpNewerMessages]);
+
+  // ------------------------------------------------------------------
+  // Load older messages (before_order) — skip cursors already fetched
   // ------------------------------------------------------------------
   const loadMore = useCallback(async () => {
-    if (messages.length === 0 || !hasMore) return;
+    const decision = shouldFetchOlderPage(pageLedgerRef.current, {
+      isLoadingOlder: isLoadingOlderRef.current,
+      isLoadingInitial: isLoadingInitialRef.current,
+      messageCount: messageCountRef.current,
+    });
+    if (!decision.fetch) return;
 
-    const oldestOrder = messages[0]?.order;
-    if (oldestOrder === undefined) return;
-
+    isLoadingOlderRef.current = true;
+    setLoadingOlder(true);
     try {
-      const result: SDKGetMessagesResult = await client.messaging.getMessages({
+      const result = (await client.messaging.getMessages({
         signer,
         groupRef: {uuid: uuidRef.current},
-        beforeOrder: oldestOrder,
-        limit: 50,
-        mydataApproveContext: undefined
-      });
+        beforeOrder: decision.beforeOrder,
+        limit: MESSAGE_PAGE_SIZE,
+        mydataApproveContext: undefined,
+      })) as SDKGetMessagesResult;
 
       if (uuidRef.current !== uuid) return;
 
+      const orders = result.messages.map((m) => m.order);
+      // Snapshot scroll *now* (post-fetch) so mid-flight scroll isn’t “corrected”.
+      onBeforeOlderMessagesApplyRef.current?.();
       setMessages((prev) => mergeMessages(prev, result.messages));
-      setHasMore(result.hasNext);
+      const nextLedger = applyOlderPageToLedger(
+        pageLedgerRef.current,
+        decision.beforeOrder,
+        orders,
+        result.hasNext,
+      );
+      pageLedgerRef.current = nextLedger;
+      setHasMore(nextLedger.hasMoreOlder);
     } catch (err) {
       console.error('Failed to load more messages:', err);
+    } finally {
+      isLoadingOlderRef.current = false;
+      setLoadingOlder(false);
     }
-  }, [uuid, messages, hasMore, client, signer]);
+  }, [uuid, client, signer]);
 
   // ------------------------------------------------------------------
   // Send a new message
@@ -1069,6 +1284,7 @@ export function useMessages(
     sending,
     error,
     hasMore,
+    loadingOlder,
     reactions,
     typingMembers: [...typingUntil.keys()],
     onlineMembers,

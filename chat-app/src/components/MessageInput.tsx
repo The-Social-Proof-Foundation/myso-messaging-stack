@@ -1,12 +1,37 @@
 import { useState, useRef, useEffect, type KeyboardEvent } from 'react';
+import EmojiPicker, {
+  EmojiStyle,
+  Theme as EmojiTheme,
+  type EmojiClickData,
+} from 'emoji-picker-react';
+import { Smile } from 'lucide-react';
 import type { AttachmentFile } from '../hooks/useMessages';
 
 const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5 MB
 const MAX_FILES = 10;
+/** Composer grows with content up to this many lines, then scrolls. */
+const MAX_COMPOSER_LINES = 6;
 /** Max one typing.start broadcast per this window while typing continues. */
 const TYPING_THROTTLE_MS = 3_000;
 /** Send typing.stop after this much keyboard silence. */
 const TYPING_IDLE_MS = 3_000;
+
+function syncComposerHeight(el: HTMLTextAreaElement) {
+  el.style.height = 'auto';
+  el.style.overflowY = 'hidden';
+  const style = getComputedStyle(el);
+  const lineHeight = parseFloat(style.lineHeight) || 21;
+  const paddingY =
+    (parseFloat(style.paddingTop) || 0) + (parseFloat(style.paddingBottom) || 0);
+  const maxH = lineHeight * MAX_COMPOSER_LINES + paddingY;
+  const contentH = el.scrollHeight;
+  if (contentH > maxH + 0.5) {
+    el.style.height = `${maxH}px`;
+    el.style.overflowY = 'auto';
+  } else {
+    el.style.height = `${contentH}px`;
+  }
+}
 
 interface MessageInputProps {
   onSend: (text: string, files?: AttachmentFile[]) => Promise<void>;
@@ -32,7 +57,11 @@ export function MessageInput({
   const [text, setText] = useState('');
   const [files, setFiles] = useState<File[]>([]);
   const [fileError, setFileError] = useState<string | null>(null);
+  const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const emojiButtonRef = useRef<HTMLButtonElement>(null);
+  const emojiPickerRef = useRef<HTMLDivElement>(null);
 
   // Typing broadcast state: explicit start/stop with the TTL as server-side
   // recovery. `start` is throttled; `stop` fires on send, clear, and idle.
@@ -83,6 +112,53 @@ export function MessageInput({
     };
   }, []);
 
+  // Grow with content up to MAX_COMPOSER_LINES; collapse when cleared.
+  useEffect(() => {
+    const el = textareaRef.current;
+    if (el) syncComposerHeight(el);
+  }, [text]);
+
+  // Dismiss emoji panel on outside click / Escape.
+  useEffect(() => {
+    if (!showEmojiPicker) return;
+    function onPointerDown(e: MouseEvent) {
+      const target = e.target as Node;
+      if (emojiPickerRef.current?.contains(target)) return;
+      if (emojiButtonRef.current?.contains(target)) return;
+      setShowEmojiPicker(false);
+    }
+    function onKeyDown(e: globalThis.KeyboardEvent) {
+      if (e.key === 'Escape') setShowEmojiPicker(false);
+    }
+    document.addEventListener('mousedown', onPointerDown);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', onPointerDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [showEmojiPicker]);
+
+  function insertEmoji(emoji: string) {
+    const el = textareaRef.current;
+    const start = el?.selectionStart ?? text.length;
+    const end = el?.selectionEnd ?? text.length;
+    const next = text.slice(0, start) + emoji + text.slice(end);
+    setText(next);
+    noteTyping(next);
+    requestAnimationFrame(() => {
+      const field = textareaRef.current;
+      if (!field) return;
+      field.focus();
+      const pos = start + emoji.length;
+      field.setSelectionRange(pos, pos);
+      syncComposerHeight(field);
+    });
+  }
+
+  function handleEmojiClick(data: EmojiClickData) {
+    insertEmoji(data.emoji);
+  }
+
   async function handleSend() {
     const trimmed = text.trim();
     if ((!trimmed && files.length === 0) || disabled || sending) return;
@@ -104,6 +180,7 @@ export function MessageInput({
     setText('');
     setFiles([]);
     setFileError(null);
+    setShowEmojiPicker(false);
     await onSend(trimmed, attachmentFiles);
   }
 
@@ -142,9 +219,14 @@ export function MessageInput({
   }
 
   const canSend = (text.trim() || files.length > 0) && !disabled && !sending;
+  const emojiTheme =
+    typeof document !== 'undefined' &&
+    document.documentElement.classList.contains('dark')
+      ? EmojiTheme.DARK
+      : EmojiTheme.LIGHT;
 
   return (
-    <div className="border-t border-secondary-200/80 px-3 py-2.5 dark:border-secondary-700">
+    <div className="relative border-t border-secondary-200/80 px-3 py-2.5 dark:border-secondary-700">
       {/* File chips */}
       {files.length > 0 && (
         <div className="mb-2 flex flex-wrap gap-1.5 px-1">
@@ -170,6 +252,23 @@ export function MessageInput({
       {/* File error */}
       {fileError && (
         <p className="mb-1.5 px-1 text-xs text-danger-500">{fileError}</p>
+      )}
+
+      {showEmojiPicker && (
+        <div
+          ref={emojiPickerRef}
+          className="absolute bottom-full left-3 z-40 mb-2 overflow-hidden rounded-xl border border-secondary-200 shadow-xl dark:border-secondary-600"
+        >
+          <EmojiPicker
+            onEmojiClick={handleEmojiClick}
+            autoFocusSearch={false}
+            emojiStyle={EmojiStyle.APPLE}
+            theme={emojiTheme}
+            width={320}
+            height={360}
+            lazyLoadEmojis
+          />
+        </div>
       )}
 
       <div className="flex items-end gap-1.5">
@@ -205,7 +304,26 @@ export function MessageInput({
           }}
         />
 
+        {/* Emoji — same light-gray treatment as paperclip */}
+        <button
+          ref={emojiButtonRef}
+          type="button"
+          onClick={() => setShowEmojiPicker((open) => !open)}
+          disabled={disabled || sending}
+          className={`mb-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-secondary-400 hover:bg-secondary-100 hover:text-secondary-600 disabled:opacity-50 dark:hover:bg-secondary-700 dark:hover:text-secondary-300 ${
+            showEmojiPicker
+              ? 'bg-secondary-100 text-secondary-600 dark:bg-secondary-700 dark:text-secondary-200'
+              : ''
+          }`}
+          title="Emoji"
+          aria-label="Toggle emoji picker"
+          aria-expanded={showEmojiPicker}
+        >
+          <Smile className="h-5 w-5" strokeWidth={1.75} aria-hidden="true" />
+        </button>
+
         <textarea
+          ref={textareaRef}
           value={text}
           onChange={(e) => {
             setText(e.target.value);
@@ -215,7 +333,7 @@ export function MessageInput({
           placeholder="Message"
           rows={1}
           disabled={disabled || sending}
-          className="flex-1 resize-none rounded-full border border-secondary-200 bg-secondary-50 px-4 py-2 text-[15px] leading-snug text-secondary-900 placeholder:text-secondary-400 focus:border-bubble-sent focus:outline-none focus:ring-2 focus:ring-bubble-sent/20 disabled:opacity-50 dark:border-secondary-600 dark:bg-secondary-800 dark:text-secondary-100 dark:placeholder:text-secondary-500 dark:focus:border-bubble-sent-dark dark:focus:ring-bubble-sent-dark/20"
+          className="max-h-[none] flex-1 resize-none overflow-hidden rounded-[1.25rem] border border-secondary-200 bg-secondary-50 px-4 py-2 text-[15px] leading-snug text-secondary-900 placeholder:text-secondary-400 focus:border-bubble-sent focus:outline-none focus:ring-2 focus:ring-bubble-sent/20 disabled:opacity-50 dark:border-secondary-600 dark:bg-secondary-800 dark:text-secondary-100 dark:placeholder:text-secondary-500 dark:focus:border-bubble-sent-dark dark:focus:ring-bubble-sent-dark/20"
         />
         <button
           onClick={handleSend}

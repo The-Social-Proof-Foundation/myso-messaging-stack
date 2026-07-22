@@ -15,7 +15,12 @@ export type StoredSidebarPreview = {
 
 export type StoredSidebarProfile = {
   photo: string | null;
+  /** Bubble / member label: `@username` → display name → wallet. */
   label: string;
+  /** Inbox header: display name → wallet. */
+  headerTitle?: string;
+  /** `@username` when present. */
+  handle?: string | null;
   showRing: boolean;
   ringPercent: number;
 };

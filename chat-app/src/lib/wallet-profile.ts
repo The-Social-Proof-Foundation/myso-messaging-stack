@@ -129,6 +129,25 @@ export function truncateWalletAddress(address: string): string {
   return `${address.slice(0, 6)}...${address.slice(-4)}`;
 }
 
+/** Sidebar / inbox header: full name, else truncated wallet (never `@username`). */
+export function profileHeaderTitle(
+  address: string,
+  profile: { display_name?: string | null } | null | undefined,
+): string {
+  const display = profile?.display_name?.trim();
+  if (display) return display;
+  return truncateWalletAddress(address);
+}
+
+/** `@username` when reserved; otherwise null. */
+export function profileHandleLabel(
+  profile: { username?: string | null } | null | undefined,
+): string | null {
+  const username = profile?.username?.trim();
+  if (!username) return null;
+  return `@${username.replace(/^@/, '')}`;
+}
+
 /** Create-group label: `@username` when reserved, else abbreviated wallet. */
 export function groupNameLabelForRecipient(
   address: string,
