@@ -765,7 +765,8 @@ export function MessageBubble({
     <span className="italic">(edited)</span>
   ) : null;
 
-  const metaPadClass = isOwnMessage ? 'pl-3.5 pr-5' : 'pl-5 pr-3.5';
+  // 2px tighter to the avatar column than pl/pr-5 (20 → 18).
+  const metaPadClass = isOwnMessage ? 'pl-3.5 pr-[18px]' : 'pl-[14px] pr-3.5';
 
   const reactionChipItems =
     reactions && reactions.length > 0
@@ -1071,7 +1072,7 @@ export function MessageBubble({
           {/* Meta — only under the last bubble in a same-sender run */}
           {isLastInGroup && (
             <div
-              className={`mt-1 flex w-max max-w-[min(100vw,20rem)] flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[11px] text-secondary-400 dark:text-secondary-500 ${
+              className={`mt-0.5 flex w-max max-w-[min(100vw,20rem)] flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[11px] text-secondary-400 dark:text-secondary-500 ${
                 isOwnMessage ? 'justify-end' : 'justify-start'
               } ${metaPadClass}`}
             >
