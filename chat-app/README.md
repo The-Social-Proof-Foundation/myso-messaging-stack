@@ -53,7 +53,7 @@ The app provides working code for common integration patterns: **MySocial OAuth 
 
 | Feature         | Description                                                 | SDK Method                        |
 |-----------------|-------------------------------------------------------------|-----------------------------------|
-| Create group    | Form with group name + optional initial members             | `messaging.createAndShareGroup()` |
+| Create / New Message | Recipient picker (following, search, wallet paste → chips); full-width Create; paid 1:1 escrow when required | `messaging.createAndShareGroup()` / paid DM path |
 | Discover groups | Sidebar showing user's groups via MySo GraphQL event queries | `MySoGraphQLClient.query()`        |
 | Leave group     | Confirmation dialog, removes from local list                | `messaging.leave()`               |
 | View members    | List all group members with their permissions               | `groups.view.getMembers()`        |

@@ -1,4 +1,12 @@
-import { type SyntheticEvent, useState } from 'react';
+import {
+  type FormEvent,
+  type KeyboardEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+} from 'react';
+import { X } from 'lucide-react';
 import { MYSO_CLOCK_OBJECT_ID } from '@socialproof/myso/utils';
 import { createPaidMessagingClient } from '@socialproof/myso-messaging-stack';
 import {
@@ -30,6 +38,15 @@ import {
   groupNameLabelForRecipient,
   mapGraphqlProfile,
 } from '../lib/wallet-profile';
+import {
+  type RecipientPeer,
+  fetchFollowingProfiles,
+  normalizeMysoWalletQuery,
+  peerCapsuleLabel,
+  peerRowSubtitle,
+  peerRowTitle,
+  searchProfiles,
+} from '../lib/recipient-picker';
 import { PaymentConfirmDialog } from './PaymentConfirmDialog';
 
 interface CreateGroupModalProps {
@@ -45,17 +62,6 @@ interface PendingPaidDm {
   name: string;
 }
 
-function parseRecipients(raw: string): string[] {
-  return [
-    ...new Set(
-      raw
-        .split(',')
-        .map((s) => s.trim())
-        .filter(Boolean),
-    ),
-  ];
-}
-
 export function CreateGroupModal({
   open,
   onClose,
@@ -63,18 +69,170 @@ export function CreateGroupModal({
 }: Readonly<CreateGroupModalProps>) {
   const { signer, createFreshMessagingClient } = useRequiredMessagingClient();
   const graphqlClient = useGraphQLClient();
+  const selfWallet = signer.toMySoAddress().toLowerCase();
 
-  const [recipients, setRecipients] = useState('');
+  const [selected, setSelected] = useState<RecipientPeer[]>([]);
+  const [query, setQuery] = useState('');
+  const [following, setFollowing] = useState<RecipientPeer[]>([]);
+  const [searchResults, setSearchResults] = useState<RecipientPeer[]>([]);
+  const [loadingFollowing, setLoadingFollowing] = useState(false);
+  const [searching, setSearching] = useState(false);
+
   const [loading, setLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Paid-DM gate for new 1:1 conversations.
   const [pendingPaidDm, setPendingPaidDm] = useState<PendingPaidDm | null>(null);
   const [payingDm, setPayingDm] = useState(false);
   const [payError, setPayError] = useState<string | null>(null);
 
-  if (!open) return null;
+  const selectedKeys = useMemo(
+    () => new Set(selected.map((p) => p.wallet.toLowerCase())),
+    [selected],
+  );
+
+  const resetPicker = useCallback(() => {
+    setSelected([]);
+    setQuery('');
+    setSearchResults([]);
+    setError(null);
+    setPendingPaidDm(null);
+    setPayError(null);
+  }, []);
+
+  // Load following when opened.
+  useEffect(() => {
+    if (!open) return;
+    resetPicker();
+    let cancelled = false;
+    setLoadingFollowing(true);
+    void (async () => {
+      const peers = await fetchFollowingProfiles(selfWallet);
+      if (cancelled) return;
+      setFollowing(
+        peers.filter((p) => p.wallet.toLowerCase() !== selfWallet),
+      );
+      setLoadingFollowing(false);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [open, selfWallet, resetPicker]);
+
+  // Debounced search / wallet resolve (~450ms, iOS parity).
+  useEffect(() => {
+    if (!open) return;
+    const trimmed = query.trim();
+    if (!trimmed) {
+      setSearchResults([]);
+      setSearching(false);
+      return;
+    }
+    let cancelled = false;
+    setSearching(true);
+    const timer = window.setTimeout(() => {
+      void (async () => {
+        try {
+          const wallet = normalizeMysoWalletQuery(trimmed);
+          if (wallet) {
+            if (wallet === selfWallet) {
+              if (!cancelled) setSearchResults([]);
+              return;
+            }
+            try {
+              const result = await graphqlClient.query({
+                query: PROFILE_FULL_QUERY as unknown as Parameters<
+                  typeof graphqlClient.query
+                >[0]['query'],
+                variables: { address: wallet },
+              });
+              const data = result.data as
+                | { profile?: Record<string, unknown> | null }
+                | undefined;
+              const mapped = mapGraphqlProfile(data?.profile ?? null);
+              if (cancelled) return;
+              if (mapped) {
+                setSearchResults([
+                  {
+                    wallet: mapped.owner_address.toLowerCase(),
+                    username: mapped.username,
+                    displayName: mapped.display_name,
+                    photoURL: mapped.profile_photo,
+                    isCardless: false,
+                  },
+                ]);
+              } else {
+                setSearchResults([
+                  {
+                    wallet,
+                    username: null,
+                    displayName: null,
+                    photoURL: null,
+                    isCardless: true,
+                  },
+                ]);
+              }
+            } catch {
+              if (!cancelled) {
+                setSearchResults([
+                  {
+                    wallet,
+                    username: null,
+                    displayName: null,
+                    photoURL: null,
+                    isCardless: true,
+                  },
+                ]);
+              }
+            }
+            return;
+          }
+          const found = await searchProfiles(trimmed);
+          if (cancelled) return;
+          setSearchResults(
+            found.filter((p) => p.wallet.toLowerCase() !== selfWallet),
+          );
+        } finally {
+          if (!cancelled) setSearching(false);
+        }
+      })();
+    }, 450);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [query, open, selfWallet, graphqlClient]);
+
+  // Escape to dismiss.
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      if (e.key === 'Escape' && !loading && !syncing && !payingDm) {
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [open, loading, syncing, payingDm, onClose]);
+
+  const listPeers = useMemo(() => {
+    const source = query.trim() ? searchResults : following;
+    return source.filter((p) => !selectedKeys.has(p.wallet.toLowerCase()));
+  }, [query, searchResults, following, selectedKeys]);
+
+  function addPeer(peer: RecipientPeer) {
+    const key = peer.wallet.toLowerCase();
+    if (key === selfWallet || selectedKeys.has(key)) return;
+    setSelected((prev) => [...prev, { ...peer, wallet: key }]);
+    setQuery('');
+    setSearchResults([]);
+    setError(null);
+  }
+
+  function removePeer(wallet: string) {
+    const key = wallet.toLowerCase();
+    setSelected((prev) => prev.filter((p) => p.wallet.toLowerCase() !== key));
+  }
 
   async function resolveGroupName(addresses: string[]): Promise<string> {
     const labels = await Promise.all(
@@ -99,13 +257,13 @@ export function CreateGroupModal({
     return buildAutoGroupName(labels);
   }
 
-  async function handleSubmit(e: SyntheticEvent) {
+  async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     setError(null);
 
-    const initialMembers = parseRecipients(recipients);
+    const initialMembers = selected.map((p) => p.wallet.toLowerCase());
     if (initialMembers.length === 0) {
-      setError('Add at least one recipient address.');
+      setError('Add at least one recipient.');
       return;
     }
 
@@ -113,13 +271,11 @@ export function CreateGroupModal({
 
     try {
       const sender = signer.toMySoAddress();
-      // Official name: recipients first, then creator (all members), ≤128 chars.
       const groupName = await resolveGroupName(
         dedupeAddresses([...initialMembers, sender]),
       );
       const uuid = crypto.randomUUID();
 
-      // Fresh client so packageConfig matches live genesis (not a stale init snapshot).
       const client = await createFreshMessagingClient({
         bypassGenesisCache: true,
       });
@@ -138,8 +294,6 @@ export function CreateGroupModal({
       await logMyDataKeyServers('create-group', client);
       await logSignerGasCoins('create-group', client, signer);
 
-      // New 1:1 DM: advisory paid-DM gate pre-check. The relayer enforces
-      // authoritatively on first send (402), this just avoids a doomed create.
       if (initialMembers.length === 1) {
         const recipient = initialMembers[0]!;
         try {
@@ -152,8 +306,6 @@ export function CreateGroupModal({
             return;
           }
           if (gate.reason === 'PAYMENT_REQUIRED' && gate.minCost !== null) {
-            // Never reached for followed recipients — the gate reports
-            // following: true and allows the DM without payment.
             setPayError(null);
             setPendingPaidDm({
               recipient,
@@ -163,8 +315,6 @@ export function CreateGroupModal({
             return;
           }
         } catch (gateErr) {
-          // Advisory only — fall through to the normal create path and let
-          // the relayer enforce at first send.
           console.warn('[chat-app] dm-gate pre-check unavailable:', gateErr);
         }
       }
@@ -203,8 +353,6 @@ export function CreateGroupModal({
         memberAddress: sender,
       });
 
-      // Peers only get MessagingReader on-chain at create — grant send/edit/
-      // delete/handle/metadata so they can collaborate by default.
       await grantDefaultPeerPermissions({
         client,
         signer,
@@ -221,7 +369,7 @@ export function CreateGroupModal({
         createdAt: Date.now(),
       });
 
-      setRecipients('');
+      resetPicker();
       onGroupCreated(uuid);
       onClose();
     } catch (err) {
@@ -242,18 +390,6 @@ export function CreateGroupModal({
     }
   }
 
-  /**
-   * Confirmed paid DM: one signed transaction creates the group and escrows
-   * the payment (create_and_share_group + send_paid_message_digest). The
-   * escrow is funded by splitting from gas; the contract re-validates the
-   * recipient's minimum on-chain.
-   *
-   * Runs the same diagnostics + hardened signing as the normal create path:
-   * the PTB is built via `buildOpenPaidDm` and signed through
-   * `signAndExecuteTransactionAndWait`, whose gas resolution RPC-verifies
-   * coins (stale local indexers after `--force-regenesis` list ghost coins
-   * that otherwise become invalid PTB inputs when the escrow splits from gas).
-   */
   async function handleConfirmPaidDm() {
     if (!pendingPaidDm) return;
 
@@ -295,8 +431,6 @@ export function CreateGroupModal({
         escrowAmount: pendingPaidDm.minCost,
         name: pendingPaidDm.name,
         uuid,
-        // Reuse the diagnostics resolution (dev); undefined lets the SDK
-        // resolve wallet-vs-profile routing at build time as usual.
         creatorMemoryAccountId: resolvedMemoryAccountId ?? undefined,
       });
 
@@ -306,9 +440,6 @@ export function CreateGroupModal({
         client,
         {
           ...expectedObjects,
-          // The group/log are same-PTB results (created then shared in this
-          // transaction), so they never appear as object inputs — only the
-          // singletons and the clock do.
           clockId: MYSO_CLOCK_OBJECT_ID,
         },
         { resolvedMemoryAccountId },
@@ -339,7 +470,7 @@ export function CreateGroupModal({
         createdAt: Date.now(),
       });
 
-      setRecipients('');
+      resetPicker();
       setPendingPaidDm(null);
       onGroupCreated(uuid);
       onClose();
@@ -362,62 +493,185 @@ export function CreateGroupModal({
     }
   }
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-      <div className="w-full max-w-md rounded-xl bg-white p-6 shadow-2xl dark:bg-secondary-800">
-        <h2 className="mb-4 text-lg font-semibold text-secondary-900 dark:text-secondary-100">
-          New Message
-        </h2>
+  if (!open) return null;
 
-        <form onSubmit={handleSubmit} className="space-y-4">
+  const busy = loading || syncing || payingDm;
+  const emptyQuery = !query.trim();
+  const listEmptyLabel = emptyQuery
+    ? loadingFollowing
+      ? 'Loading…'
+      : 'Search for a username, name, or wallet address to start'
+    : searching
+      ? 'Searching…'
+      : 'No people found';
+  const isIdleEmptyHint = emptyQuery && !loadingFollowing && listPeers.length === 0;
+
+  function onBackdropClick() {
+    if (!busy) onClose();
+  }
+
+  function onDialogKeyDown(e: KeyboardEvent<HTMLDivElement>) {
+    e.stopPropagation();
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+      onClick={onBackdropClick}
+      role="presentation"
+    >
+      <div
+        className="w-full max-w-md rounded-xl bg-white p-6 shadow-2xl dark:bg-secondary-800"
+        onClick={(e) => e.stopPropagation()}
+        onKeyDown={onDialogKeyDown}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="new-message-title"
+      >
+        <div className="relative mb-4 flex items-center justify-center">
+          <h2
+            id="new-message-title"
+            className="font-chakra text-lg font-semibold tracking-wide text-secondary-900 dark:text-secondary-100"
+          >
+            New Message
+          </h2>
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={busy}
+            aria-label="Close"
+            className="absolute right-0 top-1/2 -translate-y-1/2 rounded-md p-1 text-secondary-500 hover:bg-secondary-100 hover:text-secondary-800 disabled:opacity-50 dark:text-secondary-400 dark:hover:bg-secondary-700 dark:hover:text-secondary-100"
+          >
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+
+        <form onSubmit={(e) => void handleSubmit(e)} className="space-y-3">
           <div>
-            <label
-              htmlFor="recipients"
+            {/* <label
+              htmlFor="recipient-search"
               className="mb-1 block text-sm font-medium text-secondary-700 dark:text-secondary-300"
             >
               Recipients <span className="text-danger-500">*</span>
-            </label>
-            <textarea
-              id="recipients"
-              value={recipients}
-              onChange={(e) => setRecipients(e.target.value)}
-              placeholder="Comma-separated MySo addresses&#10;0xabc..., 0xdef..."
-              rows={3}
-              disabled={loading || syncing}
-              required
+            </label> */}
+            <input
+              id="recipient-search"
+              type="text"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search username, name, or address"
+              disabled={busy}
+              autoComplete="off"
               className="w-full rounded-lg border border-secondary-300 bg-white px-3 py-2 text-sm text-secondary-900 placeholder:text-secondary-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 disabled:opacity-50 dark:border-secondary-600 dark:bg-secondary-700 dark:text-secondary-100 dark:placeholder:text-secondary-500"
             />
           </div>
 
-          {error && (
-            <p className="text-sm text-danger-500">{error}</p>
+          {selected.length > 0 && (
+            <div className="flex flex-wrap gap-2">
+              {selected.map((peer) => (
+                <span
+                  key={peer.wallet}
+                  className="inline-flex items-center gap-1.5 rounded-full bg-secondary-100 px-2.5 py-1 text-xs font-medium text-secondary-800 dark:bg-secondary-700 dark:text-secondary-100"
+                >
+                  {peer.photoURL ? (
+                    <img
+                      src={peer.photoURL}
+                      alt=""
+                      className="h-5 w-5 rounded-full object-cover"
+                    />
+                  ) : (
+                    <span className="flex h-5 w-5 items-center justify-center rounded-full bg-secondary-300 text-[10px] dark:bg-secondary-600">
+                      {(peerCapsuleLabel(peer)[0] ?? '?').toUpperCase()}
+                    </span>
+                  )}
+                  <span className="max-w-[140px] truncate">
+                    {peerCapsuleLabel(peer)}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => removePeer(peer.wallet)}
+                    disabled={busy}
+                    aria-label={`Remove ${peerCapsuleLabel(peer)}`}
+                    className="rounded-full p-0.5 text-secondary-500 hover:bg-secondary-200 hover:text-secondary-900 disabled:opacity-50 dark:hover:bg-secondary-600 dark:hover:text-white"
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                </span>
+              ))}
+            </div>
           )}
 
-          <div className="flex justify-end gap-3 pt-2">
-            <button
-              type="button"
-              onClick={onClose}
-              disabled={loading || syncing}
-              className="rounded-lg px-4 py-2 text-sm font-medium text-secondary-600 hover:bg-secondary-100 disabled:opacity-50 dark:text-secondary-400 dark:hover:bg-secondary-700"
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              disabled={loading || syncing}
-              className="rounded-lg bg-primary-500 px-4 py-2 text-sm font-medium text-white hover:bg-primary-600 disabled:opacity-50"
-            >
-              {syncing
-                ? 'Syncing membership…'
-                : loading
-                  ? 'Creating...'
-                  : 'Create Group'}
-            </button>
+          <div
+            className={
+              listPeers.length === 0
+                ? 'mb-6 max-h-72 overflow-y-auto'
+                : 'mb-6 max-h-72 min-h-[12rem] overflow-y-auto rounded-lg border border-secondary-200 dark:border-secondary-600'
+            }
+          >
+            {listPeers.length === 0 ? (
+              <p
+                className={
+                  isIdleEmptyHint
+                    ? 'px-4 py-16 text-center text-xs text-secondary-600 dark:text-secondary-500'
+                    : 'px-3 py-16 text-center text-sm text-secondary-600 dark:text-secondary-500'
+                }
+              >
+                {listEmptyLabel}
+              </p>
+            ) : (
+              <ul className="divide-y divide-secondary-200 dark:divide-secondary-600">
+                {listPeers.map((peer) => (
+                  <li key={peer.wallet}>
+                    <button
+                      type="button"
+                      onClick={() => addPeer(peer)}
+                      disabled={busy}
+                      className="flex w-full items-center gap-3 bg-secondary-100 px-3 py-3.5 text-left hover:bg-secondary-200/80 disabled:opacity-50 dark:bg-secondary-600 dark:hover:bg-secondary-500/70"
+                    >
+                      {peer.photoURL ? (
+                        <img
+                          src={peer.photoURL}
+                          alt=""
+                          className="h-9 w-9 shrink-0 rounded-full object-cover"
+                        />
+                      ) : (
+                        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-secondary-200 text-xs font-medium text-secondary-700 dark:bg-secondary-500 dark:text-secondary-100">
+                          {(peerRowTitle(peer)[0] ?? '?').toUpperCase()}
+                        </span>
+                      )}
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-sm font-medium text-secondary-900 dark:text-secondary-100">
+                          {peerRowTitle(peer)}
+                        </span>
+                        <span className="block truncate text-xs text-secondary-500 dark:text-secondary-300">
+                          {peer.isCardless
+                            ? 'No profile — wallet only'
+                            : peerRowSubtitle(peer)}
+                        </span>
+                      </span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
           </div>
+
+          {error && <p className="mb-3 text-sm text-danger-500">{error}</p>}
+
+          <button
+            type="submit"
+            disabled={busy || selected.length === 0}
+            className="w-full rounded-lg bg-primary-500 px-4 py-2.5 text-sm font-medium text-white hover:bg-primary-600 disabled:opacity-50"
+          >
+            {syncing
+              ? 'Syncing membership…'
+              : loading
+                ? 'Creating…'
+                : 'Create'}
+          </button>
         </form>
       </div>
 
-      {/* Paid-DM gate: recipient requires an escrow before a first message */}
       <PaymentConfirmDialog
         open={pendingPaidDm !== null}
         recipient={pendingPaidDm?.recipient ?? null}

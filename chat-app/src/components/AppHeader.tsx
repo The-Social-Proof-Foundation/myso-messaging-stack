@@ -29,9 +29,10 @@ export function AppHeader() {
           <button
             type="button"
             onClick={openCreateMessage}
-            className="rounded-full bg-bubble-sent px-3 py-1.5 text-xs font-medium text-white hover:bg-bubble-sent/90 dark:bg-bubble-sent-dark dark:hover:bg-bubble-sent-dark/90"
+            className="inline-flex h-9 shrink-0 items-center rounded-md border border-secondary-300 bg-white px-4 text-xs font-medium text-secondary-700 transition-none hover:bg-secondary-100 dark:border-secondary-600 dark:bg-secondary-800 dark:text-secondary-200 dark:hover:bg-secondary-700"
           >
-            + New
+            <span aria-hidden="true">+</span>
+            <span className="ml-1.5">New</span>
           </button>
         ) : null}
         {session ? (

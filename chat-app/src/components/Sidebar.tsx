@@ -63,14 +63,12 @@ export function Sidebar({
       {/* Group list */}
       <div className="flex-1 overflow-y-auto">
         {groups.length === 0 ? (
-          <div className="px-4 py-8 text-center text-sm text-secondary-400 dark:text-secondary-500">
+          <div className="px-4 py-16 text-center text-sm text-secondary-400 dark:text-secondary-500">
             {loading ? (
               'Discovering groups...'
             ) : (
               <>
-                No groups yet.
-                <br />
-                Create or join one!
+                No chat history, yet.
               </>
             )}
           </div>
