@@ -11,11 +11,6 @@ export const CHAT_MIN_COMFORT_PX = 360;
  */
 export const CHAT_SHELL_WIDE_PX = 900;
 
-/** Collapse the left conversation list below this total layout width. */
-export const CHAT_LIST_COLLAPSE_BELOW_PX = 920;
-/** Re-expand the left list at/above this width (hysteresis). */
-export const CHAT_LIST_EXPAND_ABOVE_PX = 1080;
-
 export type ChatInfoWidthBand = 'narrow' | 'mid' | 'wide';
 
 export function chatInfoWidthBand(

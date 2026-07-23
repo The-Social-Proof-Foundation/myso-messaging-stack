@@ -129,13 +129,18 @@ export function truncateWalletAddress(address: string): string {
   return `${address.slice(0, 6)}...${address.slice(-4)}`;
 }
 
-/** Sidebar / inbox header: full name, else truncated wallet (never `@username`). */
+/** Sidebar / inbox header: full name → `@username` → truncated wallet. */
 export function profileHeaderTitle(
   address: string,
-  profile: { display_name?: string | null } | null | undefined,
+  profile:
+    | { display_name?: string | null; username?: string | null }
+    | null
+    | undefined,
 ): string {
   const display = profile?.display_name?.trim();
   if (display) return display;
+  const username = profile?.username?.trim();
+  if (username) return `@${username.replace(/^@/, '')}`;
   return truncateWalletAddress(address);
 }
 
@@ -146,6 +151,21 @@ export function profileHandleLabel(
   const username = profile?.username?.trim();
   if (!username) return null;
   return `@${username.replace(/^@/, '')}`;
+}
+
+/**
+ * Secondary `@handle` beside a full-name inbox header.
+ * Null when the header is already `@username` (or there is no username).
+ */
+export function profileSecondaryHandleLabel(
+  profile:
+    | { display_name?: string | null; username?: string | null }
+    | null
+    | undefined,
+): string | null {
+  const display = profile?.display_name?.trim();
+  if (!display) return null;
+  return profileHandleLabel(profile);
 }
 
 /** Create-group label: `@username` when reserved, else abbreviated wallet. */

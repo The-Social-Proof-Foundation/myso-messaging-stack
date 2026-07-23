@@ -17,9 +17,9 @@ export type StoredSidebarProfile = {
   photo: string | null;
   /** Bubble / member label: `@username` → display name → wallet. */
   label: string;
-  /** Inbox header: display name → wallet. */
+  /** Inbox header: display name → `@username` → wallet. */
   headerTitle?: string;
-  /** `@username` when present. */
+  /** Secondary `@username` beside a full-name header. */
   handle?: string | null;
   showRing: boolean;
   ringPercent: number;

@@ -9,8 +9,8 @@ import {
 import {
   PROFILE_FULL_QUERY,
   mapGraphqlProfile,
-  profileHandleLabel,
   profileHeaderTitle,
+  profileSecondaryHandleLabel,
   reservationPoolFillPercentFromGraphqlProfile,
   truncateWalletAddress,
   type WalletProfile,
@@ -37,20 +37,22 @@ function headerTitleFromCached(
   cached: StoredSidebarProfile | undefined,
 ): string {
   if (cached?.headerTitle?.trim()) return cached.headerTitle.trim();
-  // Legacy cache only stored `label` (@username preferred).
-  if (cached?.label?.startsWith('@')) return truncateAddress(address);
+  // Legacy cache only stored `label` (@username preferred) — use as header.
   if (cached?.label?.trim()) return cached.label.trim();
   return truncateAddress(address);
 }
 
 function handleFromCached(
+  address: string,
   cached: StoredSidebarProfile | undefined,
 ): string | null {
+  const header = headerTitleFromCached(address, cached);
   if (cached && 'handle' in cached) {
     const h = cached.handle?.trim();
-    return h || null;
+    if (!h || h === header) return null;
+    return h;
   }
-  if (cached?.label?.startsWith('@')) return cached.label;
+  // Legacy: `@label` is now the header — no secondary handle.
   return null;
 }
 
@@ -102,9 +104,9 @@ export type WalletProfileBits = {
   photoFor: (address: string) => string | null;
   /** Bubble / member lists: `@username` → display name → wallet. */
   labelFor: (address: string) => string;
-  /** Inbox header: display name → wallet. */
+  /** Inbox header: display name → `@username` → wallet. */
   headerTitleFor: (address: string) => string;
-  /** `@username` when present. */
+  /** Secondary `@username` beside a full-name header. */
   handleFor: (address: string) => string | null;
   ringFor: (address: string) => WalletRingBits;
 };
@@ -112,7 +114,7 @@ export type WalletProfileBits = {
 /**
  * Resolves profile photos + display labels for wallet addresses via GraphQL.
  * `labelFor`: @username → display name → truncated address.
- * `headerTitleFor` / `handleFor`: inbox row (name + optional @handle).
+ * `headerTitleFor` / `handleFor`: inbox row (name or @handle; handle only with full name).
  * Hydrates from localStorage so sidebar avatars paint on return visits.
  */
 export function useWalletAvatarMap(
@@ -178,7 +180,7 @@ export function useWalletAvatarMap(
               photo: mapped?.profile_photo ?? null,
               label: labelFromProfile(address, mapped),
               headerTitle: profileHeaderTitle(address, mapped),
-              handle: profileHandleLabel(mapped),
+              handle: profileSecondaryHandleLabel(mapped),
               showRing: ring.showRing,
               ringPercent: ring.ringPercent,
             });
@@ -233,7 +235,10 @@ export function useWalletAvatarMap(
 
   const handleFor = useCallback(
     (address: string) =>
-      handleFromCached(profileCache.get(address.trim().toLowerCase())),
+      handleFromCached(
+        address,
+        profileCache.get(address.trim().toLowerCase()),
+      ),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [version],
   );

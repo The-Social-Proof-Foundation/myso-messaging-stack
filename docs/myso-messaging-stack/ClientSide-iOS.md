@@ -202,9 +202,11 @@ Wire ciphertext + metadata persist in SQLite under Application Support (`Messagi
 
 Open thread: hydrate SQLite tip page + cached reactions → local AES for missing plaintext (Keychain DEK, before tip REST) → paint → `fetchMessages` + `listReactions` in parallel → decrypt only still-missing ids → write ciphertext + reaction rows + RAM cache. Gap-fill / catch-up never block first message or chip paint. Inbox warm is incremental (skip groups already at tip order).
 
-### Create Conversation (UI-only)
+### Create Conversation (draft until first send)
 
-Messages list **+** opens a SwiftUI sheet (`CreateConversationSheet`): following suggestions (`ProfileFollowing`), MySo `/search` for username/name, and `0x`+64-hex wallet lookup via `ProfileFull` with **cardless** selectable rows when no profile exists. Next inserts a local draft group (`groupId` prefix `local-`) via `MessagingInboxService.insertLocalDraft`, seeds inbox chrome for 1:1 peers, republishes the inbox row at the top, and pushes `ChatThreadViewController` with composer focused. Discovery/`replaceActive` preserves `local-*` drafts. **Does not** call `createAndShareGroup`, share PTBs, or relayer create-group — wire those in a later milestone.
+Messages list **+** opens a SwiftUI sheet (`CreateConversationSheet`): following suggestions (`ProfileFollowing`), MySo `/search` for username/name, and `0x`+64-hex wallet lookup via `ProfileFull` with **cardless** selectable rows when no profile exists. Next inserts a local draft group (`groupId` prefix `local-`) via `MessagingInboxService.insertLocalDraft` with an official name of peer labels + self (web `buildAutoGroupName`), persists `pendingMemberWallets` in sealed inbox chrome, republishes the inbox row at the top, and pushes `ChatThreadViewController` with composer focused. List/thread titles strip self (≤5 peers); empty draft subtitle is `drafted chat` / `drafted group chat`. Discovery/`replaceActive` preserves `local-*` drafts.
+
+**First message** (not sheet submit) runs sequentially: `messaging::create_and_share_wallet_group` → wait for relayer membership → default peer grants (`MessagingSender` / `Editor` / `Deleter` / `GroupHandleAdmin` / `MetadataAdmin`, best-effort) → `promoteLocalDraft` → encrypt + `POST /v1/messages`. Create failure keeps the `local-*` row and marks the optimistic bubble failed (Retry re-runs create→send).
 
 ### Chat tab lifecycle
 

@@ -4,7 +4,6 @@ import {
   useRef,
   useMemo,
   useEffect,
-  useLayoutEffect,
 } from 'react';
 import { Sidebar } from './Sidebar';
 import { ChatArea } from './ChatArea';
@@ -22,12 +21,7 @@ import {
   getSelectedGroupKey,
   setSelectedGroupKey,
 } from '../lib/group-store';
-import {
-  CHAT_LIST_COLLAPSE_BELOW_PX,
-  CHAT_LIST_EXPAND_ABOVE_PX,
-  CHAT_LIST_WIDTH_PX,
-  CHAT_SIDEBAR_MOTION,
-} from '../lib/chat-layout';
+import { CHAT_LIST_WIDTH_PX } from '../lib/chat-layout';
 
 interface AuthenticatedAppProps {
   isUsingDevMessengerSigner: boolean;
@@ -71,39 +65,12 @@ export function AuthenticatedApp({
   const isMobileNav = useIsMobileNav();
   const { setHideAppHeader } = useMobileChatNav();
   const mobileChatOpen = isMobileNav && Boolean(selectedUuid);
-  const layoutRootRef = useRef<HTMLDivElement>(null);
-  /** Desktop: snappy collapse when the whole shell is too thin. */
-  const [desktopListOpen, setDesktopListOpen] = useState(true);
 
   // Hide AppHeader only while a mobile chat thread is open.
   useEffect(() => {
     setHideAppHeader(mobileChatOpen);
     return () => setHideAppHeader(false);
   }, [mobileChatOpen, setHideAppHeader]);
-
-  // Collapse / expand the conversation list by total layout width (desktop).
-  useLayoutEffect(() => {
-    if (isMobileNav) return;
-    const root = layoutRootRef.current;
-    if (!root) return;
-
-    const apply = () => {
-      const width = root.clientWidth;
-      if (width < 80) return;
-      if (width < CHAT_LIST_COLLAPSE_BELOW_PX) {
-        setDesktopListOpen(false);
-      } else if (width >= CHAT_LIST_EXPAND_ABOVE_PX) {
-        setDesktopListOpen(true);
-      }
-    };
-
-    apply();
-    const ro = new ResizeObserver(() => {
-      requestAnimationFrame(apply);
-    });
-    ro.observe(root);
-    return () => ro.disconnect();
-  }, [isMobileNav]);
 
   // Re-hydrate selection when the wallet address becomes available / changes.
   useEffect(() => {
@@ -184,16 +151,15 @@ export function AuthenticatedApp({
           needed.
         </div>
       )}
-      <div ref={layoutRootRef} className="flex flex-1 overflow-hidden">
+      <div className="flex flex-1 overflow-hidden">
+        {/* List stays visible on desktop; only mobile hides it while a chat is open. */}
         <div
           className={
             isMobileNav
               ? mobileChatOpen
                 ? 'hidden'
                 : 'flex min-h-0 w-full flex-col'
-              : `min-h-0 shrink-0 overflow-hidden ${CHAT_SIDEBAR_MOTION} ${
-                  desktopListOpen ? 'w-72' : 'w-0'
-                }`
+              : 'flex min-h-0 w-72 shrink-0 flex-col overflow-hidden'
           }
         >
           <div
