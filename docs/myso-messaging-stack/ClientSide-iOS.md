@@ -20,7 +20,8 @@ Config: `MESSAGING_RELAYER_URL` in xcconfig / Info.plist as **host only** (e.g. 
 
 | Feature | Endpoint |
 |---------|----------|
-| Messages | `/messages` or `/v1/messages` (signed CRUD) |
+| Messages | `/messages` or `/v1/messages` (signed CRUD); **402** `PAYMENT_REQUIRED` when first outbound needs escrow |
+| Paid DM gate | `GET /v1/messaging/dm-gate?recipient=…&group_id=…` (wallet auth, advisory) |
 | User feed (wake) | `GET /v1/users/ws` (WebSocket, metadata only) |
 | Group realtime | `GET /v1/ws` (WebSocket, full encrypted wire JSON) |
 | Unread counts | `POST /v1/users/unread-counts` (body-signed batch) |
@@ -184,6 +185,7 @@ xcconfig / Info.plist:
 | `MYDATA_KEY_SERVER_URLS` | Optional URL overrides (`http:/$()/127.0.0.1:2024` in xcconfig) |
 | `MESSAGING_NAMESPACE_ID` | `deriveObjectID` parent for EncryptionHistory |
 | `MESSAGING_VERSION_OBJECT_ID` | `mydata_approve_reader` Version object |
+| `MESSAGING_CONFIG_ID` | Shared `MessagingConfig` (paid escrow TTL / min reply chars) |
 | `MESSAGING_ORIGINAL_PACKAGE_ID` / `MESSAGING_LATEST_PACKAGE_ID` | SessionKey namespace / approve package |
 | `FILE_STORAGE_AGGREGATOR_URL` | Host for attachment download (`/v1/blobs/by-quilt-patch-id/{id}`) |
 
@@ -207,7 +209,36 @@ Open thread: hydrate SQLite tip page + cached reactions → local AES for missin
 
 Messages list **+** opens a SwiftUI sheet (`CreateConversationSheet`): following suggestions (`ProfileFollowing`), MySo `/search` for username/name, and `0x`+64-hex wallet lookup via `ProfileFull` with **cardless** selectable rows when no profile exists. Next inserts a local draft group (`groupId` prefix `local-`) via `MessagingInboxService.insertLocalDraft` with an official name of peer labels + self (web `buildAutoGroupName`), persists `pendingMemberWallets` in sealed inbox chrome, republishes the inbox row at the top, and pushes `ChatThreadViewController` with composer focused. List/thread titles strip self (≤5 peers); empty draft subtitle is `drafted chat` / `drafted group chat`. Discovery/`replaceActive` preserves `local-*` drafts.
 
-**First message** (not sheet submit) runs sequentially: `messaging::create_and_share_wallet_group` → wait for relayer membership → default peer grants (`MessagingSender` / `Editor` / `Deleter` / `GroupHandleAdmin` / `MetadataAdmin`, best-effort) → `promoteLocalDraft` → encrypt + `POST /v1/messages`. Create failure keeps the `local-*` row and marks the optimistic bubble failed (Retry re-runs create→send).
+**First message** (not sheet submit) runs sequentially:
+
+1. **1:1 draft** — `GET /v1/messaging/dm-gate?recipient=…` (wallet auth). Empty thread shows **New chat** + cost (`Opening this chat costs {X} MYSO` / `Free to message` / `Group chat` for 2+ peers).
+2. If `PAYMENT_REQUIRED` — SwiftUI **Payment Required** sheet → `MessagingPaidDmService.openPaidDm` (same-PTB `create_wallet_group` → `send_paid_message_digest` → `public_share_object` ×3) → wait membership + escrow index → peer grants → `promoteLocalDraft` → encrypt + `POST /v1/messages`.
+3. If free / following / group (2+) — unpaid `messaging::create_and_share_wallet_group` → membership → grants → promote → encrypt + send (unchanged).
+4. Cancel confirm removes the optimistic bubble and keeps the `local-*` draft.
+5. **Existing 1:1** that returns **402** on send — same confirm sheet → `payDmEscrow` → retry `POST /messages`.
+6. **Reply-and-claim** — when `peer_paid && first_outbound`, a banner prompts reply; after a successful send with ≥ `min_reply_chars`, iOS runs `reply_to_paid_message_claim_settled`. Thread Details → **Refund expired escrow** only when social indexer `GET /wallets/{self}/paid-messages` shows an `escrowed` row for this group where the caller is payer and `createdAtMs + paymentExpirationMs` has elapsed (TTL from `GET /messaging/configuration`, default 30d). Fail closed if the indexer is unset/unreachable. Settings → **Paid messaging** loads policy from `GET /wallets/{wallet}/messaging-policy` (or on-chain `requiresPaymentFrom` when `SOCIAL_INDEXER_URL` is unset) and saves via on-chain `set_paid_messaging_policy`. Inbox shows a **PAID** badge when an unread peer-paid request is waiting.
+
+Create failure keeps the `local-*` row and marks the optimistic bubble failed (Retry re-runs create→send).
+
+Genesis config for paid PTBs: `MESSAGING_CONFIG_ID` (shared `MessagingConfig`) plus derived `PaidMessagingRegistry` / `MessageLog` IDs. After regenesis, refresh Dev xcconfig (`MessagingConfig` via GraphQL type filter) alongside namespace/version.
+
+#### Paid DM QA matrix
+
+| Scenario | Expected |
+|----------|----------|
+| 1:1 stranger + policy | Empty cost line → Confirm & Pay → `openPaidDm` → message lands |
+| 1:1 when **I follow** them | Free create, no payment sheet |
+| 1:1 no policy | Free create, no payment sheet |
+| Group 2+ peers | Free `createAndShare`, empty state “Group chat”, no sheet |
+| Cancel confirm | Draft preserved, optimistic bubble removed, no chain create |
+| Insufficient MYSO | Confirm sheet shows balance error; draft kept |
+| 402 on existing unpaid DM | Confirm → `payDmEscrow` → retry send |
+| Peer paid, unread | Inbox **PAID** badge; thread claim banner; reply ≥ min chars claims |
+| I paid, &lt; 30d / still open | Details hides **Refund expired escrow** |
+| I paid, ≥ TTL, still `escrowed` | Details shows refund; `refund_paid_escrow` with indexer `seq` |
+| Peer claimed / I refunded | Details hides refund (`status` ≠ `escrowed`) |
+
+Protocol source of truth: [`PaidMessaging.md`](./PaidMessaging.md). Follow exemption is **sender follows recipient** (not the reverse).
 
 ### Chat tab lifecycle
 

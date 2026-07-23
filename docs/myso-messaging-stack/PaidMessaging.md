@@ -105,10 +105,31 @@ await paid.refundEscrow({
 
 ## Relayer scope
 
-The relayer does **not** index paid escrow state. Clients read `MessageLog` on-chain directly; the relayer only stores encrypted message payloads and optional agent attribution metadata.
+The relayer indexes `PaidMessageSent` into its own `paid_message_escrows` (gate-only: non-expired existence) and exposes advisory `GET /v1/messaging/dm-gate` plus **402** on `POST /v1/messages` when payment is still required. Free-message delivery stays gated until an indexed escrow exists (or follow / reply exemptions apply). Clients still settle claim/refund on-chain via Move.
+
+## Refund eligibility (social indexer)
+
+Full escrow lifecycle (`escrowed` / `claimed` / `settled` / `refunded`) lives in the **social indexer** `paid_message_escrows` table (myso-core), not the relayer gate table. Clients decide whether to show **Refund expired escrow** via:
+
+- `GET /wallets/{address}/paid-messages` — latest status per `(groupId, seq)` where the wallet is payer or recipient
+- `GET /messaging/configuration` — `paymentExpirationMs` (fallback 30 days)
+
+Show refund when status is still `escrowed`, `payer` is the caller, and `createdAtMs + paymentExpirationMs <= now`. Do not use dm-gate `paid` for this (that flag drops after expiry).
 
 ## Chat-app
 
 Set `VITE_SOCIAL_SERVER_URL` and use the sidebar **Paid messaging** panel to set/display policy. Optional paid-DM badge in message UI can key off recipient policy via `getOnChainPolicy()`.
 
 Reply-to-claim uses the genesis-resolved `EcosystemTreasury` shared object from SDK `packageConfig` — no fee recipient env vars are required.
+
+## iOS
+
+iOS keeps **local draft → first send** (not pay-on-Create Next):
+
+1. Empty draft shows **New chat** + advisory cost from `checkDmGate`.
+2. First send on a 1:1 draft with `PAYMENT_REQUIRED` → SwiftUI confirm → `MessagingPaidDmService.openPaidDm` (same-PTB create + escrow + share).
+3. Free / following / multi-peer → unpaid `createAndShare`.
+4. Existing thread **402** → confirm → `payDmEscrow` → retry send.
+5. Follow-ons: claim banner + `replyAndClaimSettled`, Details refund gated by social-indexer paid-messages, Settings policy, inbox **PAID** badge.
+
+See [`ClientSide-iOS.md`](./ClientSide-iOS.md) (Create Conversation + QA matrix).
