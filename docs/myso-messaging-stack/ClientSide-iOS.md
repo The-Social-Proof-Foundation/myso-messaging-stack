@@ -164,7 +164,8 @@ SOCIAL_SERVER_URL=https://...
 | `MessagingGroupMetadata` | On-chain Metadata name/uuid via MySoKit dynamic fields |
 | `MessagingProfileResolver` | Wallet → GraphQL `ProfileFull` (username, displayName, photo, SPT address, reservation %); indexer fallback; `@username` via search then ProfileFull |
 | `MessagingAvatarView` | Shared list/bubble avatar + SPT ring |
-| `ChatTabView` / list / thread / detail | UIKit Messages tab: list → thread (nav `info.circle` → detail); encrypt send; typing; image bubbles; linkified URLs |
+| `ChatTabView` / list / thread / detail | UIKit Messages tab: list → thread (nav `info.circle` → detail); encrypt send; typing; image bubbles; linkified URLs + `@` mentions |
+| `MessagingMentionTokenizer` / `SuggestService` | Client-only `@username` / pasted `@0x` wallet mentions; glass suggestions above composer |
 | `MyDataCrypto` (SPM) | Native Swift MyData + messaging envelope encrypt/decrypt (blst BLS) |
 | `Services/MyData/*` | SessionKey, key-server HTTP, approve PTB, `MyDataClient` |
 | `MessagingEncryptionService` | DEK cache + EncryptionHistory + AES-GCM/AAD encrypt & decrypt + attachment meta/images |
@@ -215,10 +216,11 @@ Messages list **+** opens a SwiftUI sheet (`CreateConversationSheet`): following
 3. **Chat tab appears** — bind list UI; reconcile unread; 60s timer while mounted; incremental preview warm.
 4. **Chat tab destroyed** (custom tab bar) — stop timer / group WS; **keep** inbox singleton + store.
 5. **Open thread** — hydrate SQLite + reaction cache + plaintext LRU; local AES for missing bodies (Keychain DEK); parallel `fetchMessages` + `listReactions`; decrypt only still-missing; lazy images; group WS; local `markRead`; write-through ciphertext + reactions + RAM cache. Opening cancels inbox tip refresh tasks.
-6. **Send** — composer encrypts (DEK + AAD AES-GCM) → signs canonical content → `POST /v1/messages`; optimistic bubble then WS/fetch reconcile; write-through SQLite + RAM cache.
+6. **Send** — composer encrypts (DEK + AAD AES-GCM) → signs canonical content → `POST /v1/messages`; optimistic bubble then WS/fetch reconcile; write-through SQLite + RAM cache. Mentions are expanded to plaintext `@username` or full `@0x`+64 hex before encrypt (no relayer schema).
 7. **Typing** — throttled `POST /v1/groups/{id}/typing`; WS `typing.start`/`stop` drives indicator above composer.
-8. **List profiles** — `@handle` DM names resolve via indexer search → `ProfileFull`; list title/photo/SPT ring from `MessagingProfile`.
-9. **Encrypted read-state CAS / attachment upload-from-composer** — still deferred.
+8. **Mentions** — typing `@` opens a glass suggestion panel above attach chips (following list, then debounced `/search` like Create Conversation). Tap inserts a bold `@username`. Pasting a full wallet inserts an abbreviated bold mention; send/draft store the full `@0x`+64. Bubbles bold `@` tokens (wallets abbreviated) and open `ProfileView` via `myso-mention://` links.
+9. **List profiles** — `@handle` DM names resolve via indexer search → `ProfileFull`; list title/photo/SPT ring from `MessagingProfile`.
+10. **Encrypted read-state CAS / attachment upload-from-composer** — still deferred.
 
 Unread badges stay on the relayer path (not product backend). Merge with likes/comments badges only at the UI if needed.
 
