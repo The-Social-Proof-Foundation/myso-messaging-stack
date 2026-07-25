@@ -12,12 +12,17 @@ import { GroupNameSection } from './admin/GroupNameSection';
 import { MemberList } from './admin/MemberList';
 import { AddMemberForm } from './admin/AddMemberForm';
 import { GroupActionsSection } from './admin/GroupActionsSection';
+import {
+  ChatSettingsSection,
+  type ChatSettingsSavingKey,
+} from './admin/ChatSettingsSection';
 import type { WalletRingBits } from '../hooks/useWalletAvatarMap';
 import { useIsMobileNav } from '../hooks/useMediaQuery';
 import {
   CHAT_INFO_WIDTH_PX,
   CHAT_SIDEBAR_MOTION,
 } from '../lib/chat-layout';
+import type { ReceiptMode } from '@socialproof/myso-messaging-stack';
 
 interface MemberWithPermissions {
   address: string;
@@ -43,6 +48,11 @@ interface AdminPanelProps {
   photoFor?: (address: string) => string | null;
   labelFor?: (address: string) => string;
   ringFor?: (address: string) => WalletRingBits;
+  /** Fired after a successful prefs PUT so the open thread can sync receiptMode. */
+  onPrefsChanged?: (prefs: {
+    notificationsEnabled: boolean;
+    receiptMode: ReceiptMode;
+  }) => void;
 }
 
 export function AdminPanel({
@@ -62,6 +72,7 @@ export function AdminPanel({
   photoFor,
   labelFor,
   ringFor,
+  onPrefsChanged,
 }: Readonly<AdminPanelProps>) {
   const { client, signer } = useRequiredMessagingClient();
   const isMobileNav = useIsMobileNav();
@@ -71,11 +82,19 @@ export function AdminPanel({
   const membersRef = useRef(members);
   membersRef.current = members;
 
+  const [notificationsEnabled, setNotificationsEnabled] = useState(true);
+  const [readReceiptsEnabled, setReadReceiptsEnabled] = useState(true);
+  const [prefsLoading, setPrefsLoading] = useState(true);
+  const [prefsSavingKey, setPrefsSavingKey] =
+    useState<ChatSettingsSavingKey>(null);
+  const [prefsError, setPrefsError] = useState<string | null>(null);
+
   // Add member form
   const [newAddress, setNewAddress] = useState('');
   const [selectedPerms, setSelectedPerms] = useState<string[]>([]);
   const [adding, setAdding] = useState(false);
   const [addError, setAddError] = useState<string | null>(null);
+  const [addMemberBlocked, setAddMemberBlocked] = useState(false);
 
   // Remove member state
   const [removingMember, setRemovingMember] = useState<string | null>(null);
@@ -130,14 +149,98 @@ export function AdminPanel({
   useEffect(() => {
     setMembers([]);
     setLoadingMembers(false);
+    setNotificationsEnabled(true);
+    setReadReceiptsEnabled(true);
+    setPrefsLoading(true);
+    setPrefsError(null);
+    setPrefsSavingKey(null);
   }, [groupId]);
+
+  const fetchPrefs = useCallback(async () => {
+    setPrefsLoading(true);
+    setPrefsError(null);
+    try {
+      const prefs = await client.messaging.getConversationPrefs({
+        signer,
+        groupRef: { uuid: groupUuid },
+      });
+      setNotificationsEnabled(prefs.notificationMode === 'all');
+      setReadReceiptsEnabled(prefs.receiptMode === 'full');
+      onPrefsChanged?.({
+        notificationsEnabled: prefs.notificationMode === 'all',
+        receiptMode: prefs.receiptMode,
+      });
+    } catch (err) {
+      console.warn('Failed to load conversation prefs:', err);
+      setPrefsError(
+        err instanceof Error ? err.message : 'Failed to load chat settings.',
+      );
+    } finally {
+      setPrefsLoading(false);
+    }
+  }, [client, signer, groupUuid, onPrefsChanged]);
 
   useEffect(() => {
     if (open) {
       void fetchMembers();
+      void fetchPrefs();
       setNewName(groupName);
     }
-  }, [open, fetchMembers, groupName]);
+  }, [open, fetchMembers, fetchPrefs, groupName]);
+
+  async function handleToggleNotifications(enabled: boolean) {
+    const prev = notificationsEnabled;
+    setNotificationsEnabled(enabled);
+    setPrefsSavingKey('notifications');
+    setPrefsError(null);
+    try {
+      const prefs = await client.messaging.putConversationPrefs({
+        signer,
+        groupRef: { uuid: groupUuid },
+        notificationMode: enabled ? 'all' : 'none',
+      });
+      setNotificationsEnabled(prefs.notificationMode === 'all');
+      setReadReceiptsEnabled(prefs.receiptMode === 'full');
+      onPrefsChanged?.({
+        notificationsEnabled: prefs.notificationMode === 'all',
+        receiptMode: prefs.receiptMode,
+      });
+    } catch (err) {
+      setNotificationsEnabled(prev);
+      setPrefsError(
+        err instanceof Error ? err.message : 'Failed to update notifications.',
+      );
+    } finally {
+      setPrefsSavingKey(null);
+    }
+  }
+
+  async function handleToggleReadReceipts(enabled: boolean) {
+    const prev = readReceiptsEnabled;
+    setReadReceiptsEnabled(enabled);
+    setPrefsSavingKey('readReceipts');
+    setPrefsError(null);
+    try {
+      const prefs = await client.messaging.putConversationPrefs({
+        signer,
+        groupRef: { uuid: groupUuid },
+        receiptMode: enabled ? 'full' : 'delivered_only',
+      });
+      setNotificationsEnabled(prefs.notificationMode === 'all');
+      setReadReceiptsEnabled(prefs.receiptMode === 'full');
+      onPrefsChanged?.({
+        notificationsEnabled: prefs.notificationMode === 'all',
+        receiptMode: prefs.receiptMode,
+      });
+    } catch (err) {
+      setReadReceiptsEnabled(prev);
+      setPrefsError(
+        err instanceof Error ? err.message : 'Failed to update read receipts.',
+      );
+    } finally {
+      setPrefsSavingKey(null);
+    }
+  }
 
   // ------------------------------------------------------------------
   // Add member
@@ -149,6 +252,10 @@ export function AdminPanel({
     const address = newAddress.trim();
     if (!address) { setAddError('Address is required.'); return; }
     if (!/^0x[a-fA-F0-9]{64}$/.test(address)) { setAddError('Invalid MySo address.'); return; }
+    if (addMemberBlocked) {
+      setAddError('You cannot add this user (blocked).');
+      return;
+    }
     if (selectedPerms.length === 0) { setAddError('Select at least one permission.'); return; }
 
     setAdding(true);
@@ -398,12 +505,24 @@ export function AdminPanel({
             adding={adding}
             addError={addError}
             messagingPermTypes={messagingPermTypes}
+            existingMemberAddresses={members.map((m) => m.address)}
             onAddressChange={setNewAddress}
             onTogglePerm={togglePerm}
             onSelectAllPerms={selectAllPerms}
             onSubmit={handleAddMember}
+            onBlockedChange={setAddMemberBlocked}
           />
         )}
+
+        <ChatSettingsSection
+          notificationsEnabled={notificationsEnabled}
+          readReceiptsEnabled={readReceiptsEnabled}
+          loading={prefsLoading}
+          savingKey={prefsSavingKey}
+          error={prefsError}
+          onToggleNotifications={handleToggleNotifications}
+          onToggleReadReceipts={handleToggleReadReceipts}
+        />
 
         {(permissions.isAdmin || onLeaveGroup) && (
           <GroupActionsSection

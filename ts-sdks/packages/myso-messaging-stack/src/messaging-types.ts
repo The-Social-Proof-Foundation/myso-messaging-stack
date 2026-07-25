@@ -5,8 +5,16 @@
 import type { Signer } from '@socialproof/myso/cryptography';
 
 import type { Attachment, AttachmentFile, AttachmentHandle } from './attachments/types.js';
-import type { RelayerReactionEvent, SyncStatus } from './relayer/types.js';
+import type {
+	MessageKind,
+	RelayerReactionEvent,
+	RelayerReceiptEvent,
+	SyncStatus,
+	SystemMessage,
+} from './relayer/types.js';
 import type { GroupRef } from './types.js';
+
+export type { MessageKind, SystemEventType, SystemMessage } from './relayer/types.js';
 
 // ── Conditional mydataApproveContext ────────────────────────────────
 
@@ -32,7 +40,7 @@ export interface DecryptedMessage extends MessageAttribution {
 	messageId: string;
 	groupId: string;
 	order: number;
-	/** Decrypted plaintext. Empty string for deleted or attachment-only messages. */
+	/** Decrypted plaintext. Empty string for deleted, system, or attachment-only messages. */
 	text: string;
 	senderAddress: string;
 	createdAt: number;
@@ -47,6 +55,10 @@ export interface DecryptedMessage extends MessageAttribution {
 	senderVerified: boolean;
 	/** True when the relayer stored agent attribution metadata. */
 	isAgentMessage: boolean;
+	/** Defaults to `text` for legacy messages. */
+	kind?: MessageKind;
+	/** Present when `kind === 'system'`. Unknown `system.type` values are kept as strings. */
+	system?: SystemMessage;
 }
 
 // ── Options types ────────────────────────────────────────────────
@@ -162,8 +174,8 @@ export type SubscribeOptions<TApproveContext = void> = WithApproveContext<
 
 /**
  * Event yielded by {@link MySoMessagingStackClient.subscribe}: a decrypted
- * message, an absolute-state reaction update, or an ephemeral typing /
- * presence change.
+ * message, an absolute-state reaction update, ephemeral typing / presence,
+ * or peer-visible delivery/read receipts.
  */
 export type MessagingEvent =
 	| { type: 'message'; message: DecryptedMessage }
@@ -177,7 +189,8 @@ export type MessagingEvent =
 				expiresAt?: number;
 			};
 	  }
-	| { type: 'presence'; presence: { member: string; online: boolean } };
+	| { type: 'presence'; presence: { member: string; online: boolean } }
+	| { type: 'receipt'; receipt: RelayerReceiptEvent };
 
 // ── Reactions ────────────────────────────────────────────────────
 

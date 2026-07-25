@@ -43,6 +43,15 @@ export function AuthenticatedApp({
 
   const activity = useGroupActivityOrder(groups);
   const paidDmGroupIds = usePaidDmRequests(groups, activity.counts);
+  const receiptApplyRef = useRef<
+    | ((event: {
+        groupId: string;
+        member: string;
+        deliveredUpto: number;
+        readUpto: number;
+      }) => void)
+    | null
+  >(null);
 
   const sortedGroups = useMemo(
     () =>
@@ -116,6 +125,14 @@ export function AuthenticatedApp({
     },
     onReadStateUpdated: () => {
       activity.refresh();
+    },
+    onReceiptUpdated: (groupId, member, deliveredUpto, readUpto) => {
+      receiptApplyRef.current?.({
+        groupId,
+        member,
+        deliveredUpto,
+        readUpto,
+      });
     },
     onGroupDiscovered: (groupId) => {
       handleDiscovered(groupId);
@@ -200,6 +217,7 @@ export function AuthenticatedApp({
                     activity.recordActivity(selectedGroup.groupId, order)
                 : undefined
             }
+            receiptApplyRef={receiptApplyRef}
             onMobileBack={
               isMobileNav ? () => selectGroup(null) : undefined
             }

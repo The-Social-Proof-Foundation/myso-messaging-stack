@@ -39,15 +39,18 @@ import {
   mapGraphqlProfile,
 } from '../lib/wallet-profile';
 import {
+  annotatePeersBlocked,
+  clearEitherBlockCache,
+} from '../lib/block-check';
+import {
   type RecipientPeer,
   fetchFollowingProfiles,
   normalizeMysoWalletQuery,
   peerCapsuleLabel,
-  peerRowSubtitle,
-  peerRowTitle,
   searchProfiles,
 } from '../lib/recipient-picker';
 import { PaymentConfirmDialog } from './PaymentConfirmDialog';
+import { RecipientPickerRows } from './RecipientPickerRows';
 
 interface CreateGroupModalProps {
   open: boolean;
@@ -98,6 +101,7 @@ export function CreateGroupModal({
     setError(null);
     setPendingPaidDm(null);
     setPayError(null);
+    clearEitherBlockCache();
   }, []);
 
   // Load following when opened.
@@ -108,10 +112,12 @@ export function CreateGroupModal({
     setLoadingFollowing(true);
     void (async () => {
       const peers = await fetchFollowingProfiles(selfWallet);
-      if (cancelled) return;
-      setFollowing(
-        peers.filter((p) => p.wallet.toLowerCase() !== selfWallet),
+      const filtered = peers.filter(
+        (p) => p.wallet.toLowerCase() !== selfWallet,
       );
+      const annotated = await annotatePeersBlocked(selfWallet, filtered);
+      if (cancelled) return;
+      setFollowing(annotated);
       setLoadingFollowing(false);
     })();
     return () => {
@@ -151,8 +157,9 @@ export function CreateGroupModal({
                 | undefined;
               const mapped = mapGraphqlProfile(data?.profile ?? null);
               if (cancelled) return;
+              let peers: RecipientPeer[];
               if (mapped) {
-                setSearchResults([
+                peers = [
                   {
                     wallet: mapped.owner_address.toLowerCase(),
                     username: mapped.username,
@@ -160,9 +167,9 @@ export function CreateGroupModal({
                     photoURL: mapped.profile_photo,
                     isCardless: false,
                   },
-                ]);
+                ];
               } else {
-                setSearchResults([
+                peers = [
                   {
                     wallet,
                     username: null,
@@ -170,11 +177,13 @@ export function CreateGroupModal({
                     photoURL: null,
                     isCardless: true,
                   },
-                ]);
+                ];
               }
+              const annotated = await annotatePeersBlocked(selfWallet, peers);
+              if (!cancelled) setSearchResults(annotated);
             } catch {
               if (!cancelled) {
-                setSearchResults([
+                const annotated = await annotatePeersBlocked(selfWallet, [
                   {
                     wallet,
                     username: null,
@@ -183,15 +192,18 @@ export function CreateGroupModal({
                     isCardless: true,
                   },
                 ]);
+                setSearchResults(annotated);
               }
             }
             return;
           }
           const found = await searchProfiles(trimmed);
-          if (cancelled) return;
-          setSearchResults(
-            found.filter((p) => p.wallet.toLowerCase() !== selfWallet),
+          const filtered = found.filter(
+            (p) => p.wallet.toLowerCase() !== selfWallet,
           );
+          const annotated = await annotatePeersBlocked(selfWallet, filtered);
+          if (cancelled) return;
+          setSearchResults(annotated);
         } finally {
           if (!cancelled) setSearching(false);
         }
@@ -222,7 +234,7 @@ export function CreateGroupModal({
 
   function addPeer(peer: RecipientPeer) {
     const key = peer.wallet.toLowerCase();
-    if (key === selfWallet || selectedKeys.has(key)) return;
+    if (peer.blocked || key === selfWallet || selectedKeys.has(key)) return;
     setSelected((prev) => [...prev, { ...peer, wallet: key }]);
     setQuery('');
     setSearchResults([]);
@@ -261,6 +273,10 @@ export function CreateGroupModal({
     e.preventDefault();
     setError(null);
 
+    if (selected.some((p) => p.blocked)) {
+      setError('Remove blocked recipients before creating.');
+      return;
+    }
     const initialMembers = selected.map((p) => p.wallet.toLowerCase());
     if (initialMembers.length === 0) {
       setError('Add at least one recipient.');
@@ -554,16 +570,34 @@ export function CreateGroupModal({
             >
               Recipients <span className="text-danger-500">*</span>
             </label> */}
-            <input
-              id="recipient-search"
-              type="text"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search username, name, or address"
-              disabled={busy}
-              autoComplete="off"
-              className="w-full rounded-lg border border-secondary-300 bg-white px-3 py-2 text-sm text-secondary-900 placeholder:text-secondary-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 disabled:opacity-50 dark:border-secondary-600 dark:bg-secondary-700 dark:text-secondary-100 dark:placeholder:text-secondary-500"
-            />
+            <div className="relative">
+              <input
+                id="recipient-search"
+                type="text"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Search username, name, or address"
+                disabled={busy}
+                autoComplete="off"
+                className={`w-full rounded-lg border border-secondary-300 bg-white py-2 pl-3 text-sm text-secondary-900 placeholder:text-secondary-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 disabled:opacity-50 dark:border-secondary-600 dark:bg-secondary-700 dark:text-secondary-100 dark:placeholder:text-secondary-500 ${
+                  query.trim() ? 'pr-9' : 'pr-3'
+                }`}
+              />
+              {query.trim().length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setQuery('');
+                    setSearchResults([]);
+                  }}
+                  disabled={busy}
+                  aria-label="Clear search"
+                  className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded-md p-1 text-secondary-500 hover:bg-secondary-200/80 hover:text-secondary-800 disabled:opacity-50 dark:text-secondary-400 dark:hover:bg-secondary-600 dark:hover:text-secondary-100"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              )}
+            </div>
           </div>
 
           {selected.length > 0 && (
@@ -605,7 +639,7 @@ export function CreateGroupModal({
             className={
               listPeers.length === 0
                 ? 'mb-6 max-h-72 overflow-y-auto'
-                : 'mb-6 max-h-72 min-h-[12rem] overflow-y-auto rounded-lg border border-secondary-200 dark:border-secondary-600'
+                : 'mb-6 max-h-72 min-h-[12rem] overflow-y-auto'
             }
           >
             {listPeers.length === 0 ? (
@@ -619,40 +653,11 @@ export function CreateGroupModal({
                 {listEmptyLabel}
               </p>
             ) : (
-              <ul className="divide-y divide-secondary-200 dark:divide-secondary-600">
-                {listPeers.map((peer) => (
-                  <li key={peer.wallet}>
-                    <button
-                      type="button"
-                      onClick={() => addPeer(peer)}
-                      disabled={busy}
-                      className="flex w-full items-center gap-3 bg-secondary-100 px-3 py-3.5 text-left hover:bg-secondary-200/80 disabled:opacity-50 dark:bg-secondary-600 dark:hover:bg-secondary-500/70"
-                    >
-                      {peer.photoURL ? (
-                        <img
-                          src={peer.photoURL}
-                          alt=""
-                          className="h-9 w-9 shrink-0 rounded-full object-cover"
-                        />
-                      ) : (
-                        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-secondary-200 text-xs font-medium text-secondary-700 dark:bg-secondary-500 dark:text-secondary-100">
-                          {(peerRowTitle(peer)[0] ?? '?').toUpperCase()}
-                        </span>
-                      )}
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate text-sm font-medium text-secondary-900 dark:text-secondary-100">
-                          {peerRowTitle(peer)}
-                        </span>
-                        <span className="block truncate text-xs text-secondary-500 dark:text-secondary-300">
-                          {peer.isCardless
-                            ? 'No profile — wallet only'
-                            : peerRowSubtitle(peer)}
-                        </span>
-                      </span>
-                    </button>
-                  </li>
-                ))}
-              </ul>
+              <RecipientPickerRows
+                peers={listPeers}
+                busy={busy}
+                onAdd={addPeer}
+              />
             )}
           </div>
 

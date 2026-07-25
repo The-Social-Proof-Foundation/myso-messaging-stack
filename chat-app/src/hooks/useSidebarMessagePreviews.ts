@@ -5,6 +5,7 @@ import {
   useMySocialAuth,
 } from '../contexts/MySocialAuthContext';
 import type { StoredGroup } from '../lib/group-store';
+import { scheduleInboxDeliveredAck } from '../lib/inbox-delivered-ack';
 import { getCachedThread } from '../lib/message-session-cache';
 import {
   loadSidebarPreviews,
@@ -217,6 +218,19 @@ export function useSidebarMessagePreviews(
               order: last.order,
               verified: true,
             });
+            // Delivered ✓ while peer stays on inbox (not only open thread).
+            if (address) {
+              scheduleInboxDeliveredAck({
+                client,
+                signer,
+                groupId: group.groupId,
+                uuid: group.uuid,
+                tipOrder: last.order,
+                tipSenderAddress: last.senderAddress,
+                selfAddress: address,
+                isDeleted: last.isDeleted,
+              });
+            }
           } catch (err) {
             console.warn(
               `[sidebar] failed to load preview for ${group.groupId.slice(0, 10)}…`,

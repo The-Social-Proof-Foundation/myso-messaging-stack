@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRequiredMessagingClient } from '../contexts/MessagingClientContext';
+import { onGroupMembersInvalidated } from '../lib/group-members-cache';
 
 function truncateAddress(address: string): string {
   if (!address) return 'Someone';
@@ -8,6 +9,10 @@ function truncateAddress(address: string): string {
 
 /** Session cache: groupId -> address -> label */
 const labelCache = new Map<string, Map<string, string>>();
+
+export function invalidateGroupMemberLabels(groupId: string): void {
+  labelCache.delete(groupId);
+}
 
 export interface UseGroupMemberLabelsResult {
   labelFor: (address: string) => string;
@@ -28,18 +33,21 @@ export function useGroupMemberLabels(
   const [labels, setLabels] = useState<Map<string, string>>(
     () => labelCache.get(groupId) ?? new Map(),
   );
+  const [invalidateEpoch, setInvalidateEpoch] = useState(0);
   const refreshKey = options?.refreshKey ?? 0;
   const groupIdRef = useRef(groupId);
   groupIdRef.current = groupId;
 
   useEffect(() => {
-    const cached = labelCache.get(groupId);
-    if (cached) {
-      setLabels(cached);
-    } else {
-      setLabels(new Map());
-    }
+    return onGroupMembersInvalidated((id) => {
+      if (id === groupIdRef.current) {
+        invalidateGroupMemberLabels(id);
+        setInvalidateEpoch((n) => n + 1);
+      }
+    });
+  }, []);
 
+  useEffect(() => {
     let cancelled = false;
 
     async function load() {
@@ -65,12 +73,17 @@ export function useGroupMemberLabels(
       }
     }
 
-    load().then();
+    const cached = labelCache.get(groupId);
+    if (cached && invalidateEpoch === 0) {
+      setLabels(cached);
+    }
+
+    void load();
 
     return () => {
       cancelled = true;
     };
-  }, [client, groupId, refreshKey]);
+  }, [client, groupId, refreshKey, invalidateEpoch]);
 
   const labelFor = useCallback(
     (address: string) => labels.get(address) ?? truncateAddress(address),
@@ -81,6 +94,7 @@ export function useGroupMemberLabels(
 
   const refresh = useCallback(() => {
     labelCache.delete(groupId);
+    setInvalidateEpoch((n) => n + 1);
   }, [groupId]);
 
   return { labelFor, memberAddresses, refresh };

@@ -9,11 +9,15 @@ import {
 	fromWireMessage,
 	fromWirePresenceEvent,
 	fromWireReactionEvent,
+	fromWireReceiptEvent,
 	fromWireTypingEvent,
 	fromWireUserFeedEvent,
 	type WireMessageCreatedEvent,
+	type WireMessageDeletedEvent,
+	type WireMessageEditedEvent,
 	type WirePresenceEvent,
 	type WireReactionUpdatedEvent,
+	type WireReceiptUpdatedEvent,
 	type WireTypingEvent,
 	type WireUserFeedEvent,
 } from './wire.js';
@@ -93,9 +97,12 @@ function parseGroupFrame(
 ): RelayerSubscriptionEvent | null {
 	const frame = JSON.parse(data) as
 		| WireMessageCreatedEvent
+		| WireMessageDeletedEvent
+		| WireMessageEditedEvent
 		| WireReactionUpdatedEvent
 		| WireTypingEvent
 		| WirePresenceEvent
+		| WireReceiptUpdatedEvent
 		| { type?: string };
 	if (frame.type === 'message.created' && 'message' in frame) {
 		const message = fromWireMessage(frame.message);
@@ -103,6 +110,15 @@ function parseGroupFrame(
 			return null;
 		}
 		return { type: 'message.created', message };
+	}
+	// Tombstone / edit for an already-seen order — never filter by afterOrder.
+	if (frame.type === 'message.deleted' && 'message' in frame) {
+		const message = fromWireMessage(frame.message);
+		return { type: 'message.deleted', message };
+	}
+	if (frame.type === 'message.edited' && 'message' in frame) {
+		const message = fromWireMessage(frame.message);
+		return { type: 'message.edited', message };
 	}
 	if (frame.type === 'reaction.updated' && 'chain_seq' in frame) {
 		return { type: 'reaction.updated', reaction: fromWireReactionEvent(frame) };
@@ -112,6 +128,12 @@ function parseGroupFrame(
 	}
 	if (frame.type === 'presence.updated' && 'member' in frame) {
 		return { type: 'presence.updated', presence: fromWirePresenceEvent(frame) };
+	}
+	if (frame.type === 'receipt.updated' && 'delivered_upto' in frame) {
+		return {
+			type: 'receipt.updated',
+			receipt: fromWireReceiptEvent(frame as WireReceiptUpdatedEvent),
+		};
 	}
 	return null;
 }

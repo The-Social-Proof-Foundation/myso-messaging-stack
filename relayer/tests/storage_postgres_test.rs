@@ -3,30 +3,23 @@
 //! Run with: DATABASE_URL=postgres://... cargo test --test storage_postgres_test -- --ignored
 
 use chrono::Utc;
-use messaging_relayer::models::{Message, MessageAttribution, PaidEscrowRecord, SyncStatus};
+use messaging_relayer::models::{Message, PaidEscrowRecord};
 use messaging_relayer::storage::{
     create_postgres_storage, PutUserReadStateResult, StorageAdapter, StorageError,
 };
 use uuid::Uuid;
 
 fn sample_message(group_id: &str, nonce: Vec<u8>) -> Message {
-    Message {
-        id: Uuid::new_v4(),
-        group_id: group_id.to_string(),
-        order: None,
-        sender_wallet_addr: "0xsender".to_string(),
-        encrypted_msg: b"cipher".to_vec(),
+    Message::new(
+        group_id.to_string(),
+        "0xsender".to_string(),
+        b"cipher".to_vec(),
         nonce,
-        key_version: 0,
-        created_at: Utc::now(),
-        updated_at: Utc::now(),
-        sync_status: SyncStatus::SyncPending,
-        quilt_patch_id: None,
-        attachments: vec![],
-        signature: vec![1; 64],
-        public_key: vec![0; 33],
-        attribution: MessageAttribution::human_message(),
-    }
+        0,
+        vec![],
+        vec![1; 64],
+        vec![0; 33],
+    )
 }
 
 #[tokio::test]

@@ -20,6 +20,13 @@ export interface UserFeedHandlers {
   onGroupActivity?: (groupId: string, latestOrder: number) => void;
   /** Your read state changed on another device/tab. */
   onReadStateUpdated?: () => void;
+  /** Peer advanced delivery/read watermarks in a group. */
+  onReceiptUpdated?: (
+    groupId: string,
+    member: string,
+    deliveredUpto: number,
+    readUpto: number,
+  ) => void;
   /** A conversation appeared — re-fetch group metadata over REST. */
   onGroupDiscovered?: (groupId: string) => void;
   /** A conversation should leave the sidebar. */
@@ -72,6 +79,14 @@ export function useUserFeed(
                 break;
               case 'read_state.updated':
                 h.onReadStateUpdated?.();
+                break;
+              case 'receipt.updated':
+                h.onReceiptUpdated?.(
+                  event.groupId,
+                  event.member,
+                  event.deliveredUpto,
+                  event.readUpto,
+                );
                 break;
               case 'group.discovered':
                 h.onGroupDiscovered?.(event.groupId);

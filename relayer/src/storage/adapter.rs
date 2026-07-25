@@ -87,6 +87,9 @@ pub enum StorageError {
     #[error("Duplicate nonce: a message with this nonce already exists")]
     DuplicateNonce,
 
+    #[error("Duplicate idempotency key: system message already ingested")]
+    DuplicateIdempotencyKey,
+
     #[error("Storage operation failed: {0}")]
     OperationFailed(String),
 }
@@ -271,25 +274,49 @@ pub trait StorageAdapter: Send + Sync {
 
     async fn list_pins(&self, group_id: &str) -> StorageResult<Vec<i64>>;
 
-    async fn update_receipt_delivered(
+    /// Advance a member's delivery/read watermarks (monotonic max, clamped to
+    /// group tip). Returns the absolute new state when anything advanced.
+    async fn advance_member_receipts(
         &self,
         group_id: &str,
         member: &str,
-        upto: u64,
-    ) -> StorageResult<()>;
+        delivered_upto: Option<u64>,
+        read_upto: Option<u64>,
+    ) -> StorageResult<Option<crate::models::MemberReceipt>>;
 
-    async fn update_receipt_read(
+    /// All members with stored receipt rows for the group.
+    async fn list_group_receipts(
         &self,
         group_id: &str,
-        member: &str,
-        upto: u64,
-    ) -> StorageResult<()>;
+    ) -> StorageResult<Vec<crate::models::MemberReceipt>>;
 
     async fn get_receipt_state(
         &self,
         group_id: &str,
         member: &str,
     ) -> StorageResult<ReceiptStateResponse>;
+
+    /// Caller's prefs row, if any (missing = defaults at the handler).
+    async fn get_conversation_preferences(
+        &self,
+        group_id: &str,
+        wallet: &str,
+    ) -> StorageResult<Option<crate::models::ConversationPreferences>>;
+
+    /// Partial upsert: omitted patch fields keep prior (or default) values; bumps `version`.
+    async fn upsert_conversation_preferences(
+        &self,
+        group_id: &str,
+        wallet: &str,
+        patch: crate::models::ConversationPreferencesPatch,
+    ) -> StorageResult<crate::models::ConversationPreferences>;
+
+    /// Batched `notification_mode` for wallets in a group (missing keys → treat as `all`).
+    async fn list_notification_modes(
+        &self,
+        group_id: &str,
+        wallets: &[String],
+    ) -> StorageResult<std::collections::HashMap<String, String>>;
 
     // === Encrypted user read-state (opaque blob) ===
 

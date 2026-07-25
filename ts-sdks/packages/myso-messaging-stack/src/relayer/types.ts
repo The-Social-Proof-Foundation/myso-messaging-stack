@@ -16,6 +16,19 @@ export type SyncStatus =
 	| 'DELETE_PENDING'
 	| 'DELETED';
 
+/** Timeline message kind (`text` today; future: image, video, …). */
+export type MessageKind = 'text' | 'system';
+
+/** Known v1 system event types. Unknown future types arrive as plain `string`. */
+export type SystemEventType = 'member_joined' | 'member_left' | 'member_removed' | (string & {});
+
+/** Typed system event from the relayer (never raw JSON metadata). */
+export interface SystemMessage {
+	type: SystemEventType;
+	member: string;
+	actor?: string | null;
+}
+
 /** A message returned by a {@link RelayerTransport} implementation. */
 export interface RelayerMessage {
 	messageId: string;
@@ -42,6 +55,10 @@ export interface RelayerMessage {
 	subAgentId?: string;
 	identityClass?: 0 | 1 | 2;
 	isAgentMessage: boolean;
+	/** Defaults to `text` when omitted (legacy rows). */
+	kind?: MessageKind;
+	/** Present when `kind === 'system'`. */
+	system?: SystemMessage;
 }
 
 export interface SendMessageParams {
@@ -153,13 +170,24 @@ export interface RelayerPresenceEvent {
 	online: boolean;
 }
 
+/** Peer-visible delivery/read watermark (`receipt.updated`). */
+export interface RelayerReceiptEvent {
+	groupId: string;
+	member: string;
+	deliveredUpto: number;
+	readUpto: number;
+}
+
 /** Union of realtime events yielded by `subscribe()`. */
 export type RelayerSubscriptionEvent =
 	| { type: 'message.created'; message: RelayerMessage }
+	| { type: 'message.deleted'; message: RelayerMessage }
+	| { type: 'message.edited'; message: RelayerMessage }
 	| { type: 'reaction.updated'; reaction: RelayerReactionEvent }
 	| { type: 'typing.start'; typing: RelayerTypingEvent }
 	| { type: 'typing.stop'; typing: RelayerTypingEvent }
-	| { type: 'presence.updated'; presence: RelayerPresenceEvent };
+	| { type: 'presence.updated'; presence: RelayerPresenceEvent }
+	| { type: 'receipt.updated'; receipt: RelayerReceiptEvent };
 
 /**
  * Wallet-scoped events from the user feed (`/v1/users/ws`). Metadata only —
@@ -201,6 +229,14 @@ export type RelayerUserEvent =
 			itemId: string;
 			itemType: string;
 			status: string;
+	  }
+	| {
+			/** A peer advanced delivery/read watermarks in one of your groups. */
+			type: 'receipt.updated';
+			groupId: string;
+			member: string;
+			deliveredUpto: number;
+			readUpto: number;
 	  };
 
 /** Metadata-only workflow inbox item (not E2E chat). */
@@ -283,11 +319,20 @@ export interface SetGroupPinParams {
 	pin?: boolean;
 }
 
-/** `GET /v1/groups/:group_id/receipts` for the authenticated member. */
-export interface GroupReceiptState {
-	deliveredUpto?: number;
-	readUpto?: number;
+/** One member's peer-visible watermarks. */
+export interface MemberReceipt {
+	member: string;
+	deliveredUpto: number;
+	readUpto: number;
 }
+
+/** `GET /v1/groups/:group_id/receipts` — all members with stored rows. */
+export interface GroupReceiptState {
+	members: MemberReceipt[];
+}
+
+/** Own-message tick from peer watermarks (min over other members). */
+export type MessageTickStatus = 'none' | 'delivered' | 'read';
 
 export interface GetGroupReceiptsParams {
 	signer: Signer;
@@ -299,6 +344,31 @@ export interface PostGroupReceiptsParams {
 	groupId: string;
 	deliveredUpto?: number;
 	readUpto?: number;
+}
+
+/** Push mute for a conversation (`all` = notify, `none` = muted). */
+export type NotificationMode = 'all' | 'none';
+
+/** Peer receipt privacy: `full` = delivered+read; `delivered_only` = ✓ only. */
+export type ReceiptMode = 'full' | 'delivered_only' | 'none';
+
+/** Caller's prefs for one conversation (`GET/PUT /v1/groups/:id/prefs`). */
+export interface ConversationPrefs {
+	notificationMode: NotificationMode;
+	receiptMode: ReceiptMode;
+	version: number;
+}
+
+export interface GetConversationPrefsParams {
+	signer: Signer;
+	groupId: string;
+}
+
+export interface PutConversationPrefsParams {
+	signer: Signer;
+	groupId: string;
+	notificationMode?: NotificationMode;
+	receiptMode?: ReceiptMode;
 }
 
 export interface UserReadStateWire {

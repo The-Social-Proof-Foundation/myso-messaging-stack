@@ -16,6 +16,10 @@ const MIGRATIONS: &[(i32, &str)] = &[
     (8, include_str!("../../migrations/008_paid_message_escrows.sql")),
     (9, include_str!("../../migrations/009_workflow_items.sql")),
     (10, include_str!("../../migrations/010_archive_messages.sql")),
+    (11, include_str!("../../migrations/011_group_member_receipts.sql")),
+    (12, include_str!("../../migrations/012_system_messages.sql")),
+    (13, include_str!("../../migrations/013_conversation_preferences.sql")),
+    (14, include_str!("../../migrations/014_message_is_edited.sql")),
 ];
 
 /// Strip line comments, then split into individual SQL statements.

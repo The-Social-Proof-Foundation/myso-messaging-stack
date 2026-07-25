@@ -182,6 +182,10 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             get(group_features::get_receipts).post(group_features::post_receipts),
         )
         .route(
+            "/groups/:group_id/prefs",
+            get(group_features::get_prefs).put(group_features::put_prefs),
+        )
+        .route(
             "/groups/:group_id/typing",
             post(group_features::post_typing),
         )

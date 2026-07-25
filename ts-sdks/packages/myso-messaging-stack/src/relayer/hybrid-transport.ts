@@ -12,6 +12,8 @@ import type {
 	FetchMessagesParams,
 	FetchMessagesResult,
 	FetchUnreadCountsParams,
+	ConversationPrefs,
+	GetConversationPrefsParams,
 	GetGroupPresenceParams,
 	GetGroupReceiptsParams,
 	GetUserReadStateParams,
@@ -26,6 +28,7 @@ import type {
 	PostGroupReactionParams,
 	PostPresenceParams,
 	PostPushTokenParams,
+	PutConversationPrefsParams,
 	PutUserReadStateParams,
 	PutUserReadStateResult,
 	RelayerMessage,
@@ -190,6 +193,14 @@ export class HybridRelayerTransport implements RelayerTransport {
 
 	postGroupReceipts(params: PostGroupReceiptsParams): Promise<void> {
 		return this.#http.postGroupReceipts(params);
+	}
+
+	getConversationPrefs(params: GetConversationPrefsParams): Promise<ConversationPrefs> {
+		return this.#http.getConversationPrefs(params);
+	}
+
+	putConversationPrefs(params: PutConversationPrefsParams): Promise<ConversationPrefs> {
+		return this.#http.putConversationPrefs(params);
 	}
 
 	getUserReadState(params: GetUserReadStateParams): Promise<UserReadStateWire> {

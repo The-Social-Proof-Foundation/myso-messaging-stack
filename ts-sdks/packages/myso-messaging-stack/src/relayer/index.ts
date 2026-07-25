@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 export type {
+	MessageKind,
+	SystemEventType,
+	SystemMessage,
 	RelayerMessage,
 	SyncStatus,
 	SendMessageParams,
@@ -27,9 +30,17 @@ export type {
 	GroupPresenceEntry,
 	ListGroupPinsParams,
 	SetGroupPinParams,
+	MemberReceipt,
 	GroupReceiptState,
+	MessageTickStatus,
 	GetGroupReceiptsParams,
 	PostGroupReceiptsParams,
+	RelayerReceiptEvent,
+	NotificationMode,
+	ReceiptMode,
+	ConversationPrefs,
+	GetConversationPrefsParams,
+	PutConversationPrefsParams,
 	GetUserReadStateParams,
 	PutUserReadStateParams,
 	PutUserReadStateResult,
@@ -71,3 +82,8 @@ export {
 } from './wire.js';
 export { createHeaderAuth, createWsAuthQuery } from './auth-headers.js';
 export { WorkflowClient, type WorkflowClientConfig } from './workflow.js';
+export {
+	tickStatus,
+	upsertMemberReceipt,
+	type TickStatusOptions,
+} from './receipts.js';

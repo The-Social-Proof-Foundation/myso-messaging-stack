@@ -43,6 +43,22 @@ function permissionLabel(permType: string): string {
   return parts.at(-1) || permType;
 }
 
+/** `module::Type` suffix — package ID may be short vs padded / V1 vs latest. */
+function typeSuffix(typeName: string): string {
+  const parts = typeName.replace(/^0x/i, '').split('::').filter(Boolean);
+  if (parts.length < 2) return typeName.toLowerCase();
+  return parts.slice(-2).join('::').toLowerCase();
+}
+
+function memberHasPermission(permissions: string[], permType: string): boolean {
+  const target = permType.replace(/^0x/i, '').toLowerCase();
+  const targetSuffix = typeSuffix(permType);
+  return permissions.some((raw) => {
+    const normalized = raw.replace(/^0x/i, '').toLowerCase();
+    return normalized === target || typeSuffix(raw) === targetSuffix;
+  });
+}
+
 function truncateAddress(address: string): string {
   if (!address) return 'unknown';
   return `${address.slice(0, 6)}...${address.slice(-4)}`;
@@ -117,11 +133,7 @@ export function MemberItem({
       {isExpanded && isAdmin && !isSelf && (
         <div className="space-y-1 border-t border-secondary-200 bg-secondary-50/50 px-3 pb-3 pt-2 dark:border-secondary-700 dark:bg-secondary-900/60">
           {messagingPermTypes.map((perm) => {
-            const has = permissions.some(
-              (p) =>
-                p === perm.value ||
-                p === perm.value.replace(/^0x/, ''),
-            );
+            const has = memberHasPermission(permissions, perm.value);
             const toggleKey = `${address}:${perm.value}`;
             return (
               <label

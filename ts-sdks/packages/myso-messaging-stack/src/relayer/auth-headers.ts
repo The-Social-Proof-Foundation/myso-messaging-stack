@@ -36,11 +36,15 @@ export async function createBodyAuth(
 	payload: Record<string, unknown>,
 ): Promise<{ body: Record<string, unknown>; headers: Record<string, string> }> {
 	const timestamp = Math.floor(Date.now() / 1000);
-	const body = {
+	const senderAddress = signer.toMySoAddress().toLowerCase();
+	const body: Record<string, unknown> = {
 		...payload,
-		sender_address: signer.toMySoAddress(),
+		sender_address: senderAddress,
 		timestamp,
 	};
+	if (typeof body.group_id === 'string') {
+		body.group_id = body.group_id.toLowerCase();
+	}
 	const bodyStr = JSON.stringify(body);
 	const bodyBytes = new TextEncoder().encode(bodyStr);
 	const headers = await signAndCreateAuthHeaders(signer, bodyBytes);
@@ -53,21 +57,22 @@ export async function createHeaderAuth(
 	groupId: string,
 ): Promise<Record<string, string>> {
 	const timestamp = Math.floor(Date.now() / 1000);
-	const senderAddress = signer.toMySoAddress();
-	const canonical = `${timestamp}:${senderAddress}:${groupId}`;
+	const senderAddress = signer.toMySoAddress().toLowerCase();
+	const normalizedGroupId = groupId.toLowerCase();
+	const canonical = `${timestamp}:${senderAddress}:${normalizedGroupId}`;
 	const canonicalBytes = new TextEncoder().encode(canonical);
 	const authHeaders = await signAndCreateAuthHeaders(signer, canonicalBytes);
 	return {
 		...authHeaders,
 		'x-sender-address': senderAddress,
 		'x-timestamp': timestamp.toString(),
-		'x-group-id': groupId,
+		'x-group-id': normalizedGroupId,
 	};
 }
 
 export async function createWalletHeaderAuth(signer: Signer): Promise<Record<string, string>> {
 	const timestamp = Math.floor(Date.now() / 1000);
-	const senderAddress = signer.toMySoAddress();
+	const senderAddress = signer.toMySoAddress().toLowerCase();
 	const canonical = `${timestamp}:${senderAddress}`;
 	const canonicalBytes = new TextEncoder().encode(canonical);
 	const authHeaders = await signAndCreateAuthHeaders(signer, canonicalBytes);
@@ -86,7 +91,7 @@ export async function createWsAuthQuery(
 ): Promise<string> {
 	const headers = await createHeaderAuth(signer, groupId);
 	const params = new URLSearchParams({
-		group_id: groupId,
+		group_id: headers['x-group-id'],
 		sender_address: headers['x-sender-address'],
 		timestamp: headers['x-timestamp'],
 		signature: headers['x-signature'],

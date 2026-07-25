@@ -8,6 +8,7 @@ pub mod group_aux;
 pub mod membership;
 pub mod message;
 pub mod message_attribution;
+pub mod system_message;
 pub mod agent_messaging_group;
 pub mod paid_escrow;
 pub mod push_device;
@@ -18,9 +19,15 @@ pub mod workflow_item;
 pub use attachment::Attachment;
 #[allow(unused_imports)]
 pub use membership::GroupMembership;
-pub use group_aux::{GroupActivity, ReactionEntry, ReceiptStateResponse};
+pub use group_aux::{
+    ConversationPreferences, ConversationPreferencesPatch, GroupActivity, GroupReceiptsResponse,
+    MemberReceipt, ReactionEntry, ReceiptStateResponse,
+};
 pub use message::{Message, SyncStatus};
 pub use message_attribution::MessageAttribution;
+pub use system_message::{
+    MessageKind, SystemMessageWire, SystemMetadataV1, SystemType,
+};
 pub use agent_messaging_group::AgentMessagingGroup;
 pub use paid_escrow::PaidEscrowRecord;
 pub use push_device::PushTokenRecord;

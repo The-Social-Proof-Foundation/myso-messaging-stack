@@ -106,7 +106,14 @@ pub fn derive_myso_address(
     Ok(format!("0x{}", hex::encode(hash)))
 }
 
-/// Verifies that the claimed address matches the public key.
+/// Strip an optional `0x` / `0X` prefix from hex strings (clients sometimes send it).
+pub fn strip_hex_prefix(hex: &str) -> &str {
+    hex.strip_prefix("0x")
+        .or_else(|| hex.strip_prefix("0X"))
+        .unwrap_or(hex)
+}
+
+/// Verifies that the claimed address matches the public key (case-insensitive).
 pub fn verify_address_matches_pubkey(
     claimed_address: &str,
     public_key_bytes: &[u8],
@@ -114,7 +121,7 @@ pub fn verify_address_matches_pubkey(
 ) -> Result<String, AuthError> {
     let derived_address = derive_myso_address(public_key_bytes, scheme)?;
 
-    if claimed_address != derived_address {
+    if !claimed_address.eq_ignore_ascii_case(&derived_address) {
         return Err(AuthError::AddressMismatch {
             expected: derived_address.clone(),
             got: claimed_address.to_string(),

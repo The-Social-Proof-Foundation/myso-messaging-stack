@@ -16,11 +16,13 @@ use serde::Deserialize;
 
 use super::{
     schemes::SignatureScheme,
-    signature::{validate_timestamp, verify_address_matches_pubkey, verify_signature},
+    signature::{
+        strip_hex_prefix, validate_timestamp, verify_address_matches_pubkey, verify_signature,
+    },
     types::{AuthContext, AuthError},
     AuthState,
 };
-use crate::auth::middleware::{error_response, auth_error_response, get_header};
+use crate::auth::middleware::{auth_error_response, error_response, get_header};
 
 #[derive(Debug, Deserialize)]
 struct WalletBodyAuthFields {
@@ -58,7 +60,7 @@ pub async fn wallet_auth_middleware(
         }
     };
 
-    let public_key_with_flag = match hex::decode(&public_key_hex) {
+    let public_key_with_flag = match hex::decode(strip_hex_prefix(&public_key_hex)) {
         Ok(bytes) if !bytes.is_empty() => bytes,
         Ok(_) => {
             return auth_error_response(
@@ -100,7 +102,7 @@ pub async fn wallet_auth_middleware(
         );
     }
 
-    let signature_bytes = match hex::decode(&signature_hex) {
+    let signature_bytes = match hex::decode(strip_hex_prefix(&signature_hex)) {
         Ok(bytes) => bytes,
         Err(e) => {
             return auth_error_response(
@@ -121,7 +123,9 @@ pub async fn wallet_auth_middleware(
         }
     };
 
-    let (sender_address, timestamp, message_bytes) = if !body_bytes.is_empty() {
+    // Branch by HTTP method, not body emptiness.
+    let use_body_auth = matches!(method, Method::POST | Method::PUT);
+    let (sender_address, timestamp, message_bytes) = if use_body_auth {
         let body_auth: WalletBodyAuthFields = match serde_json::from_slice(&body_bytes) {
             Ok(fields) => fields,
             Err(e) => {
@@ -139,7 +143,7 @@ pub async fn wallet_auth_middleware(
         )
     } else {
         let sender_address = match get_header(&parts.headers, "x-sender-address") {
-            Some(v) => v,
+            Some(v) => v.to_ascii_lowercase(),
             None => {
                 return error_response(
                     StatusCode::UNAUTHORIZED,
@@ -170,12 +174,7 @@ pub async fn wallet_auth_middleware(
         };
 
         let canonical = if method == Method::DELETE {
-            let token = parts
-                .uri
-                .path()
-                .rsplit('/')
-                .next()
-                .unwrap_or("");
+            let token = parts.uri.path().rsplit('/').next().unwrap_or("");
             format!("{}:{}:{}", timestamp, sender_address, token)
         } else {
             format!("{}:{}", timestamp, sender_address)
@@ -196,7 +195,7 @@ pub async fn wallet_auth_middleware(
     }
 
     let auth_context = AuthContext {
-        sender_address,
+        sender_address: sender_address.to_ascii_lowercase(),
         public_key: public_key_bytes.to_vec(),
         scheme,
         authorized_group: None,

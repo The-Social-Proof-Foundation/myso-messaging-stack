@@ -148,8 +148,29 @@ impl PushService {
             .cloned()
             .collect();
         let members_skipped_active = recipients.len().saturating_sub(inactive.len());
+        let inactive_count = inactive.len();
 
-        let tokens_by_wallet = match storage.list_push_tokens_for_wallets(&inactive).await {
+        // Prefs after presence — only query mute for push-eligible wallets.
+        let muted = match storage
+            .list_notification_modes(group_id, &inactive)
+            .await
+        {
+            Ok(modes) => modes
+                .into_iter()
+                .filter(|(_, mode)| mode == "none")
+                .map(|(wallet, _)| wallet)
+                .collect::<std::collections::HashSet<_>>(),
+            Err(err) => {
+                warn!("batch notification prefs lookup failed for group {group_id}: {err}");
+                std::collections::HashSet::new()
+            }
+        };
+        let push_recipients: Vec<String> = inactive
+            .into_iter()
+            .filter(|wallet| !muted.contains(wallet))
+            .collect();
+
+        let tokens_by_wallet = match storage.list_push_tokens_for_wallets(&push_recipients).await {
             Ok(tokens) => tokens,
             Err(err) => {
                 warn!("batch push token lookup failed for group {group_id}: {err}");
@@ -158,7 +179,7 @@ impl PushService {
         };
 
         let mut jobs = Vec::new();
-        for member in &inactive {
+        for member in &push_recipients {
             let Some(tokens) = tokens_by_wallet.get(member) else {
                 continue;
             };
@@ -256,7 +277,7 @@ impl PushService {
             "push notify complete group={} members={} inactive={} tokens={} duration_ms={} sent={} pruned={} failed={} skipped_active={}",
             group_id,
             member_count,
-            inactive.len(),
+            inactive_count,
             token_count,
             started.elapsed().as_millis(),
             tokens_sent,

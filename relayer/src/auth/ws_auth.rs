@@ -7,7 +7,9 @@ use serde::Serialize;
 use super::middleware::get_header;
 use super::permissions::MessagingPermission;
 use super::schemes::SignatureScheme;
-use super::signature::{validate_timestamp, verify_address_matches_pubkey, verify_signature};
+use super::signature::{
+    strip_hex_prefix, validate_timestamp, verify_address_matches_pubkey, verify_signature,
+};
 use super::types::{AuthContext, AuthError};
 use super::MembershipStore;
 
@@ -28,7 +30,8 @@ pub fn authenticate_ws_upgrade(
         .group_id
         .clone()
         .or_else(|| get_header(headers, "x-group-id"))
-        .ok_or_else(|| error_response(StatusCode::UNAUTHORIZED, "Missing group_id", "MISSING_GROUP_ID"))?;
+        .ok_or_else(|| error_response(StatusCode::UNAUTHORIZED, "Missing group_id", "MISSING_GROUP_ID"))?
+        .to_ascii_lowercase();
 
     let sender_address = query
         .sender_address
@@ -40,7 +43,8 @@ pub fn authenticate_ws_upgrade(
                 "Missing sender_address",
                 "MISSING_SENDER_ADDRESS",
             )
-        })?;
+        })?
+        .to_ascii_lowercase();
 
     let timestamp = query.timestamp.or_else(|| {
         get_header(headers, "x-timestamp").and_then(|v| v.parse().ok())
@@ -80,7 +84,7 @@ pub fn authenticate_ws_upgrade(
         return Err(auth_error_response(StatusCode::UNAUTHORIZED, err));
     }
 
-    let public_key_with_flag = hex::decode(&public_key_hex).map_err(|e| {
+    let public_key_with_flag = hex::decode(strip_hex_prefix(&public_key_hex)).map_err(|e| {
         auth_error_response(
             StatusCode::UNAUTHORIZED,
             AuthError::InvalidPublicKeyFormat(e.to_string()),
@@ -117,7 +121,7 @@ pub fn authenticate_ws_upgrade(
         ));
     }
 
-    let signature_bytes = hex::decode(&signature_hex).map_err(|e| {
+    let signature_bytes = hex::decode(strip_hex_prefix(&signature_hex)).map_err(|e| {
         auth_error_response(
             StatusCode::UNAUTHORIZED,
             AuthError::InvalidSignatureFormat(e.to_string()),
@@ -177,7 +181,8 @@ pub fn authenticate_user_ws_upgrade(
                 "Missing sender_address",
                 "MISSING_SENDER_ADDRESS",
             )
-        })?;
+        })?
+        .to_ascii_lowercase();
 
     let timestamp = query.timestamp.or_else(|| {
         get_header(headers, "x-timestamp").and_then(|v| v.parse().ok())
@@ -217,7 +222,7 @@ pub fn authenticate_user_ws_upgrade(
         return Err(auth_error_response(StatusCode::UNAUTHORIZED, err));
     }
 
-    let public_key_with_flag = hex::decode(&public_key_hex).map_err(|e| {
+    let public_key_with_flag = hex::decode(strip_hex_prefix(&public_key_hex)).map_err(|e| {
         auth_error_response(
             StatusCode::UNAUTHORIZED,
             AuthError::InvalidPublicKeyFormat(e.to_string()),
@@ -254,7 +259,7 @@ pub fn authenticate_user_ws_upgrade(
         ));
     }
 
-    let signature_bytes = hex::decode(&signature_hex).map_err(|e| {
+    let signature_bytes = hex::decode(strip_hex_prefix(&signature_hex)).map_err(|e| {
         auth_error_response(
             StatusCode::UNAUTHORIZED,
             AuthError::InvalidSignatureFormat(e.to_string()),

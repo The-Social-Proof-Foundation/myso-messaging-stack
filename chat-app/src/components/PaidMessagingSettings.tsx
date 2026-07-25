@@ -169,8 +169,6 @@ export function PaidMessagingSettings() {
       {saved && (
         <p className="mt-2 text-xs text-accent-600 dark:text-accent-400">
           Policy saved on-chain.
-          {socialServerUrl &&
-            ' Indexed policy may take a few seconds to update after checkpoint indexing.'}
         </p>
       )}
       <button

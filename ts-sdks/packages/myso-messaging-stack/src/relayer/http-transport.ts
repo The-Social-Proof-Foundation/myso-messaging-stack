@@ -24,6 +24,8 @@ import type {
 	FetchMessagesParams,
 	FetchMessagesResult,
 	FetchUnreadCountsParams,
+	ConversationPrefs,
+	GetConversationPrefsParams,
 	GetGroupPresenceParams,
 	GetGroupReceiptsParams,
 	GetUserReadStateParams,
@@ -34,11 +36,14 @@ import type {
 	ListGroupReactionsParams,
 	ListAgentConversationsParams,
 	ListGroupsForAgentParams,
+	NotificationMode,
 	PostGroupReceiptsParams,
 	PostGroupReactionParams,
 	PostPresenceParams,
 	PostPushTokenParams,
+	PutConversationPrefsParams,
 	PutUserReadStateParams,
+	ReceiptMode,
 	PutUserReadStateResult,
 	RelayerMessage,
 	RelayerReactionEntry,
@@ -88,9 +93,14 @@ interface WireReactionEntry {
 	reactors?: string[];
 }
 
-interface WireReceiptStateResponse {
-	delivered_upto?: number;
-	read_upto?: number;
+interface WireMemberReceipt {
+	member: string;
+	delivered_upto: number;
+	read_upto: number;
+}
+
+interface WireGroupReceiptsResponse {
+	members: WireMemberReceipt[];
 }
 
 interface WireCreateMessageResponse {
@@ -291,8 +301,19 @@ export class HTTPRelayerTransport implements RelayerTransport {
 		return `/v1${rel}`;
 	}
 
-	async #cachedHeaderAuth(signer: Signer, groupId: string): Promise<Record<string, string>> {
-		const cacheKey = `${signer.toMySoAddress()}:${groupId}`;
+	#headerAuthCacheKey(signer: Signer, groupId: string): string {
+		return `${signer.toMySoAddress().toLowerCase()}:${groupId.toLowerCase()}`;
+	}
+
+	async #cachedHeaderAuth(
+		signer: Signer,
+		groupId: string,
+		options?: { forceFresh?: boolean },
+	): Promise<Record<string, string>> {
+		const cacheKey = this.#headerAuthCacheKey(signer, groupId);
+		if (options?.forceFresh) {
+			this.#headerAuthCache.delete(cacheKey);
+		}
 		const cached = this.#headerAuthCache.get(cacheKey);
 		if (cached && Date.now() - cached.createdAt < this.#headerAuthCacheTtlMs) {
 			return cached.headers;
@@ -300,6 +321,29 @@ export class HTTPRelayerTransport implements RelayerTransport {
 		const headers = await createHeaderAuth(signer, groupId);
 		this.#headerAuthCache.set(cacheKey, { headers, createdAt: Date.now() });
 		return headers;
+	}
+
+	/**
+	 * Group-header GET/DELETE with one retry after 401 (clears cached signature).
+	 */
+	async #requestWithGroupHeaderAuth<T>(
+		signer: Signer,
+		groupId: string,
+		path: string,
+		init: Omit<RequestInit, 'headers'> = {},
+	): Promise<T> {
+		const attempt = async (forceFresh: boolean) => {
+			const headers = await this.#cachedHeaderAuth(signer, groupId, { forceFresh });
+			return this.#request<T>(path, { ...init, headers });
+		};
+		try {
+			return await attempt(false);
+		} catch (error) {
+			if (error instanceof RelayerTransportError && error.status === 401) {
+				return attempt(true);
+			}
+			throw error;
+		}
 	}
 
 	async sendMessage(params: SendMessageParams): Promise<SendMessageResult> {
@@ -334,8 +378,6 @@ export class HTTPRelayerTransport implements RelayerTransport {
 	}
 
 	async fetchMessages(params: FetchMessagesParams): Promise<FetchMessagesResult> {
-		const headers = await this.#cachedHeaderAuth(params.signer, params.groupId);
-
 		const queryParams = new URLSearchParams({ group_id: params.groupId });
 		if (params.afterOrder !== undefined) {
 			queryParams.set('after_order', params.afterOrder.toString());
@@ -347,9 +389,11 @@ export class HTTPRelayerTransport implements RelayerTransport {
 			queryParams.set('limit', params.limit.toString());
 		}
 
-		const wireResponse = await this.#request<WireMessagesListResponse>(
+		const wireResponse = await this.#requestWithGroupHeaderAuth<WireMessagesListResponse>(
+			params.signer,
+			params.groupId,
 			`${this.#relayerPath('/messages')}?${queryParams.toString()}`,
-			{ method: 'GET', headers },
+			{ method: 'GET' },
 		);
 
 		return {
@@ -359,16 +403,16 @@ export class HTTPRelayerTransport implements RelayerTransport {
 	}
 
 	async fetchMessage(params: FetchMessageParams): Promise<RelayerMessage> {
-		const headers = await this.#cachedHeaderAuth(params.signer, params.groupId);
-
 		const queryParams = new URLSearchParams({
 			message_id: params.messageId,
 			group_id: params.groupId,
 		});
 
-		const wireResponse = await this.#request<WireMessageResponse>(
+		const wireResponse = await this.#requestWithGroupHeaderAuth<WireMessageResponse>(
+			params.signer,
+			params.groupId,
 			`${this.#relayerPath('/messages')}?${queryParams.toString()}`,
-			{ method: 'GET', headers },
+			{ method: 'GET' },
 		);
 
 		return fromWireMessage(wireResponse);
@@ -397,23 +441,24 @@ export class HTTPRelayerTransport implements RelayerTransport {
 	}
 
 	async deleteMessage(params: DeleteMessageParams): Promise<void> {
-		const headers = await this.#cachedHeaderAuth(params.signer, params.groupId);
-
-		await this.#request(`${this.#relayerPath('/messages')}/${params.messageId}`, {
-			method: 'DELETE',
-			headers,
-		});
+		await this.#requestWithGroupHeaderAuth(
+			params.signer,
+			params.groupId,
+			`${this.#relayerPath('/messages')}/${params.messageId}`,
+			{ method: 'DELETE' },
+		);
 	}
 
 	async listGroupReactions(params: ListGroupReactionsParams): Promise<RelayerReactionEntry[]> {
-		const headers = await this.#cachedHeaderAuth(params.signer, params.groupId);
 		const q =
 			params.chainSeq !== undefined
 				? `?chain_seq=${encodeURIComponent(String(params.chainSeq))}`
 				: '';
-		const rows = await this.#request<WireReactionEntry[]>(
+		const rows = await this.#requestWithGroupHeaderAuth<WireReactionEntry[]>(
+			params.signer,
+			params.groupId,
 			`${this.#relayerPath(`/groups/${params.groupId}/reactions`)}${q}`,
-			{ method: 'GET', headers },
+			{ method: 'GET' },
 		);
 		return rows.map((r) => ({
 			chainSeq: r.chain_seq,
@@ -439,11 +484,12 @@ export class HTTPRelayerTransport implements RelayerTransport {
 	}
 
 	async listGroupPins(params: ListGroupPinsParams): Promise<number[]> {
-		const headers = await this.#cachedHeaderAuth(params.signer, params.groupId);
-		return this.#request<number[]>(this.#relayerPath(`/groups/${params.groupId}/pins`), {
-			method: 'GET',
-			headers,
-		});
+		return this.#requestWithGroupHeaderAuth<number[]>(
+			params.signer,
+			params.groupId,
+			this.#relayerPath(`/groups/${params.groupId}/pins`),
+			{ method: 'GET' },
+		);
 	}
 
 	async setGroupPin(params: SetGroupPinParams): Promise<void> {
@@ -461,15 +507,19 @@ export class HTTPRelayerTransport implements RelayerTransport {
 	}
 
 	async getGroupReceipts(params: GetGroupReceiptsParams): Promise<GroupReceiptState> {
-		const headers = await this.#cachedHeaderAuth(params.signer, params.groupId);
-		const wire = await this.#request<WireReceiptStateResponse>(
+		const wire = await this.#requestWithGroupHeaderAuth<WireGroupReceiptsResponse>(
+			params.signer,
+			params.groupId,
 			this.#relayerPath(`/groups/${params.groupId}/receipts`),
-			{ method: 'GET', headers },
+			{ method: 'GET' },
 		);
-		const out: GroupReceiptState = {};
-		if (wire.delivered_upto !== undefined) out.deliveredUpto = wire.delivered_upto;
-		if (wire.read_upto !== undefined) out.readUpto = wire.read_upto;
-		return out;
+		return {
+			members: (wire.members ?? []).map((m) => ({
+				member: m.member,
+				deliveredUpto: m.delivered_upto,
+				readUpto: m.read_upto,
+			})),
+		};
 	}
 
 	async postGroupReceipts(params: PostGroupReceiptsParams): Promise<void> {
@@ -484,6 +534,51 @@ export class HTTPRelayerTransport implements RelayerTransport {
 			headers: { ...headers, 'Content-Type': 'application/json' },
 			body: JSON.stringify(body),
 		});
+	}
+
+	async getConversationPrefs(params: GetConversationPrefsParams): Promise<ConversationPrefs> {
+		const wire = await this.#requestWithGroupHeaderAuth<{
+			notification_mode: string;
+			receipt_mode: string;
+			version: number;
+		}>(
+			params.signer,
+			params.groupId,
+			this.#relayerPath(`/groups/${params.groupId}/prefs`),
+			{ method: 'GET' },
+		);
+		return {
+			notificationMode: wire.notification_mode as NotificationMode,
+			receiptMode: wire.receipt_mode as ReceiptMode,
+			version: wire.version,
+		};
+	}
+
+	async putConversationPrefs(params: PutConversationPrefsParams): Promise<ConversationPrefs> {
+		const payload: Record<string, unknown> = {
+			group_id: params.groupId,
+		};
+		if (params.notificationMode !== undefined) {
+			payload.notification_mode = params.notificationMode;
+		}
+		if (params.receiptMode !== undefined) {
+			payload.receipt_mode = params.receiptMode;
+		}
+		const { body, headers } = await createBodyAuth(params.signer, payload);
+		const wire = await this.#request<{
+			notification_mode: string;
+			receipt_mode: string;
+			version: number;
+		}>(this.#relayerPath(`/groups/${params.groupId}/prefs`), {
+			method: 'PUT',
+			headers: { ...headers, 'Content-Type': 'application/json' },
+			body: JSON.stringify(body),
+		});
+		return {
+			notificationMode: wire.notification_mode as NotificationMode,
+			receiptMode: wire.receipt_mode as ReceiptMode,
+			version: wire.version,
+		};
 	}
 
 	async getUserReadState(params: GetUserReadStateParams) {
@@ -561,10 +656,11 @@ export class HTTPRelayerTransport implements RelayerTransport {
 	}
 
 	async getGroupPresence(params: GetGroupPresenceParams): Promise<GroupPresenceEntry[]> {
-		const headers = await this.#cachedHeaderAuth(params.signer, params.groupId);
-		const rows = await this.#request<WirePresenceEntry[]>(
+		const rows = await this.#requestWithGroupHeaderAuth<WirePresenceEntry[]>(
+			params.signer,
+			params.groupId,
 			this.#relayerPath(`/groups/${params.groupId}/presence`),
-			{ method: 'GET', headers },
+			{ method: 'GET' },
 		);
 		return rows.map((row) => ({
 			member: row.member,
@@ -696,12 +792,14 @@ export class HTTPRelayerTransport implements RelayerTransport {
 
 	/**
 	 * Polling implementation of the realtime event stream: polls messages and
-	 * diffs reaction listings into synthetic `reaction.updated` events. The
-	 * first reaction snapshot is a baseline and does not emit events.
+	 * diffs reaction listings / receipt watermarks into synthetic
+	 * `reaction.updated` / `receipt.updated` events. The first reaction and
+	 * receipt snapshots are baselines and do not emit events.
 	 */
 	async *subscribe(params: SubscribeParams): AsyncIterable<RelayerSubscriptionEvent> {
 		let lastOrder = params.afterOrder;
 		let reactionSnapshot: Map<string, RelayerReactionEntry> | undefined;
+		let receiptSnapshot: Map<string, { deliveredUpto: number; readUpto: number }> | undefined;
 
 		while (!this.#disconnected && !params.signal?.aborted) {
 			try {
@@ -763,6 +861,45 @@ export class HTTPRelayerTransport implements RelayerTransport {
 					}
 				}
 				reactionSnapshot = next;
+
+				if (this.#disconnected || params.signal?.aborted) return;
+
+				const receiptState = await this.getGroupReceipts({
+					signer: params.signer,
+					groupId: params.groupId,
+				});
+				const nextReceipts = new Map(
+					receiptState.members.map((m) => [
+						m.member.toLowerCase(),
+						{ deliveredUpto: m.deliveredUpto, readUpto: m.readUpto },
+					]),
+				);
+
+				if (receiptSnapshot) {
+					for (const [memberKey, entry] of nextReceipts) {
+						const prev = receiptSnapshot.get(memberKey);
+						if (
+							!prev ||
+							prev.deliveredUpto !== entry.deliveredUpto ||
+							prev.readUpto !== entry.readUpto
+						) {
+							if (this.#disconnected || params.signal?.aborted) return;
+							const member =
+								receiptState.members.find((m) => m.member.toLowerCase() === memberKey)
+									?.member ?? memberKey;
+							yield {
+								type: 'receipt.updated',
+								receipt: {
+									groupId: params.groupId,
+									member,
+									deliveredUpto: entry.deliveredUpto,
+									readUpto: entry.readUpto,
+								},
+							};
+						}
+					}
+				}
+				receiptSnapshot = nextReceipts;
 
 				await delay(this.#pollingIntervalMs, params.signal);
 			} catch (error) {

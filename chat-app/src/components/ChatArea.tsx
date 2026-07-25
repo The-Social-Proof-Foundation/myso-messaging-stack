@@ -5,8 +5,13 @@ import {
   useLayoutEffect,
   useCallback,
   useMemo,
+  type MutableRefObject,
   type ReactNode,
 } from 'react';
+import type {
+  ReceiptMode,
+  RelayerReceiptEvent,
+} from '@socialproof/myso-messaging-stack';
 import { ChevronLeft, Info } from 'lucide-react';
 import type { StoredGroup } from '../lib/group-store';
 import { removeStoredGroup } from '../lib/group-store';
@@ -19,6 +24,7 @@ import { usePermissions } from '../hooks/usePermissions';
 import { useWalletAvatarMap } from '../hooks/useWalletAvatarMap';
 import { mistToMyso } from '../lib/mys-coin';
 import { MessageBubble } from './MessageBubble';
+import { SystemMessage } from './SystemMessage';
 import { MessageInput } from './MessageInput';
 import { TypingIndicator } from './TypingIndicator';
 import { AdminPanel } from './AdminPanel';
@@ -32,6 +38,10 @@ import {
   formatBeginningCreated,
   formatDaySeparator,
 } from '../lib/message-time';
+import {
+  isSystemActorMembershipEvent,
+  planTimelineMemberJoinedDisplay,
+} from '../lib/system-message-copy';
 import { useIsMobileNav } from '../hooks/useMediaQuery';
 import {
   chatInfoWidthBand,
@@ -51,6 +61,13 @@ interface ChatAreaProps {
   onReadStateChanged?: (groupId: string) => void;
   /** Called when a message is sent or received in the open thread. */
   onGroupActivity?: (order: number) => void;
+  /**
+   * Parent registers user-feed `receipt.updated` here so open-thread ticks
+   * update when the group socket is not the delivery path.
+   */
+  receiptApplyRef?: MutableRefObject<
+    ((event: RelayerReceiptEvent) => void) | null
+  >;
   /** Phone stack: return to the conversation list (clears selection). */
   onMobileBack?: () => void;
   devAgentPanel?: ReactNode;
@@ -62,12 +79,53 @@ function sameAddress(a?: string | null, b?: string | null): boolean {
   return a.toLowerCase() === b.toLowerCase();
 }
 
+type PackTimelineMessage = {
+  messageId: string;
+  senderAddress?: string | null;
+  kind?: string | null;
+  isDeleted?: boolean;
+};
+
+/**
+ * Walk neighbors for pack chrome, skipping same-sender tombstones so tip
+ * ownership moves to the surviving last bubble after a tip delete.
+ */
+function packNeighborIndex(
+  messages: PackTimelineMessage[],
+  fromIndex: number,
+  direction: -1 | 1,
+  senderAddress: string | undefined | null,
+): number | null {
+  let i = fromIndex + direction;
+  while (i >= 0 && i < messages.length) {
+    const candidate = messages[i]!;
+    if (
+      candidate.isDeleted &&
+      sameAddress(candidate.senderAddress, senderAddress)
+    ) {
+      i += direction;
+      continue;
+    }
+    return i;
+  }
+  return null;
+}
+
+function lastNonDeletedIndex(messages: PackTimelineMessage[]): number {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i]!;
+    if (!m.isDeleted && m.kind !== 'system') return i;
+  }
+  return -1;
+}
+
 /** Wrapper that requires a UUID to render the chat. */
 export function ChatArea({
   selectedGroup,
   onLeaveGroup,
   onReadStateChanged,
   onGroupActivity,
+  receiptApplyRef,
   onMobileBack,
   devAgentPanel,
 }: Readonly<ChatAreaProps>) {
@@ -122,6 +180,7 @@ export function ChatArea({
       onLeaveGroup={onLeaveGroup}
       onReadStateChanged={onReadStateChanged}
       onGroupActivity={onGroupActivity}
+      receiptApplyRef={receiptApplyRef}
       onMobileBack={onMobileBack}
       devAgentPanel={devAgentPanel}
     />
@@ -255,6 +314,7 @@ function ChatView({
   onLeaveGroup,
   onReadStateChanged,
   onGroupActivity,
+  receiptApplyRef,
   onMobileBack,
   devAgentPanel,
 }: Readonly<{
@@ -262,6 +322,9 @@ function ChatView({
   onLeaveGroup?: () => void;
   onReadStateChanged?: (groupId: string) => void;
   onGroupActivity?: (order: number) => void;
+  receiptApplyRef?: MutableRefObject<
+    ((event: RelayerReceiptEvent) => void) | null
+  >;
   onMobileBack?: () => void;
   devAgentPanel?: ReactNode;
 }>) {
@@ -271,6 +334,10 @@ function ChatView({
     usePermissions(group.groupId);
   const isMobileNav = useIsMobileNav();
   const [adminPanelOpen, setAdminPanelOpen] = useState(false);
+  /** Set only after Details prefs toggle so useMessages can keep its loaded mode. */
+  const [receiptModeOverride, setReceiptModeOverride] = useState<
+    ReceiptMode | undefined
+  >(undefined);
   const chatShellRef = useRef<HTMLDivElement>(null);
   const chatColumnRef = useRef<HTMLDivElement>(null);
   const adminPanelOpenRef = useRef(adminPanelOpen);
@@ -399,6 +466,11 @@ function ChatView({
     };
   }, []);
 
+  const tickPeerAddresses = useMemo(() => {
+    const peer = dmPeerAddress(memberAddresses, myAddress);
+    return peer ? [peer] : undefined;
+  }, [memberAddresses, myAddress]);
+
   const {
     messages,
     loading,
@@ -411,6 +483,8 @@ function ChatView({
     typingMembers,
     onlineMembers,
     presenceRecords,
+    tickForOrder,
+    applyReceiptEvent,
     initialReadUpto,
     sendMessage,
     editMessage,
@@ -431,14 +505,41 @@ function ChatView({
     claimPending: paidGate.claimPending,
     onGroupActivity,
     onBeforeOlderMessagesApply: captureOlderScrollAnchor,
+    receiptMode: receiptModeOverride,
+    tickPeerAddresses,
   });
 
-  oldestMessageIdRef.current = messages[0]?.messageId ?? null;
+  const systemObjectAddresses = useMemo(
+    () => client.messaging.derive.systemObjectAddresses(),
+    [client],
+  );
+
+  /** Hide GroupLeaver/GroupManager join/leave rows persisted before relayer filter. */
+  const timelineMessages = useMemo(
+    () =>
+      messages.filter((m) => {
+        if (m.kind !== 'system' || !m.system) return true;
+        return !isSystemActorMembershipEvent(m.system, systemObjectAddresses);
+      }),
+    [messages, systemObjectAddresses],
+  );
+
+  useEffect(() => {
+    if (!receiptApplyRef) return;
+    receiptApplyRef.current = applyReceiptEvent;
+    return () => {
+      receiptApplyRef.current = null;
+    };
+  }, [receiptApplyRef, applyReceiptEvent]);
+
+  oldestMessageIdRef.current = timelineMessages[0]?.messageId ?? null;
 
   const profileAddresses = useMemo(() => {
     const addrs = new Set<string>();
     for (const m of messages) {
       if (m.senderAddress) addrs.add(m.senderAddress);
+      if (m.system?.member) addrs.add(m.system.member);
+      if (m.system?.actor) addrs.add(m.system.actor);
     }
     for (const address of typingMembers) {
       if (address) addrs.add(address);
@@ -458,8 +559,37 @@ function ChatView({
   const {
     photoFor,
     labelFor: profileLabelFor,
+    headerTitleFor,
     ringFor,
   } = useWalletAvatarMap(profileAddresses);
+
+  /** Humans for DM join backfill (exclude system actors). */
+  const humanMemberAddresses = useMemo(() => {
+    const system = systemObjectAddresses;
+    return memberAddresses.filter((a) => {
+      const key = a.toLowerCase();
+      for (const s of system) {
+        if (s.toLowerCase() === key) return false;
+      }
+      return true;
+    });
+  }, [memberAddresses, systemObjectAddresses]);
+
+  const joinDisplayPlan = useMemo(
+    () =>
+      planTimelineMemberJoinedDisplay(
+        timelineMessages,
+        (addr) => headerTitleFor(addr) || profileLabelFor(addr) || labelFor(addr),
+        humanMemberAddresses,
+      ),
+    [
+      timelineMessages,
+      headerTitleFor,
+      profileLabelFor,
+      labelFor,
+      humanMemberAddresses,
+    ],
+  );
 
   const typingTypers = typingMembers.map((address) => {
     const ring = ringFor(address);
@@ -477,12 +607,13 @@ function ChatView({
    * that peer (not after our own tip — that starts a new turn with avatar).
    */
   const timeMarkers = useMemo(
-    () => computeTimeMarkers(messages),
-    [messages],
+    () => computeTimeMarkers(timelineMessages),
+    [timelineMessages],
   );
 
   const {stackTypers, newPackTypers} = useMemo(() => {
-    const tip = messages[messages.length - 1];
+    const tipIdx = lastNonDeletedIndex(timelineMessages);
+    const tip = tipIdx >= 0 ? timelineMessages[tipIdx] : undefined;
     const tipIsPeer =
       Boolean(tip?.senderAddress) && !sameAddress(tip!.senderAddress, myAddress);
     if (!tip || !tipIsPeer) {
@@ -495,7 +626,7 @@ function ChatView({
       else fresh.push(t);
     }
     return {stackTypers: stack, newPackTypers: fresh};
-  }, [typingTypers, messages, myAddress]);
+  }, [typingTypers, timelineMessages, myAddress]);
 
   const dmPresence = useMemo((): DmPresenceView => {
     const peer = dmPeerAddress(memberAddresses, myAddress);
@@ -516,12 +647,22 @@ function ChatView({
     setLeaveError(null);
 
     try {
-      // Build the leave transaction via the SDK's tx layer
-      const tx = client.messaging.tx.leave({
-        groupId: group.groupId,
-      });
-
-      await signAndExecuteTransactionAndWait(client, signer, tx);
+      // PermissionsAdmin cannot call messaging::leave — self-remove instead.
+      if (permissions.isAdmin) {
+        if (!myAddress) {
+          throw new Error('Wallet address unavailable.');
+        }
+        const tx = client.groups.tx.removeMember({
+          groupId: group.groupId,
+          member: myAddress,
+        });
+        await signAndExecuteTransactionAndWait(client, signer, tx);
+      } else {
+        const tx = client.messaging.tx.leave({
+          groupId: group.groupId,
+        });
+        await signAndExecuteTransactionAndWait(client, signer, tx);
+      }
 
       // Remove from localStorage and deselect
       removeStoredGroup(group.uuid);
@@ -535,7 +676,7 @@ function ChatView({
     } finally {
       setLeaving(false);
     }
-  }, [client, group, signer, onLeaveGroup]);
+  }, [client, group, signer, onLeaveGroup, permissions.isAdmin, myAddress]);
 
   const bottomRef = useRef<HTMLDivElement>(null);
   const [isAtBottom, setIsAtBottom] = useState(true);
@@ -737,7 +878,7 @@ function ChatView({
         )}
 
         {/* Empty state */}
-        {!loading && messages.length === 0 && (
+        {!loading && timelineMessages.length === 0 && (
           <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6">
             <p className="text-sm text-secondary-400 dark:text-secondary-500">
               No messages yet. Send the first one!
@@ -758,7 +899,7 @@ function ChatView({
         )}
 
         {/* Message list */}
-        {!loading && messages.length > 0 && (
+        {!loading && timelineMessages.length > 0 && (
           <div className="flex flex-col pb-4 pt-6">
             {/* Older-page sentinel (iOS-style scroll-to-top paging) */}
             {hasMore ? (
@@ -781,34 +922,90 @@ function ChatView({
                   {formatBeginningCreated(
                     group.createdAt > 0
                       ? group.createdAt
-                      : messages[0]!.createdAt,
+                      : timelineMessages[0]!.createdAt,
                   )}
                 </p>
               </div>
             )}
-            {messages.map((msg, index) => {
+            {timelineMessages.map((msg, index) => {
+              const isSystem = msg.kind === 'system' && Boolean(msg.system);
               const isOwn = sameAddress(msg.senderAddress, myAddress);
-              const prev = messages[index - 1];
-              const next = messages[index + 1];
+              const packPrevIdx = packNeighborIndex(
+                timelineMessages,
+                index,
+                -1,
+                msg.senderAddress,
+              );
+              const packNextIdx = packNeighborIndex(
+                timelineMessages,
+                index,
+                1,
+                msg.senderAddress,
+              );
+              const prev =
+                packPrevIdx != null ? timelineMessages[packPrevIdx] : undefined;
+              const next =
+                packNextIdx != null ? timelineMessages[packNextIdx] : undefined;
               const marker = timeMarkers.get(msg.messageId);
               const nextMarker = next
                 ? timeMarkers.get(next.messageId)
                 : undefined;
-              // Time markers cut packs (same as iOS).
-              const breakAfterPrev = Boolean(marker);
-              const breakBeforeNext = Boolean(nextMarker);
+              const prevIsSystem = prev?.kind === 'system';
+              const nextIsSystem = next?.kind === 'system';
+              // Time markers and system rows cut packs (same as iOS).
+              const breakAfterPrev = Boolean(marker) || prevIsSystem || isSystem;
+              const breakBeforeNext =
+                Boolean(nextMarker) || nextIsSystem || isSystem;
               const isFirstInGroup =
                 !prev ||
                 !sameAddress(prev.senderAddress, msg.senderAddress) ||
                 breakAfterPrev;
               // Same-sender typing owns pack tip chrome — tip message is mid-stack.
+              // Key off last non-deleted tip so a tombstone tip does not steal chrome.
+              const tipNonDeletedIdx = lastNonDeletedIndex(timelineMessages);
               const typingContinuesPack =
-                index === messages.length - 1 && stackTypers.length > 0;
-              const isLastInGroup = typingContinuesPack
+                index === tipNonDeletedIdx &&
+                stackTypers.length > 0 &&
+                !isSystem &&
+                !msg.isDeleted;
+              // Tombstones never own avatar/meta tip chrome.
+              const isLastInGroup = msg.isDeleted
                 ? false
-                : !next ||
-                  !sameAddress(next.senderAddress, msg.senderAddress) ||
-                  breakBeforeNext;
+                : typingContinuesPack
+                  ? false
+                  : !next ||
+                    !sameAddress(next.senderAddress, msg.senderAddress) ||
+                    breakBeforeNext;
+
+              if (isSystem && msg.system) {
+                if (joinDisplayPlan.hideIds.has(msg.messageId)) {
+                  return null;
+                }
+                const joinText = joinDisplayPlan.textById.get(msg.messageId);
+                return (
+                  <div key={msg.messageId}>
+                    {marker && (
+                      <div className="my-3 flex justify-center px-4">
+                        <p className="text-[13px] font-semibold text-secondary-600/80 dark:text-secondary-300/80">
+                          {formatDaySeparator(msg.createdAt, {
+                            includeTime: marker.includeTime,
+                          })}
+                        </p>
+                      </div>
+                    )}
+                    <SystemMessage
+                      system={msg.system}
+                      labelFor={(addr) =>
+                        headerTitleFor(addr) ||
+                        profileLabelFor(addr) ||
+                        labelFor(addr)
+                      }
+                      text={joinText}
+                    />
+                  </div>
+                );
+              }
+
               // Same-sender stack clearance (iOS ReactionStackClearance).
               const olderSameSender = !isFirstInGroup;
               const msgReactions = reactions.get(msg.order);
@@ -829,7 +1026,7 @@ function ChatView({
                   maxWidth: maxBubbleW,
                 });
               let prevWidth = 0;
-              if (olderSameSender && prev) {
+              if (olderSameSender && prev && prev.kind !== 'system') {
                 const prevHasImage = (prev.attachments ?? []).some((a) =>
                   a.mimeType?.startsWith('image/'),
                 );
@@ -876,6 +1073,7 @@ function ChatView({
                     preferReactionBelow={index === 0}
                     isFirstInGroup={isFirstInGroup}
                     isLastInGroup={isLastInGroup}
+                    tickStatus={isOwn ? tickForOrder(msg.order) : 'none'}
                     reactionTopClearancePx={reactionTopClearancePx}
                     onBubbleWidthChange={onBubbleWidthChange}
                     avatarSrc={
@@ -1009,7 +1207,11 @@ function ChatView({
         photoFor={photoFor}
         labelFor={profileLabelFor}
         ringFor={ringFor}
+        onPrefsChanged={({ receiptMode: next }) => {
+          setReceiptModeOverride(next);
+        }}
       />
+
     </div>
   );
 }

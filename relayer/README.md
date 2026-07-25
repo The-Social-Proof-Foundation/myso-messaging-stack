@@ -424,6 +424,28 @@ One socket per wallet for all user-scoped synchronization events: unread badges,
 - `read_state.updated` — your read-state blob changed on another device/tab (delivered only to your wallet).
 - `group.discovered` / `group.hidden` — a conversation appeared for you (`reason`: `created` | `invited` | `joined`) or should leave your sidebar. Published exclusively by the membership checkpoint indexer **after** membership persistence succeeds, so a follow-up REST fetch never races the underlying state. Delivered only to the affected wallet; the target wallet is stripped from the frame.
 
+### System membership messages (shared timeline)
+
+Join/leave/remove are **first-class rows** in `messages` (same `order_num`, `GET /messages`, and `message.created` as text). Invariants:
+
+1. **One timeline** — no side table / merge.
+2. **Immutable** — no client edit/delete/reactions on `kind=system`.
+3. **Server-origin only** — inserted by membership sync after chain `MemberAdded` / `MemberRemoved`; clients cannot `POST` system rows.
+4. **Structured + client-localized** — persist `{ version, member, actor? }`; wire exposes typed `system: { type, member, actor? }` (never English copy).
+5. **Unknown `system.type`** — older clients ignore or show a generic placeholder.
+6. **Idempotent** — `idempotency_key = {tx_digest}:{event_index}:{system_type}`.
+
+Wire extras on `MessageResponse`:
+
+```json
+{
+  "kind": "system",
+  "system": { "type": "member_joined", "member": "0x…", "actor": null }
+}
+```
+
+v1 types: `member_joined`, `member_left`, `member_removed`. Skips creator auto-membership and GroupLeaver/GroupManager (requires `MESSAGING_NAMESPACE_ID`). No push for system-only inserts; `group.activity` / unread order still advance.
+
 **Postgres cross-instance signal:** On `STORAGE_TYPE=postgres`, each message `INSERT` atomically emits `pg_notify('message_events', metadata_json)` where the payload contains only `message_id`, `group_id`, `order`, and `sender` — **not** ciphertext. Each relayer instance listens, loads the encrypted row from storage, and fans out the full wire frame to local WebSocket subscribers. Reaction, read-state, typing, and presence changes NOTIFY on the same channel with their full (non-sensitive) payloads, fanned out directly without a storage reload. Discovery events need no NOTIFY — every instance runs its own checkpoint indexer and publishes locally.
 
 **In-memory dev:** Handlers publish directly to the in-process `RealtimeHub` (no NOTIFY).

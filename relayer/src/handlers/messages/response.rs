@@ -3,7 +3,9 @@
 use serde::Serialize;
 use uuid::Uuid;
 
-use crate::models::{Attachment, Message, SyncStatus};
+use crate::models::{
+    Attachment, Message, MessageKind, SyncStatus, SystemMessageWire, SystemMetadataV1, SystemType,
+};
 
 /// Wire-format attachment with hex-encoded binary fields.
 #[derive(Debug, Clone, Serialize)]
@@ -55,18 +57,38 @@ pub struct MessageResponse {
     /// Identity class: 0=human, 1=delegated AI, 2=organization.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub identity_class: Option<i16>,
+    /// Timeline kind. Omitted for legacy clients when `text` (still always set).
+    pub kind: String,
+    /// Typed system event — present only when `kind == "system"`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub system: Option<SystemMessageWire>,
+}
+
+fn system_wire_from_message(msg: &Message) -> Option<SystemMessageWire> {
+    if msg.kind != MessageKind::System {
+        return None;
+    }
+    let system_type = msg.system_type?;
+    let meta: SystemMetadataV1 = msg
+        .metadata
+        .as_ref()
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+        .unwrap_or_else(|| SystemMetadataV1::new(msg.sender_wallet_addr.clone(), None));
+    Some(SystemMessageWire::from_parts(system_type, &meta))
 }
 
 impl From<Message> for MessageResponse {
     fn from(msg: Message) -> Self {
-        // Message is considered edited if updated_at differs from created_at
-        let is_edited = msg.updated_at != msg.created_at;
-
         // Message is considered deleted if sync_status is DeletePending or Deleted
         let is_deleted = matches!(
             msg.sync_status,
             SyncStatus::DeletePending | SyncStatus::Deleted
         );
+
+        let system = system_wire_from_message(&msg);
+        let kind = msg.kind.as_str().to_string();
+        // Explicit flag from update_content — never inferred from updated_at (archival bumps it).
+        let is_edited = msg.is_edited && !msg.is_system();
 
         Self {
             message_id: msg.id,
@@ -89,6 +111,8 @@ impl From<Message> for MessageResponse {
             principal_owner: msg.attribution.principal_owner.clone(),
             sub_agent_id: msg.attribution.sub_agent_id.clone(),
             identity_class: msg.attribution.identity_class,
+            kind,
+            system,
         }
     }
 }
@@ -119,6 +143,9 @@ pub struct EmptyResponse {}
 pub enum GetMessagesResponse {
     /// Single message response (when message_id is provided)
     Single(MessageResponse),
-    /// Paginated list response (when group_id is provided)
+    /// Paginated list response
     List(MessagesListResponse),
 }
+
+#[allow(dead_code)]
+fn _assert_system_type_used(_: SystemType) {}

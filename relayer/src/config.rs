@@ -39,6 +39,9 @@ pub struct Config {
     /// Messaging stack package ID (AgentGroupCreated events).
     pub messaging_package_id: String,
 
+    /// MessagingNamespace shared object ID — used to derive GroupLeaver/GroupManager.
+    pub messaging_namespace_id: Option<String>,
+
     /// JSON-RPC URL for optional on-chain attribution verification.
     pub myso_json_rpc_url: Option<String>,
 
@@ -203,6 +206,9 @@ impl Config {
             .unwrap_or_else(|_| GENESIS_FRAMEWORK_PACKAGE_ID.to_string());
         let messaging_package_id = env::var("MESSAGING_PACKAGE_ID")
             .unwrap_or_else(|_| GENESIS_MESSAGING_PACKAGE_ID.to_string());
+        let messaging_namespace_id = env::var("MESSAGING_NAMESPACE_ID")
+            .ok()
+            .filter(|s| !s.is_empty());
         let myso_json_rpc_url = env::var("MYSO_JSON_RPC_URL").ok();
         let myso_graphql_url = env::var("MYSO_GRAPHQL_URL").ok();
         let attribution_strict_verify = env::var("ATTRIBUTION_STRICT_VERIFY")
@@ -346,6 +352,7 @@ impl Config {
             myso_rpc_url,
             groups_package_id,
             messaging_package_id,
+            messaging_namespace_id,
             myso_json_rpc_url,
             myso_graphql_url,
             attribution_strict_verify,
@@ -404,6 +411,7 @@ impl Default for Config {
             myso_rpc_url: String::new(),
             groups_package_id: String::new(),
             messaging_package_id: GENESIS_MESSAGING_PACKAGE_ID.to_string(),
+            messaging_namespace_id: None,
             myso_json_rpc_url: None,
             myso_graphql_url: None,
             attribution_strict_verify: false,

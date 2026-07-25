@@ -241,15 +241,24 @@ pub async fn get_messages(
         .unwrap_or(DEFAULT_PAGE_LIMIT)
         .min(MAX_PAGE_LIMIT);
 
-    // Fetch one extra to determine hasNext
-    let messages = state
+    // Fetch one extra to determine hasNext.
+    // Storage returns ascending order (oldest → newest) within the page window.
+    // - after_order set: oldest-first of newer messages → keep the first `limit`
+    // - otherwise (initial / before_order): newest window → keep the last `limit`
+    //   so the absolute newest message is never dropped when trimming hasNext.
+    let fetched = state
         .storage
         .get_messages_by_group(&group_id, query.after_order, query.before_order, limit + 1)
         .await?;
 
-    let has_next = messages.len() > limit;
-    let messages: Vec<MessageResponse> =
-        messages.into_iter().take(limit).map(|m| m.into()).collect();
+    let has_next = fetched.len() > limit;
+    let page = if query.after_order.is_some() {
+        fetched.into_iter().take(limit).collect::<Vec<_>>()
+    } else {
+        let skip = fetched.len().saturating_sub(limit);
+        fetched.into_iter().skip(skip).take(limit).collect::<Vec<_>>()
+    };
+    let messages: Vec<MessageResponse> = page.into_iter().map(|m| m.into()).collect();
 
     let response = MessagesListResponse { messages, has_next };
     Ok(Json(GetMessagesResponse::List(response)))
@@ -269,6 +278,12 @@ pub async fn update_message(
     if auth.authorized_group.as_deref() != Some(existing_message.group_id.as_str()) {
         return Err(ApiError::Forbidden(
             "Message does not belong to the authorized group".to_string(),
+        ));
+    }
+
+    if existing_message.is_system() {
+        return Err(ApiError::BadRequest(
+            "System messages are immutable".to_string(),
         ));
     }
 
@@ -309,7 +324,7 @@ pub async fn update_message(
     public_key_with_flag.extend_from_slice(&auth.public_key);
 
     // Update message
-    state
+    let updated = state
         .storage
         .update_message(
             req.message_id,
@@ -321,6 +336,14 @@ pub async fn update_message(
             public_key_with_flag,
         )
         .await?;
+
+    // Open-thread edit fan-out (no activity bump / push).
+    if state.realtime_enabled && state.inline_realtime_publish {
+        let wire: MessageResponse = updated.into();
+        state
+            .realtime_hub
+            .publish_edited_wire(&existing_message.group_id, wire);
+    }
 
     Ok(Json(EmptyResponse {}))
 }
@@ -342,6 +365,12 @@ pub async fn delete_message(
         ));
     }
 
+    if existing_message.is_system() {
+        return Err(ApiError::BadRequest(
+            "System messages are immutable".to_string(),
+        ));
+    }
+
     // Only the original sender can delete their message
     if existing_message.sender_wallet_addr != auth.sender_address {
         return Err(ApiError::Forbidden(
@@ -349,7 +378,16 @@ pub async fn delete_message(
         ));
     }
 
-    state.storage.delete_message(message_id).await?;
+    let deleted = state.storage.delete_message(message_id).await?;
+
+    // Open-thread tombstone fan-out (no activity bump / push).
+    if state.realtime_enabled && state.inline_realtime_publish {
+        let wire: MessageResponse = deleted.into();
+        state
+            .realtime_hub
+            .publish_deleted_wire(&existing_message.group_id, wire);
+    }
+
     Ok(Json(EmptyResponse {}))
 }
 

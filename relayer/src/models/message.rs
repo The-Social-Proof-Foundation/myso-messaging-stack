@@ -5,10 +5,11 @@ use uuid::Uuid;
 
 use super::attachment::Attachment;
 use super::message_attribution::MessageAttribution;
+use super::system_message::{MessageKind, SystemMetadataV1, SystemType};
 
 /// Represents a message in the relayer storage.
-/// Messages are received via HTTP POST requests and stored temporarily before
-/// being archived to File Storage storage.
+/// Text messages are received via HTTP POST; system messages are inserted only
+/// by trusted server services (e.g. membership sync).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Message {
     /// Unique message identifier (UUID v4)
@@ -30,6 +31,9 @@ pub struct Message {
     pub created_at: DateTime<Utc>,
     /// Last update timestamp
     pub updated_at: DateTime<Utc>,
+    /// True only after a real content edit (`update_content`). Not set by archival sync.
+    #[serde(default)]
+    pub is_edited: bool,
     /// Synchronization status with File Storage storage
     pub sync_status: SyncStatus,
     /// File Storage quilt patch ID after archival (NULL until synced)
@@ -45,6 +49,14 @@ pub struct Message {
     pub public_key: Vec<u8>,
     /// Optional agent attribution (principal, sub-agent id, identity class).
     pub attribution: MessageAttribution,
+    /// Timeline kind (`text` or `system`).
+    pub kind: MessageKind,
+    /// Present when `kind == system`.
+    pub system_type: Option<SystemType>,
+    /// Versioned cleartext metadata (system events; reserved for future text metadata).
+    pub metadata: Option<serde_json::Value>,
+    /// Chain-derived unique key for replay-safe system inserts.
+    pub idempotency_key: Option<String>,
 }
 
 /// Tracks the synchronization status of a message with File Storage storage.
@@ -136,13 +148,65 @@ impl Message {
             key_version,
             created_at: now,
             updated_at: now,
+            is_edited: false,
             sync_status: SyncStatus::default(),
             quilt_patch_id: None,
             attachments,
             signature,
             public_key,
             attribution,
+            kind: MessageKind::Text,
+            system_type: None,
+            metadata: None,
+            idempotency_key: None,
         }
+    }
+
+    /// Trusted-server constructor for immutable system timeline rows.
+    pub fn new_system(
+        group_id: String,
+        member: String,
+        system_type: SystemType,
+        actor: Option<String>,
+        idempotency_key: String,
+        created_at: DateTime<Utc>,
+    ) -> Self {
+        use blake2::{Blake2b512, Digest};
+
+        let meta = SystemMetadataV1::new(member.clone(), actor);
+        let metadata = serde_json::to_value(&meta).unwrap_or_else(|_| serde_json::json!({}));
+        // Unique 12-byte nonce so (group_id, nonce) unique index is satisfied.
+        let mut hasher = Blake2b512::new();
+        hasher.update(idempotency_key.as_bytes());
+        let digest = hasher.finalize();
+        let nonce = digest[..12].to_vec();
+
+        Self {
+            id: Uuid::new_v4(),
+            group_id,
+            order: None,
+            sender_wallet_addr: member,
+            encrypted_msg: Vec::new(),
+            nonce,
+            key_version: 0,
+            created_at,
+            updated_at: created_at,
+            is_edited: false,
+            sync_status: SyncStatus::Synced,
+            quilt_patch_id: None,
+            attachments: Vec::new(),
+            signature: Vec::new(),
+            public_key: Vec::new(),
+            attribution: MessageAttribution::human_message(),
+            kind: MessageKind::System,
+            system_type: Some(system_type),
+            metadata: Some(metadata),
+            idempotency_key: Some(idempotency_key),
+        }
+    }
+
+    pub fn is_system(&self) -> bool {
+        self.kind.is_system()
     }
 
     /// Sets the order field (called by storage layer after determining next order)
@@ -185,5 +249,29 @@ impl Message {
         self.public_key = public_key;
         self.sync_status = SyncStatus::UpdatePending;
         self.updated_at = Utc::now();
+        self.is_edited = true;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::SystemType;
+
+    #[test]
+    fn system_message_is_synced_and_cleartext() {
+        let msg = Message::new_system(
+            "0xgroup".into(),
+            "0xmember".into(),
+            SystemType::MemberJoined,
+            None,
+            "digest:0:member_joined".into(),
+            Utc::now(),
+        );
+        assert!(msg.is_system());
+        assert_eq!(msg.sync_status, SyncStatus::Synced);
+        assert!(msg.encrypted_msg.is_empty());
+        assert_eq!(msg.nonce.len(), 12);
+        assert_eq!(msg.idempotency_key.as_deref(), Some("digest:0:member_joined"));
     }
 }

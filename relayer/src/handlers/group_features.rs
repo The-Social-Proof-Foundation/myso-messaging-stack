@@ -9,8 +9,10 @@ use tracing::warn;
 
 use crate::auth::AuthContext;
 use crate::handlers::messages::error::ApiError;
-use crate::models::{ReactionEntry, ReceiptStateResponse};
-use crate::services::realtime::{ReactionUpdatedEvent, TypingEvent};
+use crate::models::{
+    ConversationPreferences, ConversationPreferencesPatch, GroupReceiptsResponse, ReactionEntry,
+};
+use crate::services::realtime::{ReactionUpdatedEvent, ReceiptUpdatedEvent, TypingEvent};
 use crate::state::AppState;
 
 #[derive(Debug, Deserialize)]
@@ -67,6 +69,30 @@ pub struct PostReceiptBody {
     pub delivered_upto: Option<u64>,
     #[serde(default)]
     pub read_upto: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PutPrefsBody {
+    pub notification_mode: Option<String>,
+    pub receipt_mode: Option<String>,
+}
+
+fn validate_notification_mode(mode: &str) -> Result<(), ApiError> {
+    match mode {
+        "all" | "none" => Ok(()),
+        _ => Err(ApiError::BadRequest(
+            "notification_mode must be 'all' or 'none'".to_string(),
+        )),
+    }
+}
+
+fn validate_receipt_mode(mode: &str) -> Result<(), ApiError> {
+    match mode {
+        "full" | "delivered_only" | "none" => Ok(()),
+        _ => Err(ApiError::BadRequest(
+            "receipt_mode must be 'full', 'delivered_only', or 'none'".to_string(),
+        )),
+    }
 }
 
 fn ensure_group(auth: &AuthContext, group_id: &str) -> Result<(), ApiError> {
@@ -250,19 +276,36 @@ pub async fn post_receipts(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     ensure_group(&auth, &group_id)?;
     let member = auth.sender_address.as_str();
-    if let Some(u) = body.delivered_upto {
-        state
-            .storage
-            .update_receipt_delivered(&group_id, member, u)
-            .await
-            .map_err(ApiError::from)?;
-    }
-    if let Some(u) = body.read_upto {
-        state
-            .storage
-            .update_receipt_read(&group_id, member, u)
-            .await
-            .map_err(ApiError::from)?;
+    let prefs = state
+        .storage
+        .get_conversation_preferences(&group_id, member)
+        .await
+        .map_err(ApiError::from)?
+        .unwrap_or_else(ConversationPreferences::defaults);
+    let (delivered_upto, read_upto) = match prefs.receipt_mode.as_str() {
+        "none" => (None, None),
+        "delivered_only" => (body.delivered_upto, None),
+        _ => (body.delivered_upto, body.read_upto),
+    };
+    let updated = state
+        .storage
+        .advance_member_receipts(&group_id, member, delivered_upto, read_upto)
+        .await
+        .map_err(ApiError::from)?;
+
+    if let Some(receipt) = updated {
+        if state.realtime_enabled && state.inline_realtime_publish {
+            state.realtime_hub.publish_receipt(
+                &group_id,
+                ReceiptUpdatedEvent::new(group_id.clone(), &receipt),
+            );
+        }
+        return Ok(Json(serde_json::json!({
+            "ok": true,
+            "member": receipt.member,
+            "delivered_upto": receipt.delivered_upto,
+            "read_upto": receipt.read_upto,
+        })));
     }
     Ok(Json(serde_json::json!({ "ok": true })))
 }
@@ -271,12 +314,60 @@ pub async fn get_receipts(
     State(state): State<AppState>,
     Path(group_id): Path<String>,
     Extension(auth): Extension<AuthContext>,
-) -> Result<Json<ReceiptStateResponse>, ApiError> {
+) -> Result<Json<GroupReceiptsResponse>, ApiError> {
     ensure_group(&auth, &group_id)?;
-    let s = state
+    let members = state
         .storage
-        .get_receipt_state(&group_id, auth.sender_address.as_str())
+        .list_group_receipts(&group_id)
         .await
         .map_err(ApiError::from)?;
-    Ok(Json(s))
+    Ok(Json(GroupReceiptsResponse { members }))
+}
+
+pub async fn get_prefs(
+    State(state): State<AppState>,
+    Path(group_id): Path<String>,
+    Extension(auth): Extension<AuthContext>,
+) -> Result<Json<ConversationPreferences>, ApiError> {
+    ensure_group(&auth, &group_id)?;
+    let prefs = state
+        .storage
+        .get_conversation_preferences(&group_id, auth.sender_address.as_str())
+        .await
+        .map_err(ApiError::from)?
+        .unwrap_or_else(ConversationPreferences::defaults);
+    Ok(Json(prefs))
+}
+
+pub async fn put_prefs(
+    State(state): State<AppState>,
+    Path(group_id): Path<String>,
+    Extension(auth): Extension<AuthContext>,
+    Json(body): Json<PutPrefsBody>,
+) -> Result<Json<ConversationPreferences>, ApiError> {
+    ensure_group(&auth, &group_id)?;
+    if body.notification_mode.is_none() && body.receipt_mode.is_none() {
+        return Err(ApiError::BadRequest(
+            "at least one of notification_mode or receipt_mode is required".to_string(),
+        ));
+    }
+    if let Some(ref mode) = body.notification_mode {
+        validate_notification_mode(mode)?;
+    }
+    if let Some(ref mode) = body.receipt_mode {
+        validate_receipt_mode(mode)?;
+    }
+    let prefs = state
+        .storage
+        .upsert_conversation_preferences(
+            &group_id,
+            auth.sender_address.as_str(),
+            ConversationPreferencesPatch {
+                notification_mode: body.notification_mode,
+                receipt_mode: body.receipt_mode,
+            },
+        )
+        .await
+        .map_err(ApiError::from)?;
+    Ok(Json(prefs))
 }

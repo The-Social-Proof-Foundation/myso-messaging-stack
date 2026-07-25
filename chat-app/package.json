@@ -7,6 +7,7 @@
   "scripts": {
     "dev": "rm -rf node_modules/.vite && vite",
     "dev:fast": "vite",
+    "sync:sdk": "pnpm --dir ../ts-sdks/packages/myso-messaging-stack run build && pnpm install && rm -rf node_modules/.vite && node ./scripts/assert-sdk-message-edited.mjs",
     "build:deps": "pnpm install",
     "build": "tsc -b && vite build",
     "preview": "vite preview",

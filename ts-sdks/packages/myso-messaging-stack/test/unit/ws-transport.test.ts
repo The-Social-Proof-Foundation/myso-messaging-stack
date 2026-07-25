@@ -119,6 +119,102 @@ describe('WSRelayerTransport', () => {
 		expect(event.message.encryptedText).toEqual(new Uint8Array([1, 2, 3]));
 	});
 
+	it('parses message.deleted tombstones without afterOrder filtering', async () => {
+		const keypair = Ed25519Keypair.generate();
+		const transport = new WSRelayerTransport({
+			relayerUrl: MOCK_RELAYER_URL,
+			apiPrefix: '/v1',
+			WebSocket: MockWebSocket as unknown as typeof WebSocket,
+			maxReconnectAttempts: 0,
+		});
+
+		const controller = new AbortController();
+		const subscribePromise = (async () => {
+			const events = [];
+			for await (const event of transport.subscribe({
+				signer: keypair,
+				groupId: GROUP_ID,
+				afterOrder: 99,
+				signal: controller.signal,
+			})) {
+				events.push(event);
+				controller.abort();
+			}
+			return events;
+		})();
+
+		await vi.waitFor(() => {
+			expect(MockWebSocket.instances.length).toBe(1);
+		});
+
+		const socket = MockWebSocket.instances[0]!;
+		socket.emitMessage(
+			JSON.stringify({
+				type: 'message.deleted',
+				message: { ...WIRE_MESSAGE, order: 1, is_deleted: true },
+			}),
+		);
+
+		const events = await subscribePromise;
+		expect(events).toHaveLength(1);
+		const event = events[0]!;
+		if (event.type !== 'message.deleted') throw new Error('expected deleted event');
+		expect(event.message.messageId).toBe(WIRE_MESSAGE.message_id);
+		expect(event.message.isDeleted).toBe(true);
+		expect(event.message.order).toBe(1);
+	});
+
+	it('parses message.edited frames without afterOrder filtering', async () => {
+		const keypair = Ed25519Keypair.generate();
+		const transport = new WSRelayerTransport({
+			relayerUrl: MOCK_RELAYER_URL,
+			apiPrefix: '/v1',
+			WebSocket: MockWebSocket as unknown as typeof WebSocket,
+			maxReconnectAttempts: 0,
+		});
+
+		const controller = new AbortController();
+		const subscribePromise = (async () => {
+			const events = [];
+			for await (const event of transport.subscribe({
+				signer: keypair,
+				groupId: GROUP_ID,
+				afterOrder: 99,
+				signal: controller.signal,
+			})) {
+				events.push(event);
+				controller.abort();
+			}
+			return events;
+		})();
+
+		await vi.waitFor(() => {
+			expect(MockWebSocket.instances.length).toBe(1);
+		});
+
+		const socket = MockWebSocket.instances[0]!;
+		socket.emitMessage(
+			JSON.stringify({
+				type: 'message.edited',
+				message: {
+					...WIRE_MESSAGE,
+					order: 1,
+					is_edited: true,
+					encrypted_text: '040506',
+				},
+			}),
+		);
+
+		const events = await subscribePromise;
+		expect(events).toHaveLength(1);
+		const event = events[0]!;
+		if (event.type !== 'message.edited') throw new Error('expected edited event');
+		expect(event.message.messageId).toBe(WIRE_MESSAGE.message_id);
+		expect(event.message.isEdited).toBe(true);
+		expect(event.message.order).toBe(1);
+		expect(event.message.encryptedText).toEqual(new Uint8Array([4, 5, 6]));
+	});
+
 	it('yields both message.created and reaction.updated frames', async () => {
 		const keypair = Ed25519Keypair.generate();
 		const transport = new WSRelayerTransport({
@@ -195,7 +291,7 @@ describe('WSRelayerTransport', () => {
 				signal: controller.signal,
 			})) {
 				events.push(event);
-				if (events.length === 3) controller.abort();
+				if (events.length === 4) controller.abort();
 			}
 			return events;
 		})();
@@ -222,6 +318,15 @@ describe('WSRelayerTransport', () => {
 				online: true,
 			}),
 		);
+		socket.emitMessage(
+			JSON.stringify({
+				type: 'receipt.updated',
+				group_id: GROUP_ID,
+				member: '0xc',
+				delivered_upto: 9,
+				read_upto: 7,
+			}),
+		);
 
 		const events = await subscribePromise;
 		expect(events).toEqual([
@@ -236,6 +341,15 @@ describe('WSRelayerTransport', () => {
 			{
 				type: 'presence.updated',
 				presence: { groupId: GROUP_ID, member: '0xb', online: true },
+			},
+			{
+				type: 'receipt.updated',
+				receipt: {
+					groupId: GROUP_ID,
+					member: '0xc',
+					deliveredUpto: 9,
+					readUpto: 7,
+				},
 			},
 		]);
 	});
@@ -257,7 +371,7 @@ describe('WSRelayerTransport', () => {
 				signal: controller.signal,
 			})) {
 				events.push(event);
-				if (events.length === 4) controller.abort();
+				if (events.length === 5) controller.abort();
 			}
 			return events;
 		})();
@@ -278,6 +392,15 @@ describe('WSRelayerTransport', () => {
 			JSON.stringify({ type: 'read_state.updated', wallet: '0xme', blob_version: 3 }),
 		);
 		socket.emitMessage(
+			JSON.stringify({
+				type: 'receipt.updated',
+				group_id: '0xg',
+				member: '0xpeer',
+				delivered_upto: 11,
+				read_upto: 10,
+			}),
+		);
+		socket.emitMessage(
 			JSON.stringify({ type: 'group.discovered', group_id: '0xnew', reason: 'invited' }),
 		);
 		socket.emitMessage(JSON.stringify({ type: 'group.hidden', group_id: '0xold' }));
@@ -286,6 +409,13 @@ describe('WSRelayerTransport', () => {
 		expect(events).toEqual([
 			{ type: 'group.activity', groupId: '0xg', latestOrder: 12 },
 			{ type: 'read_state.updated', blobVersion: 3 },
+			{
+				type: 'receipt.updated',
+				groupId: '0xg',
+				member: '0xpeer',
+				deliveredUpto: 11,
+				readUpto: 10,
+			},
 			{ type: 'group.discovered', groupId: '0xnew', reason: 'invited' },
 			{ type: 'group.hidden', groupId: '0xold' },
 		]);

@@ -59,5 +59,6 @@ export function fromFileStorageMessage(wire: FileStorageMessageWire): RelayerMes
 				? wire.identity_class
 				: undefined,
 		isAgentMessage: hasAttribution,
+		kind: 'text',
 	};
 }

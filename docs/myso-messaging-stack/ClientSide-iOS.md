@@ -10,7 +10,7 @@ DripDrop also keeps its **existing product WebSocket** (`WebSocketService`) to t
 |--------|---------|------|---------|
 | DripDrop backend | `WebSocketService` | Bearer JWT JSON `{type:authenticate,token}` | Product realtime (unchanged) |
 | Messaging relayer user feed | `MessagingUserFeedService` | Wallet-signed query params | Unread / discovery wake signals (metadata only) |
-| Messaging relayer group feed | `MessagingGroupFeedService` | Wallet-signed query + `group_id` | Open-thread encrypted frames (`message.created`) |
+| Messaging relayer group feed | `MessagingGroupFeedService` | Wallet-signed query + `group_id` | Open-thread encrypted frames (`message.created`, `message.deleted`, `message.edited`) |
 
 Lifecycle: on login / `sceneDidBecomeActive`, connect both DripDrop WS and user feed. On logout / background, disconnect both with `stopReconnect: true`.
 
@@ -25,10 +25,12 @@ Config: `MESSAGING_RELAYER_URL` in xcconfig / Info.plist as **host only** (e.g. 
 | User feed (wake) | `GET /v1/users/ws` (WebSocket, metadata only) |
 | Group realtime | `GET /v1/ws` (WebSocket, full encrypted wire JSON) |
 | Unread counts | `POST /v1/users/unread-counts` (body-signed batch) |
-| Read state | `GET/PUT /v1/users/read-state` |
+| Read state (private unread) | `GET/PUT /v1/users/read-state` |
+| Receipts (peer delivery/read) | `GET/POST /v1/groups/:id/receipts` |
+| Conversation prefs (mute / receipts) | `GET/PUT /v1/groups/:id/prefs` |
 | Push token | `POST/DELETE /v1/devices/push-tokens` |
 | Presence | `POST /v1/devices/presence` |
-| Blocks (DM) | Relayer enforces via social-server; SDK pre-check optional |
+| Blocks (DM) | Relayer enforces via social-server; Create Conversation picker shows **Blocked** (either direction) and disables select; SDK/relayer still hard-gate on send |
 
 ## User feed WebSocket (`/v1/users/ws`)
 
@@ -59,10 +61,36 @@ Swift: `MessagingRelayerAuth.createUserFeedQuery` (mirrors TS `createUserWsAuthQ
 |--------|---------|---------------|
 | `group.activity` | New message order in a group | Optimistic unread + immediate unread REST + tip preview decrypt for `group_id` |
 | `read_state.updated` | Encrypted read-state blob changed | `GET /v1/users/read-state` |
+| `receipt.updated` | Peer advanced delivery/read watermarks | Update open-thread tick state (or ignore if thread closed — GET on open). Does **not** drive sidebar unread/preview. |
+
+Inbox tip chrome: preview order watermark advances only when the tip has **real** subtitle plaintext (not the “Encrypted message” placeholder). Unread maps use **lowercased** `group_id` keys. `MessagingGroupStore` activity/read lookups are case-insensitive so user-feed ids match the local store.
 | `group.discovered` | Conversation appeared (created/invited/joined) | Refresh group list |
 | `group.hidden` | Conversation should leave sidebar | Remove locally |
 
+### System membership messages (shared timeline)
+
+Join/leave/remove are **first-class messages** on `GET /messages` and `message.created` (same `order` stream as text). Wire fields:
+
+| Field | Meaning |
+|-------|---------|
+| `kind` | `"text"` (default) or `"system"` |
+| `system` | `{ type, member, actor? }` — typed; never raw JSON metadata |
+
+v1 `system.type`: `member_joined` | `member_left` | `member_removed`. Unknown types → generic “Group updated” (or hide); do not crash.
+
+iOS:
+
+- `RelayerMessageWire.kind` / `.system` (`MessagingRelayerModels.swift`)
+- Skip decrypt when `kind == .system` (`MessagingEncryptionService`)
+- Centered `SystemMessageCell` in `ChatThreadViewController` (localized via `MessagingSystemMessageCopy`)
+- Immutable: no long-press / reactions / edit / delete
+- Membership change → `Notification.Name.messagingGroupMembersDidChange` → details sheet reloads members
+
 Ignore unknown / workflow types until those milestones ship.
+
+**Private unread vs public receipts:** encrypted read-state drives **your** badges only. Peer-visible ticks use plaintext receipts (`MessagingRelayerHTTPClient.fetchGroupReceipts` / `postGroupReceipts`). On `markRead`, always advance encrypted read-state; POST `read_upto` only when `receipt_mode == full` (default). After **any** successful tip/message ingest (inbox tip warm or open thread), ACK `delivered_upto` unless mode is `none`. Read ACK stays open-thread only. Own-message meta: single green ✓ = delivered, offset ✓✓ = read (not signature verified).
+
+**Chat settings (Details):** `ChatGroupDetailsView` → **Chat settings** (Notifications + Read receipts toggles) for every member. `GET/PUT /v1/groups/:id/prefs` via `MessagingRelayerHTTPClient`. Process-lifetime cache: `MessagingConversationPrefsCache` — set on thread open, Details load, and successful PUT; empty after process restart (always refetch). Encrypted blob `muted` is not push mute.
 
 ### Group feed auth (`/v1/ws`)
 
@@ -89,11 +117,16 @@ iOS: `MessagingRelayerHTTPClient.fetchUnreadCounts` / `getUserReadState` / `putU
 When a thread is open, prefer group WebSocket over HTTP polling:
 
 1. Open `wss://{relayer}/v1/ws?group_id=...&sender_address=...&timestamp=...&signature=...&public_key=...`
-2. Parse `{ "type": "message.created", "message": { ... } }` frames — decrypt locally; **do not HTTP-refetch** after each event for that open thread
-3. Optional `after_order` query param for resumability
-4. Fall back to HTTP polling if WebSocket is blocked or fails (TypeScript SDK: `HybridRelayerTransport`)
+2. Parse `{ "type": "message.created", "message": { ... } }` frames — decrypt locally; **do not HTTP-refetch** after each event for that open thread; ACK `POST …/receipts` `delivered_upto`
+3. Also handle `message.deleted` the same way as create: apply the wire tombstone (`is_deleted`) by `message_id` with no per-event HTTP refetch (does not advance `after_order` / tip activity)
+4. Also handle `message.edited`: replace by `message_id`, decrypt the new ciphertext, set `is_edited` / `(edited)` badge — no tip/`after_order` advance (order unchanged)
+5. Also handle `receipt.updated`, `typing.*`, `presence.updated`, `reaction.updated`
+6. Optional `after_order` query param for resumability
+7. Fall back to HTTP polling if WebSocket is blocked or fails (TypeScript SDK: `HybridRelayerTransport`)
 
-User feed stays connected for sidebar/unread while group feed is open.
+Long-press Edit/Delete on own messages must respect on-chain `MessagingEditor` / `MessagingDeleter` (web `usePermissions` parity): show only when `isMine && canEdit` / `isMine && canDelete`.
+
+User feed stays connected for sidebar/unread (and background `receipt.updated`) while group feed is open.
 
 ### APNs payload contract
 
@@ -207,7 +240,7 @@ Open thread: hydrate SQLite tip page + cached reactions → local AES for missin
 
 ### Create Conversation (draft until first send)
 
-Messages list **+** opens a SwiftUI sheet (`CreateConversationSheet`): following suggestions (`ProfileFollowing`), MySo `/search` for username/name, and `0x`+64-hex wallet lookup via `ProfileFull` with **cardless** selectable rows when no profile exists. Next inserts a local draft group (`groupId` prefix `local-`) via `MessagingInboxService.insertLocalDraft` with an official name of peer labels + self (web `buildAutoGroupName`), persists `pendingMemberWallets` in sealed inbox chrome, republishes the inbox row at the top, and pushes `ChatThreadViewController` with composer focused. List/thread titles strip self (≤5 peers); empty draft subtitle is `drafted chat` / `drafted group chat`. Discovery/`replaceActive` preserves `local-*` drafts.
+Messages list **+** opens a SwiftUI sheet (`CreateConversationSheet`): following suggestions (`ProfileFollowing`), MySo `/search` for username/name, and `0x`+64-hex wallet lookup via `ProfileFull` with **cardless** selectable rows when no profile exists. Blocked peers stay visible with a red **Blocked** label and are not selectable — Suggested uses GraphQL `blockedByViewer` / `blockedBySubject`; search/wallet hits use `GET /blocklist/check/either/{self}/{peer}` (same either-direction semantics as the relayer). Next inserts a local draft group (`groupId` prefix `local-`) via `MessagingInboxService.insertLocalDraft` with an official name of peer labels + self (web `buildAutoGroupName`), persists `pendingMemberWallets` in sealed inbox chrome, republishes the inbox row at the top, and pushes `ChatThreadViewController` with composer focused. List/thread titles strip self (≤5 peers); empty draft subtitle is `drafted chat` / `drafted group chat`. Discovery/`replaceActive` preserves `local-*` drafts.
 
 **First message** (not sheet submit) runs sequentially:
 
@@ -242,16 +275,16 @@ Protocol source of truth: [`PaidMessaging.md`](./PaidMessaging.md). Follow exemp
 
 ### Chat tab lifecycle
 
-1. **Login / scene active** — user feed connects; `MessagingInboxService.start` (idempotent) hydrates sealed chrome, GraphQL discovery, metadata, `POST /v1/users/unread-counts` (local `localReadUpto` as `after_order`). Incremental tip warm only for missing/stale previews. If GraphQL returns `FEATURE_UNAVAILABLE` for event indexes (common on public testnet), discovery is skipped and the list relies on cache + `group.discovered` user-feed wakes.
-2. **Foreground wakes** — `group.activity` on the user feed updates sort order immediately, bumps unread optimistically, then coalesced unread REST + targeted tip preview when chrome is behind. Group feed (`MessagingGroupFeedService`) is used only while a thread is open.
+1. **Login / scene active** — user feed connects; `MessagingInboxService.start` (idempotent) hydrates sealed chrome, GraphQL discovery, metadata, `GET /v1/users/read-state` (decrypt → `localReadUpto`), then `POST /v1/users/unread-counts`. Incremental tip warm only for missing/stale previews; after a peer tip ingest, POST `delivered_upto` (debounced; skip when `receipt_mode == none`). If GraphQL returns `FEATURE_UNAVAILABLE` for event indexes (common on public testnet), discovery is skipped and the list relies on cache + `group.discovered` user-feed wakes.
+2. **Foreground wakes** — `group.activity` on the user feed updates sort order immediately, bumps unread optimistically (lowercased unread keys), then coalesced unread REST + targeted tip preview when chrome lacks real plaintext. Delivered ACK may fire from tip ingest even if decrypt is still retrying; subtitle warm does not treat empty/placeholder chrome as done. Group feed (`MessagingGroupFeedService`) is used only while a thread is open.
 3. **Chat tab appears** — bind list UI; reconcile unread; 60s timer while mounted; incremental preview warm.
 4. **Chat tab destroyed** (custom tab bar) — stop timer / group WS; **keep** inbox singleton + store.
-5. **Open thread** — hydrate SQLite + reaction cache + plaintext LRU; local AES for missing bodies (Keychain DEK); parallel `fetchMessages` + `listReactions`; decrypt only still-missing; lazy images; group WS; local `markRead`; write-through ciphertext + reactions + RAM cache. Opening cancels inbox tip refresh tasks.
+5. **Open thread** — hydrate SQLite + reaction cache + plaintext LRU; local AES for missing bodies (Keychain DEK); parallel `fetchMessages` + `listReactions` + `fetchGroupReceipts` + `getConversationPrefs` (cache); decrypt only still-missing; lazy images; group WS; `markRead` → optimistic local watermark + encrypted `PUT /v1/users/read-state` (CAS) **and** `postGroupReceipts(read_upto)` only if `receipt_mode == full`; ACK delivered after ingest unless mode is `none`; own-message ticks from peer watermarks. Nav **Details** → Chat settings toggles. Opening cancels inbox tip refresh tasks.
 6. **Send** — composer encrypts (DEK + AAD AES-GCM) → signs canonical content → `POST /v1/messages`; optimistic bubble then WS/fetch reconcile; write-through SQLite + RAM cache. Mentions are expanded to plaintext `@username` or full `@0x`+64 hex before encrypt (no relayer schema).
 7. **Typing** — throttled `POST /v1/groups/{id}/typing`; WS `typing.start`/`stop` drives indicator above composer.
 8. **Mentions** — typing `@` opens a glass suggestion panel above attach chips (following list, then debounced `/search` like Create Conversation). Tap inserts a bold `@username`. Pasting a full wallet inserts an abbreviated bold mention; send/draft store the full `@0x`+64. Bubbles bold `@` tokens (wallets abbreviated) and open `ProfileView` via `myso-mention://` links.
 9. **List profiles** — `@handle` DM names resolve via indexer search → `ProfileFull`; list title/photo/SPT ring from `MessagingProfile`.
-10. **Encrypted read-state CAS / attachment upload-from-composer** — still deferred.
+10. **Encrypted read-state CAS** — `MessagingReadStateCrypto` + `MessagingReadStateSync` (HKDF + AES-GCM, CAS merge / 409 retry); user-feed `read_state.updated` invalidates + rehydrates. **Attachment upload-from-composer** — still deferred.
 
 Unread badges stay on the relayer path (not product backend). Merge with likes/comments badges only at the UI if needed.
 

@@ -16,13 +16,19 @@ import {
   PAID_DM_MIN_REPLY_CHARS,
   PAID_MSG_NO_PLATFORM_FEE_RECIPIENT,
   RelayerTransportError,
+  tickStatus,
+  upsertMemberReceipt,
 } from '@socialproof/myso-messaging-stack';
 import { useRequiredMessagingClient } from '../contexts/MessagingClientContext';
 import type {
   AttachmentFile,
   AttachmentHandle,
+  MemberReceipt,
+  MessageTickStatus,
+  ReceiptMode,
   RelayerReactionEntry,
   RelayerReactionEvent,
+  RelayerReceiptEvent,
 } from '@socialproof/myso-messaging-stack';
 import {
   formatPaidClaimError,
@@ -54,7 +60,15 @@ import {
   shouldWarmCatchUpOnly,
   type ThreadPageLedger,
 } from '../lib/message-page-ledger';
+import { invalidateGroupMembers } from '../lib/group-members-cache';
+import { isMembershipSystemType } from '../lib/system-message-copy';
 import { publishSidebarMessagePreview } from './useSidebarMessagePreviews';
+
+export interface SystemMessageFields {
+  type: string;
+  member: string;
+  actor?: string | null;
+}
 
 export interface Message {
   messageId: string;
@@ -72,6 +86,8 @@ export interface Message {
   isAgentMessage?: boolean;
   principalOwner?: string;
   subAgentId?: string;
+  kind?: 'text' | 'system';
+  system?: SystemMessageFields;
 }
 
 /** Reaction entries per message, keyed by the message's relayer `order`. */
@@ -100,6 +116,15 @@ export interface UseMessagesResult {
   onlineMembers: Map<string, boolean>;
   /** Full presence records (includes lastSeenAt for offline peers). */
   presenceRecords: Map<string, PresenceRecord>;
+  /** Peer-visible delivery/read watermarks (all members with stored rows). */
+  memberReceipts: MemberReceipt[];
+  /**
+   * Own-message tick for a relayer `order` (min over other members).
+   * `none` | `delivered` | `read`.
+   */
+  tickForOrder: (order: number) => MessageTickStatus;
+  /** Apply a live `receipt.updated` (group or user feed). */
+  applyReceiptEvent: (event: RelayerReceiptEvent) => void;
   /**
    * Relayer read watermark at open time (exclusive). Messages with
    * `order > initialReadUpto` are unread for initial scroll positioning.
@@ -143,7 +168,21 @@ export interface UseMessagesOptions {
    * Use to snapshot scroll position after the fetch, not before it starts.
    */
   onBeforeOlderMessagesApply?: () => void;
+  /**
+   * When set by Details prefs, overrides the thread-loaded receipt mode for
+   * mark-read / delivered ACK gating.
+   */
+  receiptMode?: ReceiptMode;
+  /**
+   * When set (DM peer wallets), tick math only considers these addresses so
+   * orphan receipt rows cannot keep ticks at `none`.
+   */
+  tickPeerAddresses?: readonly string[];
 }
+
+const RECEIPT_ACK_DEBOUNCE_MS = 400;
+/** Backoff delays for peer-receipt POST retries (membership lag after paid join). */
+const RECEIPT_ACK_RETRY_MS = [500, 1500, 4000] as const;
 
 /** Shape returned by the SDK's getMessages method (messages may include attachments). */
 interface SDKGetMessagesResult {
@@ -160,11 +199,31 @@ function sortMessagesByOrder(msgs: Message[]): Message[] {
   });
 }
 
+function normalizeMessage(raw: Message): Message {
+  const kind = raw.kind === 'system' ? 'system' : 'text';
+  return {
+    ...raw,
+    kind,
+    system: kind === 'system' ? raw.system : undefined,
+  };
+}
+
+function maybeInvalidateMembersForMessages(msgs: Message[]): void {
+  for (const m of msgs) {
+    if (m.kind === 'system' && m.system && isMembershipSystemType(m.system.type)) {
+      invalidateGroupMembers(m.groupId);
+    }
+  }
+}
+
 /** Merge two lists, dedupe by messageId, return sorted ascending. */
 function mergeMessages(prev: Message[], incoming: Message[]): Message[] {
+  const normalized = incoming.map(normalizeMessage);
+  maybeInvalidateMembersForMessages(normalized);
+
   const byId = new Map<string, Message>();
   for (const m of prev) byId.set(m.messageId, m);
-  for (const m of incoming) byId.set(m.messageId, m);
+  for (const m of normalized) byId.set(m.messageId, m);
 
   // Drop local optimistic stubs once the relayer echo for that order arrives.
   const confirmedOrders = new Set(
@@ -270,12 +329,42 @@ export function useMessages(
   const [presenceRecords, setPresenceRecords] = useState<
     Map<string, PresenceRecord>
   >(new Map());
+  const [memberReceipts, setMemberReceipts] = useState<MemberReceipt[]>([]);
+  const [localReceiptMode, setLocalReceiptMode] =
+    useState<ReceiptMode>('full');
+  const receiptMode = options?.receiptMode ?? localReceiptMode;
+  const receiptModeRef = useRef(receiptMode);
+  receiptModeRef.current = receiptMode;
   const [minReplyChars, setMinReplyChars] = useState(PAID_DM_MIN_REPLY_CHARS);
 
   const onlineMembers = useMemo(
     () => presenceRecordsToOnlineMap(presenceRecords),
     [presenceRecords],
   );
+
+  const myAddress = useMemo(() => signer.toMySoAddress(), [signer]);
+  const tickPeerAddresses = options?.tickPeerAddresses;
+  const tickPeerAddressesRef = useRef(tickPeerAddresses);
+  tickPeerAddressesRef.current = tickPeerAddresses;
+
+  const tickForOrder = useCallback(
+    (order: number): MessageTickStatus =>
+      tickStatus(order, memberReceipts, myAddress, {
+        peerAddresses: tickPeerAddresses,
+      }),
+    [memberReceipts, myAddress, tickPeerAddresses],
+  );
+
+  const applyReceiptEvent = useCallback((event: RelayerReceiptEvent) => {
+    if (event.groupId !== groupId) return;
+    setMemberReceipts((prev) =>
+      upsertMemberReceipt(prev, {
+        member: event.member,
+        deliveredUpto: event.deliveredUpto,
+        readUpto: event.readUpto,
+      }),
+    );
+  }, [groupId]);
 
   const onReadStateChangedRef = useRef(options?.onReadStateChanged);
   onReadStateChangedRef.current = options?.onReadStateChanged;
@@ -310,8 +399,17 @@ export function useMessages(
   // Latest reactions for toggle decisions without re-creating callbacks.
   const reactionsRef = useRef<MessageReactions>(reactions);
   reactionsRef.current = reactions;
-  // Highest watermark already sent to the relayer — dedupes read-state writes.
+  // Highest watermark already sent for *private* encrypted read-state.
   const lastSentReadUptoRef = useRef(0);
+  /** Highest peer-visible read_upto successfully POSTed (separate from private read-state). */
+  const lastSentPeerReadUptoRef = useRef(0);
+  /** Highest delivered_upto already POSTed (or queued) for this thread. */
+  const lastSentDeliveredUptoRef = useRef(0);
+  const deliveredAckTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingDeliveredUptoRef = useRef(0);
+  const peerReceiptRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const peerReceiptRetryAttemptRef = useRef(0);
+  const pendingPeerReadUptoRef = useRef(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -342,6 +440,166 @@ export function useMessages(
       console.warn('Failed to resync presence:', err);
     }
   }, [client, signer, uuid]);
+
+  const resyncReceipts = useCallback(async () => {
+    try {
+      const state = await client.messaging.getGroupReceipts({
+        signer,
+        groupRef: { uuid: uuidRef.current },
+      });
+      if (uuidRef.current !== uuid) return;
+      setMemberReceipts(state.members);
+    } catch (err) {
+      console.warn('Failed to resync receipts:', err);
+    }
+  }, [client, signer, uuid]);
+
+  const flushDeliveredAck = useCallback(() => {
+    if (receiptModeRef.current === 'none') return;
+    const deliveredUpto = pendingDeliveredUptoRef.current;
+    if (
+      !Number.isFinite(deliveredUpto) ||
+      deliveredUpto <= lastSentDeliveredUptoRef.current
+    ) {
+      return;
+    }
+    lastSentDeliveredUptoRef.current = deliveredUpto;
+    client.messaging
+      .postGroupReceipts({
+        signer,
+        groupRef: { uuid: uuidRef.current },
+        deliveredUpto,
+      })
+      .then(() => {
+        peerReceiptRetryAttemptRef.current = 0;
+      })
+      .catch((err) => {
+        if (lastSentDeliveredUptoRef.current === deliveredUpto) {
+          lastSentDeliveredUptoRef.current = 0;
+        }
+        console.warn('Failed to ack delivered receipt:', err);
+        // Retry after membership lag (paid join) / transient failures.
+        const attempt = peerReceiptRetryAttemptRef.current;
+        if (attempt < RECEIPT_ACK_RETRY_MS.length) {
+          const delayMs = RECEIPT_ACK_RETRY_MS[attempt];
+          peerReceiptRetryAttemptRef.current = attempt + 1;
+          if (peerReceiptRetryTimerRef.current) {
+            clearTimeout(peerReceiptRetryTimerRef.current);
+          }
+          peerReceiptRetryTimerRef.current = setTimeout(() => {
+            peerReceiptRetryTimerRef.current = null;
+            flushDeliveredAck();
+          }, delayMs);
+        }
+      });
+  }, [client, signer]);
+
+  const scheduleDeliveredAck = useCallback(
+    (order: number) => {
+      if (!Number.isFinite(order) || order <= 0) return;
+      pendingDeliveredUptoRef.current = Math.max(
+        pendingDeliveredUptoRef.current,
+        order,
+      );
+      if (deliveredAckTimerRef.current) {
+        clearTimeout(deliveredAckTimerRef.current);
+      }
+      deliveredAckTimerRef.current = setTimeout(() => {
+        deliveredAckTimerRef.current = null;
+        flushDeliveredAck();
+      }, RECEIPT_ACK_DEBOUNCE_MS);
+    },
+    [flushDeliveredAck],
+  );
+
+  /** Peer-visible read ACK — separate watermark from private read-state. */
+  const flushPeerReadAck = useCallback(() => {
+    const mode = receiptModeRef.current;
+    if (mode === 'none') return;
+    const readUpto = pendingPeerReadUptoRef.current;
+    if (!Number.isFinite(readUpto) || readUpto <= 0) return;
+
+    if (mode === 'delivered_only') {
+      scheduleDeliveredAck(readUpto);
+      return;
+    }
+    if (mode !== 'full') return;
+    if (readUpto <= lastSentPeerReadUptoRef.current) return;
+
+    // Fan out delivered first (own request) so senders can show ✓ before ✓✓.
+    // A single POST with both watermarks collapses to one receipt.updated → read.
+    const postDeliveredFirst = (): Promise<void> => {
+      if (readUpto <= lastSentDeliveredUptoRef.current) {
+        return Promise.resolve();
+      }
+      if (deliveredAckTimerRef.current) {
+        clearTimeout(deliveredAckTimerRef.current);
+        deliveredAckTimerRef.current = null;
+      }
+      pendingDeliveredUptoRef.current = Math.max(
+        pendingDeliveredUptoRef.current,
+        readUpto,
+      );
+      const deliveredUpto = pendingDeliveredUptoRef.current;
+      lastSentDeliveredUptoRef.current = deliveredUpto;
+      return client.messaging
+        .postGroupReceipts({
+          signer,
+          groupRef: { uuid: uuidRef.current },
+          deliveredUpto,
+        })
+        .then(() => undefined)
+        .catch((err) => {
+          if (lastSentDeliveredUptoRef.current === deliveredUpto) {
+            lastSentDeliveredUptoRef.current = 0;
+          }
+          throw err;
+        });
+    };
+
+    lastSentPeerReadUptoRef.current = readUpto;
+    postDeliveredFirst()
+      .then(() =>
+        client.messaging.postGroupReceipts({
+          signer,
+          groupRef: { uuid: uuidRef.current },
+          readUpto,
+        }),
+      )
+      .then(() => {
+        peerReceiptRetryAttemptRef.current = 0;
+      })
+      .catch((err) => {
+        if (lastSentPeerReadUptoRef.current === readUpto) {
+          lastSentPeerReadUptoRef.current = 0;
+        }
+        console.warn('Failed to ack read receipt:', err);
+        const attempt = peerReceiptRetryAttemptRef.current;
+        if (attempt < RECEIPT_ACK_RETRY_MS.length) {
+          const delayMs = RECEIPT_ACK_RETRY_MS[attempt];
+          peerReceiptRetryAttemptRef.current = attempt + 1;
+          if (peerReceiptRetryTimerRef.current) {
+            clearTimeout(peerReceiptRetryTimerRef.current);
+          }
+          peerReceiptRetryTimerRef.current = setTimeout(() => {
+            peerReceiptRetryTimerRef.current = null;
+            flushPeerReadAck();
+          }, delayMs);
+        }
+      });
+  }, [client, signer, scheduleDeliveredAck]);
+
+  const schedulePeerReadAck = useCallback(
+    (order: number) => {
+      if (!Number.isFinite(order) || order <= 0) return;
+      pendingPeerReadUptoRef.current = Math.max(
+        pendingPeerReadUptoRef.current,
+        order,
+      );
+      flushPeerReadAck();
+    },
+    [flushPeerReadAck],
+  );
 
   // Keep tip cursor + ledger window bounds in sync with the live list.
   useEffect(() => {
@@ -385,11 +643,26 @@ export function useMessages(
     setInitialReadUpto(0);
     setTypingUntil(new Map());
     setPresenceRecords(new Map());
+    setMemberReceipts([]);
+    setLocalReceiptMode('full');
     setPaymentRequired(null);
     setPaymentError(null);
     pendingPaidSendRef.current = null;
     lastOrderRef.current = cached?.messages.at(-1)?.order;
     lastSentReadUptoRef.current = 0;
+    lastSentPeerReadUptoRef.current = 0;
+    lastSentDeliveredUptoRef.current = 0;
+    pendingDeliveredUptoRef.current = 0;
+    pendingPeerReadUptoRef.current = 0;
+    peerReceiptRetryAttemptRef.current = 0;
+    if (deliveredAckTimerRef.current) {
+      clearTimeout(deliveredAckTimerRef.current);
+      deliveredAckTimerRef.current = null;
+    }
+    if (peerReceiptRetryTimerRef.current) {
+      clearTimeout(peerReceiptRetryTimerRef.current);
+      peerReceiptRetryTimerRef.current = null;
+    }
     isLoadingInitialRef.current = true;
     isLoadingOlderRef.current = false;
     isCatchingUpRef.current = false;
@@ -441,6 +714,32 @@ export function useMessages(
         setPresenceRecords((prev) => applySnapshotEntries(prev, entries));
       } catch (err) {
         console.warn('Failed to load presence:', err);
+      }
+    }
+
+    async function loadReceipts() {
+      try {
+        const state = await client.messaging.getGroupReceipts({
+          signer,
+          groupRef: {uuid},
+        });
+        if (cancelled || uuidRef.current !== uuid) return;
+        setMemberReceipts(state.members);
+      } catch (err) {
+        console.warn('Failed to load receipts:', err);
+      }
+    }
+
+    async function loadConversationPrefs() {
+      try {
+        const prefs = await client.messaging.getConversationPrefs({
+          signer,
+          groupRef: { uuid },
+        });
+        if (cancelled || uuidRef.current !== uuid) return;
+        setLocalReceiptMode(prefs.receiptMode);
+      } catch (err) {
+        console.warn('Failed to load conversation prefs:', err);
       }
     }
 
@@ -574,6 +873,16 @@ export function useMessages(
         });
 
         await loadPresence();
+        await loadReceipts();
+        await loadConversationPrefs();
+        if (initial.length > 0) {
+          const tip = Math.max(...initial.map((m) => m.order));
+          pendingDeliveredUptoRef.current = Math.max(
+            pendingDeliveredUptoRef.current,
+            tip,
+          );
+          flushDeliveredAck();
+        }
       } catch (err) {
         if (cancelled || uuidRef.current !== uuid) return;
         console.error('Failed to load messages:', err);
@@ -594,7 +903,7 @@ export function useMessages(
       cancelled = true;
       isLoadingInitialRef.current = false;
     };
-  }, [uuid, groupId, client, signer, recoveryEnabled]);
+  }, [uuid, groupId, client, signer, recoveryEnabled, flushDeliveredAck]);
 
   // Write-through: keep session cache warm across remounts (subscribe/send/edit/pages).
   useEffect(() => {
@@ -617,18 +926,18 @@ export function useMessages(
   }, [uuid, groupId, messages, hasMore, reactions, loading]);
 
   // ------------------------------------------------------------------
-  // Real-time subscription (messages, reactions, typing, presence)
+  // Real-time subscription (messages, reactions, typing, presence, receipts)
   // ------------------------------------------------------------------
   useEffect(() => {
     // Don't subscribe while still loading initial messages
     if (loading) return;
 
     const controller = new AbortController();
-    const myAddress = signer.toMySoAddress();
 
     async function startSubscription() {
       try {
         await resyncPresence();
+        await resyncReceipts();
 
         const stream = client.messaging.subscribe({
           signer,
@@ -643,8 +952,14 @@ export function useMessages(
           switch (event.type) {
             case 'message':
               setMessages((prev) => mergeMessage(prev, event.message as Message));
-              if (typeof event.message.order === 'number') {
+              // Tombstones / edits update in-place — do not bump sidebar activity or ACK.
+              if (
+                !event.message.isDeleted &&
+                !event.message.isEdited &&
+                typeof event.message.order === 'number'
+              ) {
                 onGroupActivityRef.current?.(event.message.order);
+                scheduleDeliveredAck(event.message.order);
               }
               break;
             case 'reaction':
@@ -677,6 +992,9 @@ export function useMessages(
                 ),
               );
               break;
+            case 'receipt':
+              applyReceiptEvent(event.receipt);
+              break;
           }
         }
       } catch (err) {
@@ -691,20 +1009,32 @@ export function useMessages(
     return () => {
       controller.abort();
     };
-  }, [uuid, client, signer, loading, resyncPresence]);
+  }, [
+    uuid,
+    client,
+    signer,
+    loading,
+    myAddress,
+    resyncPresence,
+    resyncReceipts,
+    scheduleDeliveredAck,
+    applyReceiptEvent,
+  ]);
 
-  // Periodic presence reconciliation (snapshot). Live transitions arrive via WS.
+  // Periodic presence + receipt reconciliation. Live transitions arrive via WS;
+  // snapshots self-heal missed receipt.updated frames (lag / poll fallback).
   useEffect(() => {
     if (loading) return;
 
     const reconcileTimer = setInterval(() => {
-      resyncPresence().then();
+      void resyncPresence();
+      void resyncReceipts();
     }, 30_000);
 
     return () => {
       clearInterval(reconcileTimer);
     };
-  }, [loading, resyncPresence]);
+  }, [loading, resyncPresence, resyncReceipts]);
 
   // TTL fallback: clear typing indicators whose stop event never arrived.
   useEffect(() => {
@@ -727,8 +1057,8 @@ export function useMessages(
   }, [typingUntil]);
 
   // Mark thread read + presence heartbeat for push gating.
-  // Deduped: only writes when the watermark actually advances; on success the
-  // sidebar badge is cleared instantly via onReadStateChanged.
+  // Private encrypted read-state and peer-visible receipts use separate
+  // watermarks so a successful updateReadState never suppresses receipt retries.
   useEffect(() => {
     if (loading || !groupId || messages.length === 0) return;
 
@@ -743,7 +1073,6 @@ export function useMessages(
           onReadStateChangedRef.current?.(groupId);
         })
         .catch((err) => {
-          // Allow a retry on the next messages change.
           if (lastSentReadUptoRef.current === maxOrder) {
             lastSentReadUptoRef.current = 0;
           }
@@ -751,10 +1080,13 @@ export function useMessages(
         });
     }
 
+    // Peer receipts (independent of private read-state success).
+    schedulePeerReadAck(maxOrder);
+
     client.messaging.transport
       .postPresence({ signer, active: true })
       .catch((err) => console.warn('Failed to post presence:', err));
-  }, [messages, loading, groupId, client, signer]);
+  }, [messages, loading, groupId, client, signer, schedulePeerReadAck]);
 
   // ------------------------------------------------------------------
   // Typing broadcast (fire-and-forget, ephemeral)
@@ -807,6 +1139,8 @@ export function useMessages(
           pageLedgerRef.current,
           orders,
         );
+        const tip = Math.max(...orders);
+        scheduleDeliveredAck(tip);
         cursor = pageLedgerRef.current.maxOrder ?? cursor;
         if (!result.hasNext) break;
       }
@@ -815,13 +1149,14 @@ export function useMessages(
     } finally {
       isCatchingUpRef.current = false;
     }
-  }, [uuid, loading, client, signer]);
+  }, [uuid, loading, client, signer, scheduleDeliveredAck]);
 
   useEffect(() => {
     if (loading) return;
     const onVisible = () => {
       if (document.visibilityState === 'visible') {
         void catchUpNewerMessages();
+        void resyncReceipts();
       }
     };
     document.addEventListener('visibilitychange', onVisible);
@@ -830,7 +1165,7 @@ export function useMessages(
       document.removeEventListener('visibilitychange', onVisible);
       window.removeEventListener('focus', onVisible);
     };
-  }, [loading, catchUpNewerMessages]);
+  }, [loading, catchUpNewerMessages, resyncReceipts]);
 
   // ------------------------------------------------------------------
   // Load older messages (before_order) — skip cursors already fetched
@@ -1289,6 +1624,9 @@ export function useMessages(
     typingMembers: [...typingUntil.keys()],
     onlineMembers,
     presenceRecords,
+    memberReceipts,
+    tickForOrder,
+    applyReceiptEvent,
     initialReadUpto,
     sendMessage,
     editMessage,

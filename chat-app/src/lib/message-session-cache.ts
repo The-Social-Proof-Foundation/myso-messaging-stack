@@ -29,6 +29,8 @@ export interface CachedMessage {
   isAgentMessage?: boolean;
   principalOwner?: string;
   subAgentId?: string;
+  kind?: 'text' | 'system';
+  system?: { type: string; member: string; actor?: string | null };
 }
 
 export type CachedReactions = Map<number, RelayerReactionEntry[]>;

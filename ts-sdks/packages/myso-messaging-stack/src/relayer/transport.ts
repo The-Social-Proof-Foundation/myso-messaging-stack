@@ -11,6 +11,8 @@ import type {
 	FetchMessagesParams,
 	FetchMessagesResult,
 	FetchUnreadCountsParams,
+	ConversationPrefs,
+	GetConversationPrefsParams,
 	GetGroupPresenceParams,
 	GetGroupReceiptsParams,
 	GetUserReadStateParams,
@@ -25,6 +27,7 @@ import type {
 	PostGroupReactionParams,
 	PostPresenceParams,
 	PostPushTokenParams,
+	PutConversationPrefsParams,
 	PutUserReadStateParams,
 	PutUserReadStateResult,
 	RelayerMessage,
@@ -83,6 +86,8 @@ export interface RelayerTransport {
 	setGroupPin(params: SetGroupPinParams): Promise<void>;
 	getGroupReceipts(params: GetGroupReceiptsParams): Promise<GroupReceiptState>;
 	postGroupReceipts(params: PostGroupReceiptsParams): Promise<void>;
+	getConversationPrefs(params: GetConversationPrefsParams): Promise<ConversationPrefs>;
+	putConversationPrefs(params: PutConversationPrefsParams): Promise<ConversationPrefs>;
 	getUserReadState(params: GetUserReadStateParams): Promise<UserReadStateWire>;
 	/**
 	 * Stores the encrypted read-state blob. Pass `expectedVersion` for

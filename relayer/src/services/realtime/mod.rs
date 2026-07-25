@@ -13,7 +13,7 @@ use uuid::Uuid;
 use crate::auth::MembershipStore;
 use crate::config::Config;
 use crate::handlers::messages::response::MessageResponse;
-use crate::models::ReactionEntry;
+use crate::models::{MemberReceipt, ReactionEntry};
 use crate::storage::{StorageAdapter, StorageResult};
 
 pub use pg_listener::PgListenerService;
@@ -21,6 +21,8 @@ pub use pg_listener::PgListenerService;
 pub const MESSAGE_EVENTS_CHANNEL: &str = "message_events";
 
 pub const MESSAGE_CREATED_EVENT_TYPE: &str = "message.created";
+pub const MESSAGE_DELETED_EVENT_TYPE: &str = "message.deleted";
+pub const MESSAGE_EDITED_EVENT_TYPE: &str = "message.edited";
 pub const REACTION_UPDATED_EVENT_TYPE: &str = "reaction.updated";
 pub const GROUP_ACTIVITY_EVENT_TYPE: &str = "group.activity";
 pub const READ_STATE_UPDATED_EVENT_TYPE: &str = "read_state.updated";
@@ -34,6 +36,7 @@ pub const PRESENCE_UPDATED_EVENT_TYPE: &str = "presence.updated";
 /// Cross-instance NOTIFY signal for wallet presence transitions. Carries no
 /// group — each instance fans out through its own membership store.
 pub const PRESENCE_CHANGED_SIGNAL_TYPE: &str = "presence.changed";
+pub const RECEIPT_UPDATED_EVENT_TYPE: &str = "receipt.updated";
 
 /// Seconds a `typing.start` stays valid without a refresh. The explicit
 /// `typing.stop` is the primary clear; this TTL is the recovery mechanism
@@ -55,6 +58,52 @@ impl MessageCreatedEvent {
     pub fn new(group_id: String, message_id: Uuid, order: i64, sender: String) -> Self {
         Self {
             event_type: "message.created".to_string(),
+            group_id,
+            message_id,
+            order,
+            sender,
+        }
+    }
+}
+
+/// Cross-instance signal for soft-deleted messages (open-thread tombstone fan-out).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MessageDeletedEvent {
+    #[serde(rename = "type")]
+    pub event_type: String,
+    pub group_id: String,
+    pub message_id: Uuid,
+    pub order: i64,
+    pub sender: String,
+}
+
+impl MessageDeletedEvent {
+    pub fn new(group_id: String, message_id: Uuid, order: i64, sender: String) -> Self {
+        Self {
+            event_type: MESSAGE_DELETED_EVENT_TYPE.to_string(),
+            group_id,
+            message_id,
+            order,
+            sender,
+        }
+    }
+}
+
+/// Cross-instance signal for edited messages (open-thread ciphertext fan-out).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MessageEditedEvent {
+    #[serde(rename = "type")]
+    pub event_type: String,
+    pub group_id: String,
+    pub message_id: Uuid,
+    pub order: i64,
+    pub sender: String,
+}
+
+impl MessageEditedEvent {
+    pub fn new(group_id: String, message_id: Uuid, order: i64, sender: String) -> Self {
+        Self {
+            event_type: MESSAGE_EDITED_EVENT_TYPE.to_string(),
             group_id,
             message_id,
             order,
@@ -86,6 +135,29 @@ impl ReactionUpdatedEvent {
             emoji: entry.emoji.clone(),
             count: entry.count,
             reactors: entry.reactors.clone(),
+        }
+    }
+}
+
+/// Peer-visible delivery/read watermark advance (group WS + user feed).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ReceiptUpdatedEvent {
+    #[serde(rename = "type")]
+    pub event_type: String,
+    pub group_id: String,
+    pub member: String,
+    pub delivered_upto: u64,
+    pub read_upto: u64,
+}
+
+impl ReceiptUpdatedEvent {
+    pub fn new(group_id: String, receipt: &MemberReceipt) -> Self {
+        Self {
+            event_type: RECEIPT_UPDATED_EVENT_TYPE.to_string(),
+            group_id,
+            member: receipt.member.clone(),
+            delivered_upto: receipt.delivered_upto,
+            read_upto: receipt.read_upto,
         }
     }
 }
@@ -201,7 +273,10 @@ pub async fn notify_user_feed_event(pool: &sqlx::PgPool, event: &UserFeedEvent) 
             item_type: item_type.clone(),
             status: status.clone(),
         }),
-        UserFeedEvent::GroupActivity { .. } | UserFeedEvent::ReadStateUpdated { .. } => {
+        UserFeedEvent::GroupActivity { .. }
+        | UserFeedEvent::ReadStateUpdated { .. }
+        | UserFeedEvent::ReceiptUpdated { .. } => {
+            // Fan-out via storage-side NOTIFY (message.created / read-state / receipts).
             return Ok(());
         }
     }
@@ -230,6 +305,15 @@ pub enum UserFeedEvent {
     /// The wallet's encrypted read-state blob changed (cross-device sync) —
     /// delivered only to connections of that wallet.
     ReadStateUpdated { wallet: String, blob_version: u64 },
+    /// A peer advanced delivery/read watermarks in `group_id` — membership-
+    /// filtered (same as `group.activity`) so senders see ticks without an
+    /// open group socket.
+    ReceiptUpdated {
+        group_id: String,
+        member: String,
+        delivered_upto: u64,
+        read_upto: u64,
+    },
     /// A conversation appeared for `wallet` (created/invited/joined) —
     /// delivered only to connections of that wallet.
     GroupDiscovered {
@@ -269,13 +353,40 @@ pub enum DiscoveryReason {
     Joined,
 }
 
+/// Membership check with case-insensitive fallback for address / group id.
+fn membership_allows(membership: &dyn MembershipStore, group_id: &str, wallet: &str) -> bool {
+    if membership.is_member(group_id, wallet) {
+        return true;
+    }
+    let wallet_l = wallet.to_ascii_lowercase();
+    let group_l = group_id.to_ascii_lowercase();
+    if (wallet_l != wallet || group_l != group_id) && membership.is_member(&group_l, &wallet_l) {
+        return true;
+    }
+    // Scan reverse index when exact keys differ only by casing.
+    for candidate in [wallet, wallet_l.as_str()] {
+        for known_group in membership.groups_for_member(candidate) {
+            if known_group.eq_ignore_ascii_case(group_id)
+                && membership.is_member(&known_group, candidate)
+            {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 impl UserFeedEvent {
     /// Whether this event should be delivered to a connection authenticated
-    /// as `wallet`. Activity events use a membership check; wallet-targeted
-    /// events use an exact match.
+    /// as `wallet`. Activity / receipt events use a membership check (with
+    /// case-insensitive fallback for hex address / group id casing drift);
+    /// wallet-targeted events use an exact match.
     pub fn matches_wallet(&self, wallet: &str, membership: &dyn MembershipStore) -> bool {
         match self {
-            UserFeedEvent::GroupActivity { group_id, .. } => membership.is_member(group_id, wallet),
+            UserFeedEvent::GroupActivity { group_id, .. }
+            | UserFeedEvent::ReceiptUpdated { group_id, .. } => {
+                membership_allows(membership, group_id, wallet)
+            }
             UserFeedEvent::ReadStateUpdated { wallet: target, .. } => target == wallet,
             UserFeedEvent::GroupDiscovered { wallet: target, .. } => target == wallet,
             UserFeedEvent::GroupHidden { wallet: target, .. } => target == wallet,
@@ -295,6 +406,18 @@ impl UserFeedEvent {
                 "type": GROUP_ACTIVITY_EVENT_TYPE,
                 "group_id": group_id,
                 "latest_order": latest_order,
+            }),
+            UserFeedEvent::ReceiptUpdated {
+                group_id,
+                member,
+                delivered_upto,
+                read_upto,
+            } => serde_json::json!({
+                "type": RECEIPT_UPDATED_EVENT_TYPE,
+                "group_id": group_id,
+                "member": member,
+                "delivered_upto": delivered_upto,
+                "read_upto": read_upto,
             }),
             UserFeedEvent::ReadStateUpdated {
                 wallet,
@@ -424,15 +547,19 @@ pub struct MessageWireEvent {
 }
 
 /// Events fanned out to local WebSocket connections. Each variant serializes
-/// its own `type` discriminator (`message.created`, `reaction.updated`,
-/// `typing.start`/`typing.stop`, `presence.updated`).
+/// its own `type` discriminator (`message.created`, `message.deleted`,
+/// `message.edited`, `reaction.updated`, `typing.start`/`typing.stop`,
+/// `presence.updated`).
 #[derive(Debug, Clone, Serialize)]
 #[serde(untagged)]
 pub enum RealtimeEvent {
     MessageCreated(MessageWireEvent),
+    MessageDeleted(MessageWireEvent),
+    MessageEdited(MessageWireEvent),
     ReactionUpdated(ReactionUpdatedEvent),
     Typing(TypingEvent),
     PresenceUpdated(PresenceUpdatedEvent),
+    ReceiptUpdated(ReceiptUpdatedEvent),
 }
 
 /// Broadcast fan-out to local WebSocket connections: per-group channels for
@@ -504,6 +631,26 @@ impl RealtimeHub {
         self.publish_event(group_id, event);
     }
 
+    /// Open-thread tombstone fan-out. Does **not** bump sidebar `group.activity`
+    /// or push — peers not in the thread learn on next open/refetch.
+    pub fn publish_deleted_wire(&self, group_id: &str, message: MessageResponse) {
+        let event = RealtimeEvent::MessageDeleted(MessageWireEvent {
+            event_type: MESSAGE_DELETED_EVENT_TYPE,
+            message,
+        });
+        self.publish_event(group_id, event);
+    }
+
+    /// Open-thread edit fan-out (new ciphertext). Does **not** bump sidebar
+    /// `group.activity` — order is unchanged.
+    pub fn publish_edited_wire(&self, group_id: &str, message: MessageResponse) {
+        let event = RealtimeEvent::MessageEdited(MessageWireEvent {
+            event_type: MESSAGE_EDITED_EVENT_TYPE,
+            message,
+        });
+        self.publish_event(group_id, event);
+    }
+
     pub fn publish_reaction(&self, group_id: &str, event: ReactionUpdatedEvent) {
         self.publish_event(group_id, RealtimeEvent::ReactionUpdated(event));
     }
@@ -514,6 +661,17 @@ impl RealtimeHub {
 
     pub fn publish_presence(&self, group_id: &str, event: PresenceUpdatedEvent) {
         self.publish_event(group_id, RealtimeEvent::PresenceUpdated(event));
+    }
+
+    /// Group channel + membership-filtered user feed (open thread + inbox ticks).
+    pub fn publish_receipt(&self, group_id: &str, event: ReceiptUpdatedEvent) {
+        self.publish_user_event(UserFeedEvent::ReceiptUpdated {
+            group_id: event.group_id.clone(),
+            member: event.member.clone(),
+            delivered_upto: event.delivered_upto,
+            read_upto: event.read_upto,
+        });
+        self.publish_event(group_id, RealtimeEvent::ReceiptUpdated(event));
     }
 
     pub fn publish_user_event(&self, event: UserFeedEvent) {
@@ -543,6 +701,28 @@ impl RealtimeHub {
         let message = storage.get_message(event.message_id).await?;
         let wire: MessageResponse = message.into();
         hub.publish_wire(&event.group_id, wire);
+        Ok(())
+    }
+
+    pub async fn load_and_publish_deleted(
+        hub: &RealtimeHub,
+        storage: &Arc<dyn StorageAdapter>,
+        event: MessageDeletedEvent,
+    ) -> StorageResult<()> {
+        let message = storage.get_message(event.message_id).await?;
+        let wire: MessageResponse = message.into();
+        hub.publish_deleted_wire(&event.group_id, wire);
+        Ok(())
+    }
+
+    pub async fn load_and_publish_edited(
+        hub: &RealtimeHub,
+        storage: &Arc<dyn StorageAdapter>,
+        event: MessageEditedEvent,
+    ) -> StorageResult<()> {
+        let message = storage.get_message(event.message_id).await?;
+        let wire: MessageResponse = message.into();
+        hub.publish_edited_wire(&event.group_id, wire);
         Ok(())
     }
 }
@@ -660,6 +840,52 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn publish_deleted_wire_delivers_without_group_activity() {
+        let hub = RealtimeHub::new();
+        let mut rx = hub.subscribe("group-1");
+        let mut feed_rx = hub.subscribe_user_feed();
+
+        let msg = sample_message("group-1", 1);
+        let mut wire: MessageResponse = msg.into();
+        wire.is_deleted = true;
+        wire.order = 3;
+        hub.publish_deleted_wire("group-1", wire);
+
+        let event = rx.recv().await.expect("event");
+        let RealtimeEvent::MessageDeleted(wire) = event else {
+            panic!("expected message.deleted event");
+        };
+        assert_eq!(wire.event_type, MESSAGE_DELETED_EVENT_TYPE);
+        assert!(wire.message.is_deleted);
+
+        // Tombstones must not bump sidebar tip activity.
+        assert!(feed_rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn publish_edited_wire_delivers_without_group_activity() {
+        let hub = RealtimeHub::new();
+        let mut rx = hub.subscribe("group-1");
+        let mut feed_rx = hub.subscribe_user_feed();
+
+        let msg = sample_message("group-1", 1);
+        let mut wire: MessageResponse = msg.into();
+        wire.is_edited = true;
+        wire.order = 3;
+        hub.publish_edited_wire("group-1", wire);
+
+        let event = rx.recv().await.expect("event");
+        let RealtimeEvent::MessageEdited(wire) = event else {
+            panic!("expected message.edited event");
+        };
+        assert_eq!(wire.event_type, MESSAGE_EDITED_EVENT_TYPE);
+        assert!(wire.message.is_edited);
+
+        // Edits keep the same order — must not bump sidebar tip activity.
+        assert!(feed_rx.try_recv().is_err());
+    }
+
     #[test]
     fn user_feed_event_wallet_filtering() {
         let store = crate::auth::InMemoryMembershipStore::new();
@@ -675,6 +901,15 @@ mod tests {
         };
         assert!(activity.matches_wallet("0xalice", &store));
         assert!(!activity.matches_wallet("0xbob", &store));
+
+        let receipt = UserFeedEvent::ReceiptUpdated {
+            group_id: "group-1".to_string(),
+            member: "0xbob".to_string(),
+            delivered_upto: 2,
+            read_upto: 1,
+        };
+        assert!(receipt.matches_wallet("0xAlice", &store));
+        assert!(!receipt.matches_wallet("0xbob", &store));
 
         // Wallet-targeted events use exact match — membership is irrelevant.
         let discovered = UserFeedEvent::GroupDiscovered {

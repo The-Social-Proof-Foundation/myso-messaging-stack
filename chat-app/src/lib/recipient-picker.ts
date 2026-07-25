@@ -11,6 +11,8 @@ export type RecipientPeer = {
   displayName: string | null;
   photoURL: string | null;
   isCardless: boolean;
+  /** Either-direction block with the viewer (social-server check). */
+  blocked?: boolean;
 };
 
 function socialServerBase(): string {

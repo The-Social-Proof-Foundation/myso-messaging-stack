@@ -35,7 +35,9 @@ use std::sync::Arc;
 use super::{
     permissions::MessagingPermission,
     schemes::SignatureScheme,
-    signature::{validate_timestamp, verify_address_matches_pubkey, verify_signature},
+    signature::{
+        strip_hex_prefix, validate_timestamp, verify_address_matches_pubkey, verify_signature,
+    },
     types::{AuthContext, AuthError},
     MembershipStore,
 };
@@ -112,7 +114,7 @@ pub async fn auth_middleware(
     };
 
     // 3. Decode public key (first byte is the scheme flag)
-    let public_key_with_flag = match hex::decode(&public_key_hex) {
+    let public_key_with_flag = match hex::decode(strip_hex_prefix(&public_key_hex)) {
         Ok(bytes) => bytes,
         Err(e) => {
             return auth_error_response(
@@ -161,7 +163,7 @@ pub async fn auth_middleware(
     }
 
     // 4. Decode signature from hex
-    let signature_bytes = match hex::decode(&signature_hex) {
+    let signature_bytes = match hex::decode(strip_hex_prefix(&signature_hex)) {
         Ok(bytes) => bytes,
         Err(e) => {
             return auth_error_response(
@@ -183,11 +185,12 @@ pub async fn auth_middleware(
         }
     };
 
-    // 6. Extract auth fields and determine what was signed.
-    //    - POST/PUT have a body: auth fields come from body, signed message = body bytes
-    //    - GET/DELETE have no body: auth fields come from headers, signed message = canonical string
-    let (group_id, sender_address, timestamp, message_bytes) = if !body_bytes.is_empty() {
-        // POST/PUT: parse auth fields from JSON body
+    // 6. Extract auth fields and determine what was signed by HTTP method
+    //    (not body emptiness — a GET with a stray body must not use body auth).
+    //    - POST/PUT: auth fields in JSON body; signed message = raw body bytes
+    //    - GET/DELETE: auth fields in headers; signed message = canonical string
+    let use_body_auth = matches!(method, Method::POST | Method::PUT);
+    let (group_id, sender_address, timestamp, message_bytes) = if use_body_auth {
         let body_auth: BodyAuthFields = match serde_json::from_slice(&body_bytes) {
             Ok(fields) => fields,
             Err(e) => {
@@ -199,7 +202,7 @@ pub async fn auth_middleware(
             }
         };
 
-        // The entire body is the signed message (no stripping needed)
+        // Entire body is the signed message (must match client bytes exactly).
         let message = body_bytes.to_vec();
         (
             body_auth.group_id,
@@ -208,7 +211,6 @@ pub async fn auth_middleware(
             message,
         )
     } else {
-        // GET/DELETE: parse auth fields from headers
         let sender_address = match get_header(&parts.headers, "x-sender-address") {
             Some(v) => v,
             None => {
@@ -250,7 +252,9 @@ pub async fn auth_middleware(
             }
         };
 
-        // Canonical signed message for bodyless requests: "timestamp:sender_address:group_id"
+        // Clients sign lowercase address + groupId; normalize before rebuild.
+        let sender_address = sender_address.to_ascii_lowercase();
+        let group_id = group_id.to_ascii_lowercase();
         let canonical = format!("{}:{}:{}", timestamp, sender_address, group_id);
         let message = canonical.into_bytes();
         (group_id, sender_address, timestamp, message)
@@ -271,6 +275,10 @@ pub async fn auth_middleware(
     if let Err(e) = verify_address_matches_pubkey(&sender_address, public_key_bytes, scheme) {
         return auth_error_response(StatusCode::UNAUTHORIZED, e);
     }
+
+    // Normalize identities for membership + auth context (body path may be mixed-case).
+    let group_id = group_id.to_ascii_lowercase();
+    let sender_address = sender_address.to_ascii_lowercase();
 
     // 10. Check permission in membership store
     if !state

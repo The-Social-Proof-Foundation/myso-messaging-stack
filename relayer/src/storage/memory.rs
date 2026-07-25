@@ -7,8 +7,9 @@ use std::sync::RwLock;
 use uuid::Uuid;
 
 use crate::models::{
-    Attachment, EncryptedBlobRecord, GroupActivity, Message, PaidEscrowRecord, PushTokenRecord,
-    ReactionEntry, ReceiptStateResponse, SyncStatus,
+    Attachment, ConversationPreferences, ConversationPreferencesPatch, EncryptedBlobRecord,
+    GroupActivity, Message, PaidEscrowRecord, PushTokenRecord, ReactionEntry, ReceiptStateResponse,
+    SyncStatus,
 };
 
 use super::adapter::{PutUserReadStateResult, StorageAdapter, StorageError, StorageResult};
@@ -39,6 +40,8 @@ pub struct InMemoryStorage {
     presence: RwLock<HashMap<String, chrono::DateTime<chrono::Utc>>>,
     /// On-chain paid DM escrows keyed by `(group_id, seq)`.
     paid_escrows: RwLock<HashMap<(String, i64), PaidEscrowRecord>>,
+    /// Per-member conversation prefs keyed by `(group_id, wallet)`.
+    conversation_preferences: RwLock<HashMap<(String, String), ConversationPreferences>>,
 }
 
 impl InMemoryStorage {
@@ -55,6 +58,7 @@ impl InMemoryStorage {
             push_tokens: RwLock::new(HashMap::new()),
             presence: RwLock::new(HashMap::new()),
             paid_escrows: RwLock::new(HashMap::new()),
+            conversation_preferences: RwLock::new(HashMap::new()),
         }
     }
 
@@ -95,6 +99,15 @@ impl StorageAdapter for InMemoryStorage {
         // Check for duplicate ID
         if messages.contains_key(&message.id) {
             return Err(StorageError::DuplicateId(message.id));
+        }
+
+        if let Some(key) = message.idempotency_key.as_deref() {
+            if messages
+                .values()
+                .any(|m| m.idempotency_key.as_deref() == Some(key))
+            {
+                return Err(StorageError::DuplicateIdempotencyKey);
+            }
         }
 
         // O(1) nonce duplicate check via HashSet
@@ -453,40 +466,90 @@ impl StorageAdapter for InMemoryStorage {
         Ok(v)
     }
 
-    async fn update_receipt_delivered(
+    async fn advance_member_receipts(
         &self,
         group_id: &str,
         member: &str,
-        upto: u64,
-    ) -> StorageResult<()> {
-        let mut m = self
+        delivered_upto: Option<u64>,
+        read_upto: Option<u64>,
+    ) -> StorageResult<Option<crate::models::MemberReceipt>> {
+        if delivered_upto.is_none() && read_upto.is_none() {
+            return Ok(None);
+        }
+        let tip = self
+            .get_group_activity(group_id, 0)
+            .await?
+            .latest_order
+            .max(0) as u64;
+        let clamp = |v: u64| v.min(tip);
+        let key = (group_id.to_string(), member.to_string());
+
+        let mut dmap = self
             .delivered_watermarks
             .write()
             .map_err(|e| StorageError::OperationFailed(format!("Lock poisoned: {}", e)))?;
-        let key = (group_id.to_string(), member.to_string());
-        let cur = m.get(&key).copied().unwrap_or(0);
-        if upto > cur {
-            m.insert(key, upto);
-        }
-        Ok(())
-    }
-
-    async fn update_receipt_read(
-        &self,
-        group_id: &str,
-        member: &str,
-        upto: u64,
-    ) -> StorageResult<()> {
-        let mut m = self
+        let mut rmap = self
             .read_watermarks
             .write()
             .map_err(|e| StorageError::OperationFailed(format!("Lock poisoned: {}", e)))?;
-        let key = (group_id.to_string(), member.to_string());
-        let cur = m.get(&key).copied().unwrap_or(0);
-        if upto > cur {
-            m.insert(key, upto);
+
+        let cur_d = dmap.get(&key).copied().unwrap_or(0);
+        let cur_r = rmap.get(&key).copied().unwrap_or(0);
+        let mut next_d = cur_d;
+        let mut next_r = cur_r;
+        if let Some(d) = delivered_upto.map(clamp) {
+            next_d = next_d.max(d);
         }
-        Ok(())
+        if let Some(r) = read_upto.map(clamp) {
+            next_r = next_r.max(r);
+        }
+        next_d = next_d.max(next_r);
+        if next_d == cur_d && next_r == cur_r {
+            return Ok(None);
+        }
+        dmap.insert(key.clone(), next_d);
+        rmap.insert(key, next_r);
+        Ok(Some(crate::models::MemberReceipt {
+            member: member.to_string(),
+            delivered_upto: next_d,
+            read_upto: next_r,
+        }))
+    }
+
+    async fn list_group_receipts(
+        &self,
+        group_id: &str,
+    ) -> StorageResult<Vec<crate::models::MemberReceipt>> {
+        let d = self
+            .delivered_watermarks
+            .read()
+            .map_err(|e| StorageError::OperationFailed(format!("Lock poisoned: {}", e)))?;
+        let r = self
+            .read_watermarks
+            .read()
+            .map_err(|e| StorageError::OperationFailed(format!("Lock poisoned: {}", e)))?;
+        let mut members: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        for (g, m) in d.keys() {
+            if g == group_id {
+                members.insert(m.clone());
+            }
+        }
+        for (g, m) in r.keys() {
+            if g == group_id {
+                members.insert(m.clone());
+            }
+        }
+        Ok(members
+            .into_iter()
+            .map(|member| {
+                let key = (group_id.to_string(), member.clone());
+                crate::models::MemberReceipt {
+                    member,
+                    delivered_upto: d.get(&key).copied().unwrap_or(0),
+                    read_upto: r.get(&key).copied().unwrap_or(0),
+                }
+            })
+            .collect())
     }
 
     async fn get_receipt_state(
@@ -507,6 +570,72 @@ impl StorageAdapter for InMemoryStorage {
             delivered_upto: d.get(&key).copied(),
             read_upto: r.get(&key).copied(),
         })
+    }
+
+    async fn get_conversation_preferences(
+        &self,
+        group_id: &str,
+        wallet: &str,
+    ) -> StorageResult<Option<ConversationPreferences>> {
+        let map = self
+            .conversation_preferences
+            .read()
+            .map_err(|e| StorageError::OperationFailed(format!("Lock poisoned: {}", e)))?;
+        Ok(map
+            .get(&(group_id.to_string(), wallet.to_string()))
+            .cloned())
+    }
+
+    async fn upsert_conversation_preferences(
+        &self,
+        group_id: &str,
+        wallet: &str,
+        patch: ConversationPreferencesPatch,
+    ) -> StorageResult<ConversationPreferences> {
+        let mut map = self
+            .conversation_preferences
+            .write()
+            .map_err(|e| StorageError::OperationFailed(format!("Lock poisoned: {}", e)))?;
+        let key = (group_id.to_string(), wallet.to_string());
+        let current = map
+            .get(&key)
+            .cloned()
+            .unwrap_or_else(ConversationPreferences::defaults);
+        let had_row = map.contains_key(&key);
+        let next = ConversationPreferences {
+            notification_mode: patch
+                .notification_mode
+                .unwrap_or(current.notification_mode),
+            receipt_mode: patch.receipt_mode.unwrap_or(current.receipt_mode),
+            version: if had_row {
+                current.version.saturating_add(1)
+            } else {
+                1
+            },
+        };
+        map.insert(key, next.clone());
+        Ok(next)
+    }
+
+    async fn list_notification_modes(
+        &self,
+        group_id: &str,
+        wallets: &[String],
+    ) -> StorageResult<HashMap<String, String>> {
+        if wallets.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let map = self
+            .conversation_preferences
+            .read()
+            .map_err(|e| StorageError::OperationFailed(format!("Lock poisoned: {}", e)))?;
+        let mut out = HashMap::new();
+        for wallet in wallets {
+            if let Some(prefs) = map.get(&(group_id.to_string(), wallet.clone())) {
+                out.insert(wallet.clone(), prefs.notification_mode.clone());
+            }
+        }
+        Ok(out)
     }
 
     async fn get_user_read_state(&self, wallet: &str) -> StorageResult<Option<EncryptedBlobRecord>> {
@@ -664,7 +793,8 @@ impl StorageAdapter for InMemoryStorage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::Message;
+    use crate::models::{Message, SystemType};
+    use chrono::Utc;
 
     fn unique_nonce(i: u8) -> Vec<u8> {
         let mut nonce = vec![0u8; 12];
@@ -1118,6 +1248,32 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_system_message_idempotency_key() {
+        let storage = InMemoryStorage::new();
+        let key = "txdigest:3:member_joined".to_string();
+        let a = Message::new_system(
+            "group_1".into(),
+            "0xmember".into(),
+            SystemType::MemberJoined,
+            None,
+            key.clone(),
+            Utc::now(),
+        );
+        let b = Message::new_system(
+            "group_1".into(),
+            "0xmember".into(),
+            SystemType::MemberJoined,
+            None,
+            key,
+            Utc::now(),
+        );
+        let created = storage.create_message(a).await.unwrap();
+        assert_eq!(created.order, Some(1));
+        let dup = storage.create_message(b).await;
+        assert!(matches!(dup, Err(StorageError::DuplicateIdempotencyKey)));
+    }
+
+    #[tokio::test]
     async fn test_get_message() {
         let storage = InMemoryStorage::new();
         let msg = Message::new(
@@ -1355,6 +1511,53 @@ mod tests {
 
         assert_eq!(fetched.attachments.len(), 2);
         assert_eq!(fetched.attachments, attachments);
+    }
+
+    #[tokio::test]
+    async fn conversation_preferences_partial_merge_and_version() {
+        let storage = InMemoryStorage::new();
+        assert!(storage
+            .get_conversation_preferences("g1", "0xalice")
+            .await
+            .unwrap()
+            .is_none());
+
+        let first = storage
+            .upsert_conversation_preferences(
+                "g1",
+                "0xalice",
+                ConversationPreferencesPatch {
+                    notification_mode: Some("none".to_string()),
+                    receipt_mode: None,
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(first.notification_mode, "none");
+        assert_eq!(first.receipt_mode, "full");
+        assert_eq!(first.version, 1);
+
+        let second = storage
+            .upsert_conversation_preferences(
+                "g1",
+                "0xalice",
+                ConversationPreferencesPatch {
+                    notification_mode: None,
+                    receipt_mode: Some("delivered_only".to_string()),
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(second.notification_mode, "none");
+        assert_eq!(second.receipt_mode, "delivered_only");
+        assert_eq!(second.version, 2);
+
+        let modes = storage
+            .list_notification_modes("g1", &["0xalice".into(), "0xbob".into()])
+            .await
+            .unwrap();
+        assert_eq!(modes.get("0xalice").map(String::as_str), Some("none"));
+        assert!(!modes.contains_key("0xbob"));
     }
 
     #[tokio::test]

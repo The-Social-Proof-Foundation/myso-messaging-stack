@@ -5,12 +5,15 @@ import { fromHex } from '@socialproof/myso/utils';
 
 import type { Attachment } from '../attachments/types.js';
 import type {
+	MessageKind,
 	RelayerMessage,
 	RelayerPresenceEvent,
 	RelayerReactionEvent,
+	RelayerReceiptEvent,
 	RelayerTypingEvent,
 	RelayerUserEvent,
 	SyncStatus,
+	SystemMessage,
 	WorkflowItem,
 } from './types.js';
 
@@ -20,6 +23,12 @@ export interface WireAttachment {
 	nonce: string;
 	encrypted_metadata: string;
 	metadata_nonce: string;
+}
+
+export interface WireSystemMessage {
+	type: string;
+	member: string;
+	actor?: string | null;
 }
 
 export interface WireMessageResponse {
@@ -42,10 +51,22 @@ export interface WireMessageResponse {
 	principal_owner?: string | null;
 	sub_agent_id?: string | null;
 	identity_class?: number | null;
+	kind?: string | null;
+	system?: WireSystemMessage | null;
 }
 
 export interface WireMessageCreatedEvent {
 	type: 'message.created';
+	message: WireMessageResponse;
+}
+
+export interface WireMessageDeletedEvent {
+	type: 'message.deleted';
+	message: WireMessageResponse;
+}
+
+export interface WireMessageEditedEvent {
+	type: 'message.edited';
 	message: WireMessageResponse;
 }
 
@@ -75,10 +96,20 @@ export interface WirePresenceEvent {
 	online: boolean;
 }
 
+/** `receipt.updated` WS frame (snake_case). */
+export interface WireReceiptUpdatedEvent {
+	type: 'receipt.updated';
+	group_id: string;
+	member: string;
+	delivered_upto: number;
+	read_upto: number;
+}
+
 /** User feed (`/v1/users/ws`) frames (snake_case). */
 export type WireUserFeedEvent =
 	| { type: 'group.activity'; group_id: string; latest_order: number }
 	| { type: 'read_state.updated'; wallet: string; blob_version: number }
+	| WireReceiptUpdatedEvent
 	| { type: 'group.discovered'; group_id: string; reason: string }
 	| { type: 'group.hidden'; group_id: string }
 	| { type: 'workflow.item.created'; item_id: string; item_type: string; status: string }
@@ -162,6 +193,16 @@ export function fromWirePresenceEvent(wire: WirePresenceEvent): RelayerPresenceE
 	};
 }
 
+/** Convert a `receipt.updated` wire frame to a RelayerReceiptEvent domain object. */
+export function fromWireReceiptEvent(wire: WireReceiptUpdatedEvent): RelayerReceiptEvent {
+	return {
+		groupId: wire.group_id,
+		member: wire.member,
+		deliveredUpto: wire.delivered_upto,
+		readUpto: wire.read_upto,
+	};
+}
+
 /** Convert a user feed wire frame to a RelayerUserEvent, or null when unknown. */
 export function fromWireUserFeedEvent(wire: WireUserFeedEvent): RelayerUserEvent | null {
 	switch (wire.type) {
@@ -173,6 +214,14 @@ export function fromWireUserFeedEvent(wire: WireUserFeedEvent): RelayerUserEvent
 			};
 		case 'read_state.updated':
 			return { type: 'read_state.updated', blobVersion: wire.blob_version };
+		case 'receipt.updated':
+			return {
+				type: 'receipt.updated',
+				groupId: wire.group_id,
+				member: wire.member,
+				deliveredUpto: wire.delivered_upto,
+				readUpto: wire.read_upto,
+			};
 		case 'group.discovered': {
 			const reason =
 				wire.reason === 'created' || wire.reason === 'joined' ? wire.reason : 'invited';
@@ -219,8 +268,21 @@ export function fromWireWorkflowItem(wire: WireWorkflowItem): WorkflowItem {
 	};
 }
 
+function parseSystemMessage(wire: WireSystemMessage | null | undefined): SystemMessage | undefined {
+	if (!wire || typeof wire.type !== 'string' || typeof wire.member !== 'string') {
+		return undefined;
+	}
+	return {
+		type: wire.type,
+		member: wire.member,
+		actor: wire.actor ?? null,
+	};
+}
+
 /** Convert a relayer JSON message to a RelayerMessage domain object. */
 export function fromWireMessage(wire: WireMessageResponse): RelayerMessage {
+	const kind: MessageKind = wire.kind === 'system' ? 'system' : 'text';
+	const system = kind === 'system' ? parseSystemMessage(wire.system) : undefined;
 	return {
 		messageId: wire.message_id,
 		groupId: wire.group_id,
@@ -245,5 +307,7 @@ export function fromWireMessage(wire: WireMessageResponse): RelayerMessage {
 				? undefined
 				: (wire.identity_class as 0 | 1 | 2),
 		isAgentMessage: Boolean(wire.principal_owner),
+		kind,
+		system,
 	};
 }

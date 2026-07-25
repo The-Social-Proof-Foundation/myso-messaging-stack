@@ -159,3 +159,48 @@ async fn push_skipped_when_token_environment_mismatch() {
 
     mock.verify().await;
 }
+
+#[tokio::test]
+async fn push_skipped_when_notification_mode_none() {
+    use messaging_relayer::models::ConversationPreferencesPatch;
+
+    let mock = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path_regex(r"/3/device/.*"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&mock)
+        .await;
+
+    let storage: Arc<dyn StorageAdapter> = Arc::new(InMemoryStorage::new());
+    storage
+        .upsert_push_token(sample_token("sandbox"))
+        .await
+        .unwrap();
+    storage
+        .upsert_conversation_preferences(
+            GROUP_ID,
+            RECIPIENT,
+            ConversationPreferencesPatch {
+                notification_mode: Some("none".to_string()),
+                receipt_mode: None,
+            },
+        )
+        .await
+        .unwrap();
+
+    let membership = setup_membership();
+    let push = setup_push_service(&mock.uri()).await;
+
+    push
+        .notify_new_message(
+            &storage,
+            &membership,
+            GROUP_ID,
+            SENDER,
+            &MessageAttribution::human_message(),
+        )
+        .await;
+
+    mock.verify().await;
+}

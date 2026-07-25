@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useMessagingClient } from '../contexts/MessagingClientContext';
 import { useAuthenticatedAddress } from '../contexts/MySocialAuthContext';
+import { onGroupMembersInvalidated } from '../lib/group-members-cache';
 import {
   loadSidebarPeers,
   saveSidebarPeers,
@@ -12,6 +13,10 @@ const membersCache = new Map<string, string[]>();
 /** groupId → peer wallet from prior visits (breaks avatar waterfall). */
 const peerCache = new Map<string, string>();
 let hydratedWallet: string | null = null;
+
+export function invalidateSidebarGroupMembers(groupId: string): void {
+  membersCache.delete(groupId);
+}
 
 function ensureHydrated(wallet: string | null | undefined) {
   const key = wallet?.trim().toLowerCase() || null;
@@ -43,6 +48,13 @@ export function useSidebarGroupMembers(
     ensureHydrated(address);
     setVersion((v) => v + 1);
   }, [address]);
+
+  useEffect(() => {
+    return onGroupMembersInvalidated((groupId) => {
+      invalidateSidebarGroupMembers(groupId);
+      setVersion((v) => v + 1);
+    });
+  }, []);
 
   useEffect(() => {
     if (!client || !uniqueKey) return;

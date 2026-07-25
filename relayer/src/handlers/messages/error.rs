@@ -100,6 +100,9 @@ impl From<StorageError> for ApiError {
             StorageError::DuplicateNonce => ApiError::Conflict(
                 "Duplicate nonce: a message with this nonce already exists".to_string(),
             ),
+            StorageError::DuplicateIdempotencyKey => ApiError::Conflict(
+                "Duplicate idempotency key: system message already ingested".to_string(),
+            ),
             StorageError::OperationFailed(msg) => {
                 error!("Storage operation failed: {}", msg);
                 ApiError::Internal(msg)

@@ -10,22 +10,21 @@ use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
 use crate::models::{
-    Attachment, EncryptedBlobRecord, GroupActivity, Message, MessageAttribution, PaidEscrowRecord,
-    PushTokenRecord, ReactionEntry, ReceiptStateResponse, SyncStatus,
+    Attachment, ConversationPreferences, ConversationPreferencesPatch, EncryptedBlobRecord,
+    GroupActivity, MemberReceipt, Message, MessageAttribution, PaidEscrowRecord, PushTokenRecord,
+    ReactionEntry, ReceiptStateResponse, SyncStatus,
 };
 use crate::services::realtime::{
-    MessageCreatedEvent, ReactionUpdatedEvent, ReadStateUpdatedEvent, MESSAGE_EVENTS_CHANNEL,
+    MessageCreatedEvent, MessageDeletedEvent, MessageEditedEvent, ReactionUpdatedEvent,
+    ReadStateUpdatedEvent, ReceiptUpdatedEvent, MESSAGE_EVENTS_CHANNEL,
 };
 
 use super::adapter::{PutUserReadStateResult, StorageAdapter, StorageError, StorageResult};
-use super::memory::InMemoryStorage;
 use super::migrations;
 
 /// Postgres-backed storage for messages, read-state, push, presence, reactions, and pins.
 pub struct PostgresStorage {
     pool: PgPool,
-    /// Deprecated plaintext receipts only — not persisted to Postgres.
-    receipt_mirror: InMemoryStorage,
 }
 
 impl PostgresStorage {
@@ -38,10 +37,7 @@ impl PostgresStorage {
 
         migrations::run_migrations(&pool).await?;
 
-        Ok(Self {
-            pool,
-            receipt_mirror: InMemoryStorage::new(),
-        })
+        Ok(Self { pool })
     }
 
     pub fn pool(&self) -> &PgPool {
@@ -52,6 +48,10 @@ impl PostgresStorage {
 fn map_db_error(e: sqlx::Error) -> StorageError {
     if let Some(db) = e.as_database_error() {
         if db.code().as_deref() == Some("23505") {
+            let constraint = db.constraint().unwrap_or("");
+            if constraint.contains("idempotency") {
+                return StorageError::DuplicateIdempotencyKey;
+            }
             return StorageError::DuplicateNonce;
         }
     }
@@ -70,8 +70,29 @@ fn parse_sync_status(s: &str) -> SyncStatus {
 }
 
 fn row_to_message(row: &sqlx::postgres::PgRow) -> Message {
+    use crate::models::{MessageKind, SystemType};
+
     let attachments: Vec<Attachment> =
         serde_json::from_value(row.get("attachments")).unwrap_or_default();
+    let kind = MessageKind::parse(
+        row.try_get::<String, _>("kind")
+            .ok()
+            .as_deref()
+            .unwrap_or("text"),
+    );
+    let system_type = row
+        .try_get::<Option<String>, _>("system_type")
+        .ok()
+        .flatten()
+        .and_then(|s| SystemType::parse(&s));
+    let metadata = row
+        .try_get::<Option<serde_json::Value>, _>("metadata")
+        .ok()
+        .flatten();
+    let idempotency_key = row
+        .try_get::<Option<String>, _>("idempotency_key")
+        .ok()
+        .flatten();
     Message {
         id: row.get("id"),
         group_id: row.get("group_id"),
@@ -82,6 +103,7 @@ fn row_to_message(row: &sqlx::postgres::PgRow) -> Message {
         key_version: row.get("key_version"),
         created_at: row.get("created_at"),
         updated_at: row.get("updated_at"),
+        is_edited: row.try_get::<bool, _>("is_edited").unwrap_or(false),
         sync_status: parse_sync_status(&row.get::<String, _>("sync_status")),
         quilt_patch_id: row.get("quilt_patch_id"),
         attachments,
@@ -93,6 +115,10 @@ fn row_to_message(row: &sqlx::postgres::PgRow) -> Message {
             identity_class: row.get("identity_class"),
             attribution_version: row.try_get("attribution_version").unwrap_or(1),
         },
+        kind,
+        system_type,
+        metadata,
+        idempotency_key,
     }
 }
 
@@ -130,13 +156,16 @@ impl StorageAdapter for PostgresStorage {
         let attachments = serde_json::to_value(&message.attachments)
             .map_err(|e| StorageError::OperationFailed(e.to_string()))?;
 
+        let kind = message.kind.as_str();
+        let system_type = message.system_type.map(|t| t.as_str().to_string());
         sqlx::query(
             r#"INSERT INTO messages (
                 id, group_id, order_num, sender_wallet_addr, encrypted_msg, nonce,
-                key_version, created_at, updated_at, sync_status, quilt_patch_id,
+                key_version, created_at, updated_at, is_edited, sync_status, quilt_patch_id,
                 attachments, signature, public_key,
-                principal_owner, sub_agent_id, identity_class, attribution_version
-            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)"#,
+                principal_owner, sub_agent_id, identity_class, attribution_version,
+                kind, system_type, metadata, idempotency_key
+            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)"#,
         )
         .bind(message.id)
         .bind(&message.group_id)
@@ -147,6 +176,7 @@ impl StorageAdapter for PostgresStorage {
         .bind(message.key_version)
         .bind(message.created_at)
         .bind(message.updated_at)
+        .bind(message.is_edited)
         .bind(sync_status)
         .bind(&message.quilt_patch_id)
         .bind(attachments)
@@ -156,6 +186,10 @@ impl StorageAdapter for PostgresStorage {
         .bind(&message.attribution.sub_agent_id)
         .bind(message.attribution.identity_class)
         .bind(message.attribution.attribution_version)
+        .bind(kind)
+        .bind(system_type)
+        .bind(&message.metadata)
+        .bind(&message.idempotency_key)
         .execute(&mut *tx)
         .await
         .map_err(map_db_error)?;
@@ -262,9 +296,16 @@ impl StorageAdapter for PostgresStorage {
     ) -> StorageResult<Message> {
         let attachments_json = serde_json::to_value(&attachments)
             .map_err(|e| StorageError::OperationFailed(e.to_string()))?;
+
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| StorageError::OperationFailed(e.to_string()))?;
+
         sqlx::query(
             r#"UPDATE messages SET encrypted_msg=$2, nonce=$3, key_version=$4, attachments=$5,
-               signature=$6, public_key=$7, updated_at=$8, sync_status=$9 WHERE id=$1"#,
+               signature=$6, public_key=$7, updated_at=$8, sync_status=$9, is_edited=TRUE WHERE id=$1"#,
         )
         .bind(id)
         .bind(encrypted_msg)
@@ -275,20 +316,84 @@ impl StorageAdapter for PostgresStorage {
         .bind(public_key)
         .bind(Utc::now())
         .bind("UPDATE_PENDING")
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await
-        .map_err(map_db_error)?;
-        self.get_message(id).await
+        .map_err(|e| StorageError::OperationFailed(e.to_string()))?;
+
+        let row = sqlx::query("SELECT * FROM messages WHERE id = $1")
+            .bind(id)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(|e| StorageError::OperationFailed(e.to_string()))?;
+        let message = row
+            .map(|r| row_to_message(&r))
+            .ok_or(StorageError::NotFound(id))?;
+
+        let notify = MessageEditedEvent::new(
+            message.group_id.clone(),
+            message.id,
+            message.order.unwrap_or(0),
+            message.sender_wallet_addr.clone(),
+        );
+        let notify_json = serde_json::to_string(&notify)
+            .map_err(|e| StorageError::OperationFailed(e.to_string()))?;
+        sqlx::query("SELECT pg_notify($1, $2)")
+            .bind(MESSAGE_EVENTS_CHANNEL)
+            .bind(notify_json)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| StorageError::OperationFailed(e.to_string()))?;
+
+        tx.commit()
+            .await
+            .map_err(|e| StorageError::OperationFailed(e.to_string()))?;
+
+        Ok(message)
     }
 
     async fn delete_message(&self, id: Uuid) -> StorageResult<Message> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| StorageError::OperationFailed(e.to_string()))?;
+
         sqlx::query("UPDATE messages SET sync_status='DELETE_PENDING', updated_at=$2 WHERE id=$1")
             .bind(id)
             .bind(Utc::now())
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await
             .map_err(|e| StorageError::OperationFailed(e.to_string()))?;
-        self.get_message(id).await
+
+        let row = sqlx::query("SELECT * FROM messages WHERE id = $1")
+            .bind(id)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(|e| StorageError::OperationFailed(e.to_string()))?;
+        let message = row
+            .map(|r| row_to_message(&r))
+            .ok_or(StorageError::NotFound(id))?;
+
+        let notify = MessageDeletedEvent::new(
+            message.group_id.clone(),
+            message.id,
+            message.order.unwrap_or(0),
+            message.sender_wallet_addr.clone(),
+        );
+        let notify_json = serde_json::to_string(&notify)
+            .map_err(|e| StorageError::OperationFailed(e.to_string()))?;
+        sqlx::query("SELECT pg_notify($1, $2)")
+            .bind(MESSAGE_EVENTS_CHANNEL)
+            .bind(notify_json)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| StorageError::OperationFailed(e.to_string()))?;
+
+        tx.commit()
+            .await
+            .map_err(|e| StorageError::OperationFailed(e.to_string()))?;
+
+        Ok(message)
     }
 
     async fn update_sync_status(
@@ -639,26 +744,132 @@ impl StorageAdapter for PostgresStorage {
         Ok(rows.iter().map(|r| r.get("chain_seq")).collect())
     }
 
-    async fn update_receipt_delivered(
+    async fn advance_member_receipts(
         &self,
         group_id: &str,
         member: &str,
-        upto: u64,
-    ) -> StorageResult<()> {
-        self.receipt_mirror
-            .update_receipt_delivered(group_id, member, upto)
+        delivered_upto: Option<u64>,
+        read_upto: Option<u64>,
+    ) -> StorageResult<Option<MemberReceipt>> {
+        if delivered_upto.is_none() && read_upto.is_none() {
+            return Ok(None);
+        }
+
+        let mut tx = self
+            .pool
+            .begin()
             .await
+            .map_err(|e| StorageError::OperationFailed(e.to_string()))?;
+
+        let tip: i64 = sqlx::query_scalar(
+            "SELECT COALESCE(MAX(order_num), 0) FROM messages WHERE group_id = $1",
+        )
+        .bind(group_id)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(|e| StorageError::OperationFailed(e.to_string()))?;
+        let tip = tip.max(0) as u64;
+
+        let clamp = |v: u64| v.min(tip);
+        let want_delivered = delivered_upto.map(clamp);
+        let want_read = read_upto.map(clamp);
+
+        let existing = sqlx::query(
+            "SELECT delivered_upto, read_upto FROM group_member_receipts WHERE group_id = $1 AND wallet = $2",
+        )
+        .bind(group_id)
+        .bind(member)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|e| StorageError::OperationFailed(e.to_string()))?;
+
+        let (cur_d, cur_r) = match existing {
+            Some(row) => (
+                row.get::<i64, _>("delivered_upto").max(0) as u64,
+                row.get::<i64, _>("read_upto").max(0) as u64,
+            ),
+            None => (0u64, 0u64),
+        };
+
+        let mut next_d = cur_d;
+        let mut next_r = cur_r;
+        if let Some(d) = want_delivered {
+            next_d = next_d.max(d);
+        }
+        if let Some(r) = want_read {
+            next_r = next_r.max(r);
+        }
+        // Read implies delivered.
+        next_d = next_d.max(next_r);
+
+        if next_d == cur_d && next_r == cur_r {
+            tx.commit()
+                .await
+                .map_err(|e| StorageError::OperationFailed(e.to_string()))?;
+            return Ok(None);
+        }
+
+        sqlx::query(
+            r#"INSERT INTO group_member_receipts (group_id, wallet, delivered_upto, read_upto, updated_at)
+               VALUES ($1, $2, $3, $4, NOW())
+               ON CONFLICT (group_id, wallet) DO UPDATE SET
+                 delivered_upto = EXCLUDED.delivered_upto,
+                 read_upto = EXCLUDED.read_upto,
+                 updated_at = NOW()"#,
+        )
+        .bind(group_id)
+        .bind(member)
+        .bind(next_d as i64)
+        .bind(next_r as i64)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| StorageError::OperationFailed(e.to_string()))?;
+
+        let receipt = MemberReceipt {
+            member: member.to_string(),
+            delivered_upto: next_d,
+            read_upto: next_r,
+        };
+        let notify = ReceiptUpdatedEvent::new(group_id.to_string(), &receipt);
+        let notify_json = serde_json::to_string(&notify)
+            .map_err(|e| StorageError::OperationFailed(e.to_string()))?;
+        sqlx::query("SELECT pg_notify($1, $2)")
+            .bind(MESSAGE_EVENTS_CHANNEL)
+            .bind(notify_json)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| StorageError::OperationFailed(e.to_string()))?;
+
+        tx.commit()
+            .await
+            .map_err(|e| StorageError::OperationFailed(e.to_string()))?;
+
+        Ok(Some(receipt))
     }
 
-    async fn update_receipt_read(
+    async fn list_group_receipts(
         &self,
         group_id: &str,
-        member: &str,
-        upto: u64,
-    ) -> StorageResult<()> {
-        self.receipt_mirror
-            .update_receipt_read(group_id, member, upto)
-            .await
+    ) -> StorageResult<Vec<MemberReceipt>> {
+        let rows = sqlx::query(
+            r#"SELECT wallet, delivered_upto, read_upto
+               FROM group_member_receipts
+               WHERE group_id = $1
+               ORDER BY wallet"#,
+        )
+        .bind(group_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| StorageError::OperationFailed(e.to_string()))?;
+
+        Ok(rows
+            .iter()
+            .map(|r| MemberReceipt {
+                member: r.get("wallet"),
+                delivered_upto: r.get::<i64, _>("delivered_upto").max(0) as u64,
+                read_upto: r.get::<i64, _>("read_upto").max(0) as u64,
+            })
+            .collect())
     }
 
     async fn get_receipt_state(
@@ -666,7 +877,133 @@ impl StorageAdapter for PostgresStorage {
         group_id: &str,
         member: &str,
     ) -> StorageResult<ReceiptStateResponse> {
-        self.receipt_mirror.get_receipt_state(group_id, member).await
+        let row = sqlx::query(
+            "SELECT delivered_upto, read_upto FROM group_member_receipts WHERE group_id = $1 AND wallet = $2",
+        )
+        .bind(group_id)
+        .bind(member)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| StorageError::OperationFailed(e.to_string()))?;
+
+        Ok(match row {
+            Some(r) => ReceiptStateResponse {
+                delivered_upto: Some(r.get::<i64, _>("delivered_upto").max(0) as u64),
+                read_upto: Some(r.get::<i64, _>("read_upto").max(0) as u64),
+            },
+            None => ReceiptStateResponse {
+                delivered_upto: None,
+                read_upto: None,
+            },
+        })
+    }
+
+    async fn get_conversation_preferences(
+        &self,
+        group_id: &str,
+        wallet: &str,
+    ) -> StorageResult<Option<ConversationPreferences>> {
+        let row = sqlx::query(
+            r#"SELECT notification_mode, receipt_mode, version
+               FROM conversation_preferences
+               WHERE group_id = $1 AND wallet = $2"#,
+        )
+        .bind(group_id)
+        .bind(wallet)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| StorageError::OperationFailed(e.to_string()))?;
+
+        Ok(row.map(|r| ConversationPreferences {
+            notification_mode: r.get("notification_mode"),
+            receipt_mode: r.get("receipt_mode"),
+            version: r.get::<i32, _>("version"),
+        }))
+    }
+
+    async fn upsert_conversation_preferences(
+        &self,
+        group_id: &str,
+        wallet: &str,
+        patch: ConversationPreferencesPatch,
+    ) -> StorageResult<ConversationPreferences> {
+        let existing = sqlx::query(
+            "SELECT notification_mode, receipt_mode, version FROM conversation_preferences WHERE group_id = $1 AND wallet = $2",
+        )
+        .bind(group_id)
+        .bind(wallet)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| StorageError::OperationFailed(e.to_string()))?;
+
+        let (base, had_row) = match existing {
+            Some(r) => (
+                ConversationPreferences {
+                    notification_mode: r.get("notification_mode"),
+                    receipt_mode: r.get("receipt_mode"),
+                    version: r.get::<i32, _>("version"),
+                },
+                true,
+            ),
+            None => (ConversationPreferences::defaults(), false),
+        };
+        let next = ConversationPreferences {
+            notification_mode: patch
+                .notification_mode
+                .unwrap_or(base.notification_mode),
+            receipt_mode: patch.receipt_mode.unwrap_or(base.receipt_mode),
+            version: if had_row {
+                base.version.saturating_add(1)
+            } else {
+                1
+            },
+        };
+
+        sqlx::query(
+            r#"INSERT INTO conversation_preferences
+                 (group_id, wallet, notification_mode, receipt_mode, version, updated_at)
+               VALUES ($1, $2, $3, $4, $5, now())
+               ON CONFLICT (group_id, wallet) DO UPDATE SET
+                 notification_mode = EXCLUDED.notification_mode,
+                 receipt_mode = EXCLUDED.receipt_mode,
+                 version = EXCLUDED.version,
+                 updated_at = now()"#,
+        )
+        .bind(group_id)
+        .bind(wallet)
+        .bind(&next.notification_mode)
+        .bind(&next.receipt_mode)
+        .bind(next.version)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| StorageError::OperationFailed(e.to_string()))?;
+
+        Ok(next)
+    }
+
+    async fn list_notification_modes(
+        &self,
+        group_id: &str,
+        wallets: &[String],
+    ) -> StorageResult<HashMap<String, String>> {
+        if wallets.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let rows = sqlx::query(
+            r#"SELECT wallet, notification_mode
+               FROM conversation_preferences
+               WHERE group_id = $1 AND wallet = ANY($2)"#,
+        )
+        .bind(group_id)
+        .bind(wallets)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| StorageError::OperationFailed(e.to_string()))?;
+
+        Ok(rows
+            .iter()
+            .map(|r| (r.get("wallet"), r.get("notification_mode")))
+            .collect())
     }
 
     async fn get_user_read_state(&self, wallet: &str) -> StorageResult<Option<EncryptedBlobRecord>> {

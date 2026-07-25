@@ -19,13 +19,14 @@ use tracing::{debug, error, info, warn};
 
 use crate::auth::MembershipStore;
 use crate::config::Config;
+use crate::handlers::messages::response::MessageResponse;
 use crate::models::workflow_item::{
     approval_idempotency_key, memory_access_idempotency_key, org_invitation_idempotency_key,
     WorkflowItemIngest, WorkflowTransitionPatch, ITEM_TYPE_ORG_INVITATION, STATUS_ACTIONED,
     STATUS_DISMISSED, STATUS_EXPIRED,
 };
-use crate::models::PaidEscrowRecord;
-use crate::storage::{AgentGroupStore, StorageAdapter, WorkflowStore};
+use crate::models::{Message, PaidEscrowRecord, SystemType};
+use crate::storage::{AgentGroupStore, StorageAdapter, StorageError, WorkflowStore};
 
 use super::agent_group_detector::{
     agent_group_from_created_event, detect_agent_groups_in_transaction,
@@ -41,6 +42,7 @@ use super::message_gate::MessageGateService;
 use super::messaging_config::{MessagingConfigCache, MessagingConfigSnapshot};
 use super::push::PushService;
 use super::realtime::{notify_user_feed_event, DiscoveryReason, RealtimeHub, UserFeedEvent};
+use super::system_objects::{is_system_object, system_object_addresses};
 
 use crate::models::workflow_item::WorkflowItem;
 
@@ -63,6 +65,10 @@ pub struct MembershipSyncService {
     realtime_hub: Arc<RealtimeHub>,
     /// Push service — used to notify offline recipients on chain-driven transitions.
     push_service: PushService,
+    /// Derived GroupLeaver / GroupManager addresses (empty if namespace unset).
+    system_object_addrs: HashSet<String>,
+    /// When true and storage is in-memory, publish message.created locally.
+    inline_realtime_publish: bool,
     last_cursor: Option<u64>,
 }
 
@@ -88,6 +94,13 @@ impl MembershipSyncService {
             config.social_package_id,
             config.myso_rpc_url,
         );
+        let system_object_addrs =
+            system_object_addresses(config.messaging_namespace_id.as_deref());
+        if system_object_addrs.is_empty() {
+            warn!(
+                "MESSAGING_NAMESPACE_ID unset/invalid — system actor membership events may emit join messages"
+            );
+        }
         Self {
             myso_rpc_url: config.myso_rpc_url.clone(),
             groups_package_id: config.groups_package_id.clone(),
@@ -102,6 +115,12 @@ impl MembershipSyncService {
             messaging_config,
             realtime_hub,
             push_service,
+            system_object_addrs,
+            // Postgres uses pg_notify from create_message; memory needs inline publish.
+            inline_realtime_publish: !matches!(
+                config.storage_type,
+                crate::storage::StorageType::Postgres(_)
+            ),
             last_cursor,
         }
     }
@@ -357,7 +376,9 @@ impl MembershipSyncService {
 
         // Build the subscription request with field mask
         let mut request = SubscribeCheckpointsRequest::default();
-        request.read_mask = Some(FieldMask::from_str("transactions.events"));
+        request.read_mask = Some(FieldMask::from_str(
+            "transactions.events,transactions.digest,transactions.transaction.sender",
+        ));
 
         let mut stream = client.subscribe_checkpoints(request).await?.into_inner();
 
@@ -423,18 +444,37 @@ impl MembershipSyncService {
 
             // Pre-scan: group creators in this transaction, so MemberAdded for
             // the creator can be published as `group.discovered { reason: created }`.
+            // Keys/values lowercased for case-insensitive creator matching.
             let mut creators_in_tx: HashMap<String, String> = HashMap::new();
             for event in events {
                 if let Some(AgentDetectionEvent::GroupCreated(created)) =
                     parse_agent_detection_event(event, &self.groups_package_id)
                 {
-                    creators_in_tx.insert(created.group_id.clone(), created.creator.clone());
+                    creators_in_tx.insert(
+                        created.group_id.to_ascii_lowercase(),
+                        created.creator.to_ascii_lowercase(),
+                    );
                 }
             }
 
-            for event in events {
+            let tx_digest = transaction.digest.clone().unwrap_or_default();
+            let tx_sender = transaction
+                .transaction
+                .as_ref()
+                .and_then(|t| t.sender.clone())
+                .unwrap_or_default();
+
+            for (event_index, event) in events.iter().enumerate() {
                 if let Some(groups_event) = parse_myso_event(event, &self.groups_package_id) {
-                    self.apply_event(&groups_event, &creators_in_tx).await;
+                    self.apply_event(
+                        &groups_event,
+                        &creators_in_tx,
+                        &tx_digest,
+                        event_index,
+                        &tx_sender,
+                        checkpoint_ts,
+                    )
+                    .await;
                     events_processed += 1;
                 }
 
@@ -591,13 +631,34 @@ impl MembershipSyncService {
     /// Discovery user-feed events are published here — and only here — AFTER
     /// the membership store update succeeds, so a client's follow-up REST
     /// fetch can never race the underlying state.
-    async fn apply_event(&self, event: &GroupsEvent, creators_in_tx: &HashMap<String, String>) {
+    ///
+    /// System timeline messages are inserted by this trusted path only (never
+    /// via client POST). No push is sent for system-only inserts.
+    async fn apply_event(
+        &self,
+        event: &GroupsEvent,
+        creators_in_tx: &HashMap<String, String>,
+        tx_digest: &str,
+        event_index: usize,
+        tx_sender: &str,
+        checkpoint_ts: chrono::DateTime<Utc>,
+    ) {
         match event {
             GroupsEvent::MemberAdded { group_id, member } => {
+                // GroupLeaver / GroupManager are auto-added on create_group — disregard entirely.
+                if is_system_object(member, &self.system_object_addrs) {
+                    debug!(
+                        "Ignoring system-actor MemberAdded: {} -> {}",
+                        member, group_id
+                    );
+                    return;
+                }
+
                 info!("MemberAdded: {} -> {}", member, group_id);
                 self.membership_store.add_member(group_id, member, vec![]);
 
-                let reason = if creators_in_tx.get(group_id) == Some(member) {
+                let reason = if Self::is_group_creator(creators_in_tx, group_id, member, tx_sender)
+                {
                     DiscoveryReason::Created
                 } else {
                     DiscoveryReason::Invited
@@ -608,9 +669,20 @@ impl MembershipSyncService {
                     reason,
                 })
                 .await;
+                // MemberJoined is deferred until first recognized messaging permission
+                // (PermissionsGranted), including the creator. System actors never get
+                // joins (empty recognized perms / explicit skip).
             }
 
             GroupsEvent::MemberRemoved { group_id, member } => {
+                if is_system_object(member, &self.system_object_addrs) {
+                    debug!(
+                        "Ignoring system-actor MemberRemoved: {} from {}",
+                        member, group_id
+                    );
+                    return;
+                }
+
                 info!("MemberRemoved: {} from {}", member, group_id);
                 self.membership_store.remove_member(group_id, member);
 
@@ -618,6 +690,32 @@ impl MembershipSyncService {
                     wallet: member.clone(),
                     group_id: group_id.clone(),
                 })
+                .await;
+
+                let sender_is_member =
+                    !tx_sender.is_empty() && tx_sender.eq_ignore_ascii_case(member);
+                let (system_type, actor, type_key) = if sender_is_member {
+                    (SystemType::MemberLeft, None, "member_left")
+                } else {
+                    (
+                        SystemType::MemberRemoved,
+                        if tx_sender.is_empty() {
+                            None
+                        } else {
+                            Some(tx_sender.to_string())
+                        },
+                        "member_removed",
+                    )
+                };
+                let key = format!("{tx_digest}:{event_index}:{type_key}");
+                self.insert_system_message(
+                    group_id,
+                    member,
+                    system_type,
+                    actor,
+                    key,
+                    checkpoint_ts,
+                )
                 .await;
             }
 
@@ -627,21 +725,44 @@ impl MembershipSyncService {
                 permissions,
             } => {
                 if permissions.is_empty() {
-                    warn!(
-                        "PermissionsGranted with no recognized messaging permissions: {} -> {} (check GROUPS_PACKAGE_ID / event type names)",
-                        member, group_id
-                    );
+                    if is_system_object(member, &self.system_object_addrs) {
+                        debug!(
+                            "Ignoring system-actor PermissionsGranted (no messaging perms): {} -> {}",
+                            member, group_id
+                        );
+                    } else {
+                        warn!(
+                            "PermissionsGranted with no recognized messaging permissions: {} -> {} (check GROUPS_PACKAGE_ID / event type names)",
+                            member, group_id
+                        );
+                    }
                     return;
                 }
                 info!(
                     "PermissionsGranted: {} -> {} permissions: {:?}",
                     member, group_id, permissions
                 );
+                let had_messaging = self.membership_store.is_member(group_id, member);
                 if let Err(e) = self
                     .membership_store
                     .grant_permissions(group_id, member, permissions.clone())
                 {
                     warn!("Failed to grant permissions: {}", e);
+                    return;
+                }
+                // First recognized messaging permission → human join (including creator).
+                // Clients coalesce adjacent member_joined rows into "A and B joined…".
+                if !had_messaging && !is_system_object(member, &self.system_object_addrs) {
+                    let key = format!("{tx_digest}:{event_index}:member_joined");
+                    self.insert_system_message(
+                        group_id,
+                        member,
+                        SystemType::MemberJoined,
+                        None,
+                        key,
+                        checkpoint_ts,
+                    )
+                    .await;
                 }
             }
 
@@ -663,6 +784,72 @@ impl MembershipSyncService {
                         e
                     );
                 }
+            }
+        }
+    }
+
+    /// Case-insensitive creator match from GroupCreated, with tx_sender fallback
+    /// when GroupCreated was not parsed for this group.
+    fn is_group_creator(
+        creators_in_tx: &HashMap<String, String>,
+        group_id: &str,
+        member: &str,
+        tx_sender: &str,
+    ) -> bool {
+        let group_key = group_id.to_ascii_lowercase();
+        let member_key = member.to_ascii_lowercase();
+        if let Some(creator) = creators_in_tx.get(&group_key) {
+            if creator.eq_ignore_ascii_case(&member_key) {
+                return true;
+            }
+        }
+        // Fallback when GroupCreated parse missed: create_group sender is the creator.
+        !tx_sender.is_empty() && tx_sender.eq_ignore_ascii_case(&member_key)
+    }
+
+    async fn insert_system_message(
+        &self,
+        group_id: &str,
+        member: &str,
+        system_type: SystemType,
+        actor: Option<String>,
+        idempotency_key: String,
+        created_at: chrono::DateTime<Utc>,
+    ) {
+        if idempotency_key.starts_with(':') || idempotency_key.contains("::") {
+            // Missing digest would make keys collide across txs — still unique per event_index+type
+            // within a single empty digest, but warn.
+            warn!(
+                "System message idempotency key missing digest: {}",
+                idempotency_key
+            );
+        }
+        let message = Message::new_system(
+            group_id.to_string(),
+            member.to_string(),
+            system_type,
+            actor,
+            idempotency_key,
+            created_at,
+        );
+        match self.storage.create_message(message).await {
+            Ok(created) => {
+                info!(
+                    "System message {:?} order={:?} group={}",
+                    system_type,
+                    created.order,
+                    group_id
+                );
+                if self.inline_realtime_publish {
+                    let wire: MessageResponse = created.into();
+                    self.realtime_hub.publish_wire(group_id, wire);
+                }
+            }
+            Err(StorageError::DuplicateIdempotencyKey) => {
+                debug!("System message already ingested (idempotent skip)");
+            }
+            Err(e) => {
+                warn!("Failed to insert system message for group {group_id}: {e}");
             }
         }
     }

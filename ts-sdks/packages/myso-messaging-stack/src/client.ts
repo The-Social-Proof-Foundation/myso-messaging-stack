@@ -22,7 +22,11 @@ import { HybridRelayerTransport } from './relayer/hybrid-transport.js';
 import type { RelayerTransport } from './relayer/transport.js';
 import type {
 	DmGateResult,
+	ConversationPrefs,
 	GroupPresenceEntry,
+	GroupReceiptState,
+	NotificationMode,
+	ReceiptMode,
 	RelayerConfig,
 	RelayerHTTPConfig,
 	RelayerMessage,
@@ -553,7 +557,9 @@ export class MySoMessagingStackClient<TApproveContext = void> {
 			signal: options.signal,
 		})) {
 			switch (event.type) {
-				case 'message.created': {
+				case 'message.created':
+				case 'message.deleted':
+				case 'message.edited': {
 					try {
 						const message = await this.#decryptMessage(
 							event.message,
@@ -590,6 +596,9 @@ export class MySoMessagingStackClient<TApproveContext = void> {
 						type: 'presence',
 						presence: { member: event.presence.member, online: event.presence.online },
 					};
+					break;
+				case 'receipt.updated':
+					yield { type: 'receipt', receipt: event.receipt };
 					break;
 			}
 		}
@@ -747,6 +756,68 @@ export class MySoMessagingStackClient<TApproveContext = void> {
 	}
 
 	/**
+	 * Peer-visible delivery/read watermarks for every member with a stored row.
+	 * Live updates arrive as `receipt` events on {@link subscribe} and as
+	 * `receipt.updated` on {@link subscribeUserEvents}.
+	 */
+	async getGroupReceipts(options: {
+		signer: Signer;
+		groupRef: GroupRef;
+	}): Promise<GroupReceiptState> {
+		const { groupId } = this.derive.resolveGroupRef(options.groupRef);
+		return this.transport.getGroupReceipts({ signer: options.signer, groupId });
+	}
+
+	/**
+	 * Advance the signer's delivery/read watermarks (monotonic max-wins).
+	 * Peers learn via `receipt.updated` fan-out.
+	 */
+	async postGroupReceipts(options: {
+		signer: Signer;
+		groupRef: GroupRef;
+		deliveredUpto?: number;
+		readUpto?: number;
+	}): Promise<void> {
+		const { groupId } = this.derive.resolveGroupRef(options.groupRef);
+		await this.transport.postGroupReceipts({
+			signer: options.signer,
+			groupId,
+			deliveredUpto: options.deliveredUpto,
+			readUpto: options.readUpto,
+		});
+	}
+
+	/**
+	 * Caller's per-conversation notification / read-receipt preferences.
+	 * Missing server row returns defaults (`all` / `full`, version 1).
+	 */
+	async getConversationPrefs(options: {
+		signer: Signer;
+		groupRef: GroupRef;
+	}): Promise<ConversationPrefs> {
+		const { groupId } = this.derive.resolveGroupRef(options.groupRef);
+		return this.transport.getConversationPrefs({ signer: options.signer, groupId });
+	}
+
+	/**
+	 * Partial update of conversation prefs (omitted fields preserved server-side).
+	 */
+	async putConversationPrefs(options: {
+		signer: Signer;
+		groupRef: GroupRef;
+		notificationMode?: NotificationMode;
+		receiptMode?: ReceiptMode;
+	}): Promise<ConversationPrefs> {
+		const { groupId } = this.derive.resolveGroupRef(options.groupRef);
+		return this.transport.putConversationPrefs({
+			signer: options.signer,
+			groupId,
+			notificationMode: options.notificationMode,
+			receiptMode: options.receiptMode,
+		});
+	}
+
+	/**
 	 * Advisory paid-DM gate pre-check against the relayer.
 	 *
 	 * Tells the UI whether messaging `recipient` is blocked or requires an
@@ -843,6 +914,30 @@ export class MySoMessagingStackClient<TApproveContext = void> {
 		groupIds: { groupId: string; encryptionHistoryId: string },
 		approveContext: Record<string, unknown>,
 	): Promise<DecryptedMessage> {
+		// System messages: cleartext structured events — never decrypt.
+		if (raw.kind === 'system') {
+			return {
+				messageId: raw.messageId,
+				groupId: raw.groupId,
+				order: raw.order,
+				text: '',
+				senderAddress: raw.senderAddress,
+				createdAt: raw.createdAt,
+				updatedAt: raw.updatedAt,
+				isEdited: false,
+				isDeleted: false,
+				syncStatus: raw.syncStatus,
+				attachments: [],
+				senderVerified: false,
+				principalOwner: raw.principalOwner,
+				subAgentId: raw.subAgentId,
+				identityClass: raw.identityClass,
+				isAgentMessage: false,
+				kind: 'system',
+				system: raw.system,
+			};
+		}
+
 		// Deleted messages: skip decryption.
 		if (raw.isDeleted) {
 			return {
@@ -862,6 +957,7 @@ export class MySoMessagingStackClient<TApproveContext = void> {
 				subAgentId: raw.subAgentId,
 				identityClass: raw.identityClass,
 				isAgentMessage: raw.isAgentMessage,
+				kind: 'text',
 			};
 		}
 
@@ -924,6 +1020,7 @@ export class MySoMessagingStackClient<TApproveContext = void> {
 			subAgentId: raw.subAgentId,
 			identityClass: raw.identityClass,
 			isAgentMessage: raw.isAgentMessage,
+			kind: 'text',
 		};
 	}
 

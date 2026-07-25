@@ -517,12 +517,16 @@ describe('HTTPRelayerTransport', () => {
 
 	// subscribe
 
-	/** Routes fetchMessages polls through `onMessagesPoll`; reactions listings return []. */
+	/** Routes fetchMessages polls through `onMessagesPoll`; reactions/receipts return []. */
 	function mockPolling(onMessagesPoll: (poll: number) => Response) {
 		let poll = 0;
 		mockFetch.mockImplementation(async (input) => {
-			if (String(input).includes('/reactions')) {
+			const url = String(input);
+			if (url.includes('/reactions')) {
 				return new Response(JSON.stringify([]), { status: 200 });
+			}
+			if (url.includes('/receipts')) {
+				return new Response(JSON.stringify({ members: [] }), { status: 200 });
 			}
 			poll += 1;
 			return onMessagesPoll(poll);
@@ -772,6 +776,9 @@ describe('HTTPRelayerTransport', () => {
 			let reactionsCall = 0;
 			mockFetch.mockImplementation(async (input) => {
 				const url = String(input);
+				if (url.includes('/receipts')) {
+					return new Response(JSON.stringify({ members: [] }), { status: 200 });
+				}
 				if (url.includes('/reactions')) {
 					reactionsCall += 1;
 					// Poll 1: baseline (no events). Poll 2: reaction added. Poll 3: removed.
@@ -816,6 +823,62 @@ describe('HTTPRelayerTransport', () => {
 				'reaction:1:👍:1:0xa',
 				'reaction:1:👍:0:',
 			]);
+		});
+
+		it('subscribe diffs receipt snapshots into receipt.updated events', async () => {
+			const transport = new HTTPRelayerTransport({
+				relayerUrl: MOCK_RELAYER_URL,
+				apiPrefix: '/v1',
+				pollingIntervalMs: 1,
+				fetch: mockFetch,
+			});
+			const controller = new AbortController();
+			const peer = '0x' + 'ef'.repeat(32);
+
+			let receiptsCall = 0;
+			mockFetch.mockImplementation(async (input) => {
+				const url = String(input);
+				if (url.includes('/receipts')) {
+					receiptsCall += 1;
+					if (receiptsCall === 1) {
+						return new Response(JSON.stringify({ members: [] }), { status: 200 });
+					}
+					if (receiptsCall === 2) {
+						return new Response(
+							JSON.stringify({
+								members: [{ member: peer, delivered_upto: 3, read_upto: 0 }],
+							}),
+							{ status: 200 },
+						);
+					}
+					return new Response(
+						JSON.stringify({
+							members: [{ member: peer, delivered_upto: 3, read_upto: 3 }],
+						}),
+						{ status: 200 },
+					);
+				}
+				if (url.includes('/reactions')) {
+					return new Response(JSON.stringify([]), { status: 200 });
+				}
+				return new Response(JSON.stringify({ messages: [], hasNext: false }), { status: 200 });
+			});
+
+			const events: string[] = [];
+			for await (const event of transport.subscribe({
+				signer: defaultKeypair,
+				groupId: WIRE_MESSAGE.group_id,
+				signal: controller.signal,
+			})) {
+				if (event.type === 'receipt.updated') {
+					events.push(
+						`receipt:${event.receipt.member}:${event.receipt.deliveredUpto}:${event.receipt.readUpto}`,
+					);
+				}
+				if (events.length === 2) controller.abort();
+			}
+
+			expect(events).toEqual([`receipt:${peer}:3:0`, `receipt:${peer}:3:3`]);
 		});
 
 		it('defaults reactors to an empty array for legacy responses', async () => {
@@ -901,6 +964,67 @@ describe('HTTPRelayerTransport', () => {
 		});
 	});
 
+	describe('conversation prefs', () => {
+		it('GET /v1/groups/:id/prefs', async () => {
+			const transport = new HTTPRelayerTransport({
+				relayerUrl: MOCK_RELAYER_URL,
+				apiPrefix: '/v1',
+				fetch: mockFetch,
+			});
+			mockFetch.mockResolvedValueOnce(
+				new Response(
+					JSON.stringify({
+						notification_mode: 'all',
+						receipt_mode: 'full',
+						version: 1,
+					}),
+					{ status: 200 },
+				),
+			);
+
+			const prefs = await transport.getConversationPrefs({
+				signer: defaultKeypair,
+				groupId: '0x' + '12'.repeat(32),
+			});
+
+			expect(prefs).toEqual({
+				notificationMode: 'all',
+				receiptMode: 'full',
+				version: 1,
+			});
+		});
+
+		it('PUT /v1/groups/:id/prefs sends only changed fields', async () => {
+			const transport = new HTTPRelayerTransport({
+				relayerUrl: MOCK_RELAYER_URL,
+				apiPrefix: '/v1',
+				fetch: mockFetch,
+			});
+			mockFetch.mockResolvedValueOnce(
+				new Response(
+					JSON.stringify({
+						notification_mode: 'none',
+						receipt_mode: 'full',
+						version: 2,
+					}),
+					{ status: 200 },
+				),
+			);
+
+			const prefs = await transport.putConversationPrefs({
+				signer: defaultKeypair,
+				groupId: '0x' + '34'.repeat(32),
+				notificationMode: 'none',
+			});
+
+			const body = JSON.parse(mockFetch.mock.calls[0][1]?.body as string);
+			expect(body.notification_mode).toBe('none');
+			expect(body.receipt_mode).toBeUndefined();
+			expect(prefs.version).toBe(2);
+			expect(prefs.notificationMode).toBe('none');
+		});
+	});
+
 	describe('group receipts', () => {
 		it('GET /v1/groups/:id/receipts', async () => {
 			const transport = new HTTPRelayerTransport({
@@ -909,7 +1033,15 @@ describe('HTTPRelayerTransport', () => {
 				fetch: mockFetch,
 			});
 			mockFetch.mockResolvedValueOnce(
-				new Response(JSON.stringify({ delivered_upto: 10, read_upto: 8 }), { status: 200 }),
+				new Response(
+					JSON.stringify({
+						members: [
+							{ member: '0xa', delivered_upto: 10, read_upto: 8 },
+							{ member: '0xb', delivered_upto: 12, read_upto: 12 },
+						],
+					}),
+					{ status: 200 },
+				),
 			);
 
 			const state = await transport.getGroupReceipts({
@@ -917,8 +1049,10 @@ describe('HTTPRelayerTransport', () => {
 				groupId: '0x' + '12'.repeat(32),
 			});
 
-			expect(state.deliveredUpto).toBe(10);
-			expect(state.readUpto).toBe(8);
+			expect(state.members).toEqual([
+				{ member: '0xa', deliveredUpto: 10, readUpto: 8 },
+				{ member: '0xb', deliveredUpto: 12, readUpto: 12 },
+			]);
 		});
 
 		it('POST /v1/groups/:id/receipts', async () => {

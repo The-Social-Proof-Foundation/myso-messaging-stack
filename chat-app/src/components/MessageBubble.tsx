@@ -15,6 +15,7 @@ import EmojiPicker, {
   type EmojiClickData,
 } from 'emoji-picker-react';
 import { Plus } from 'lucide-react';
+import type { MessageTickStatus } from '@socialproof/myso-messaging-stack';
 import type {
   Message,
   AttachmentHandle,
@@ -56,6 +57,11 @@ interface MessageBubbleProps {
   isFirstInGroup?: boolean;
   /** Last message in a consecutive same-sender run. */
   isLastInGroup?: boolean;
+  /**
+   * Own-message delivery/read tick (`none` | `delivered` | `read`).
+   * Distinct from `senderVerified` (signature), which is title-only.
+   */
+  tickStatus?: MessageTickStatus;
   /** Profile photo URL for the sender; falls back to default avatar. */
   avatarSrc?: string | null;
   /** Resolve a display label (username / name / truncated address) for a wallet. */
@@ -666,6 +672,7 @@ export function MessageBubble({
   preferReactionBelow = false,
   isFirstInGroup = true,
   isLastInGroup = true,
+  tickStatus = 'none',
   avatarSrc = null,
   labelForAddress,
   avatarShowRing = false,
@@ -867,14 +874,18 @@ export function MessageBubble({
   const fileOnlyAttachments = attachments.filter((h) => !isImageAttachment(h));
   const showTextBubble = editing || Boolean(message.text?.trim());
 
-  const verifiedCheck = message.senderVerified ? (
-    <span
-      className="text-green-500 dark:text-green-400"
-      title="Sender verified"
-    >
-      ✓
-    </span>
-  ) : null;
+  // Single state: ✓ delivered, or ✓✓ read (replaces delivered — never both statuses).
+  const deliveryTicks =
+    isOwnMessage && tickStatus !== 'none' ? (
+      <span
+        className="inline-flex shrink-0 items-center text-[11px] leading-none tracking-tighter text-green-500 dark:text-green-400"
+        style={tickStatus === 'read' ? { letterSpacing: '-0.28em' } : undefined}
+        title={tickStatus === 'read' ? 'Read' : 'Delivered'}
+        aria-label={tickStatus === 'read' ? 'Read' : 'Delivered'}
+      >
+        {tickStatus === 'read' ? '✓✓' : '✓'}
+      </span>
+    ) : null;
 
   const timeLabel = formatMessageTime(message.createdAt, {
     always: isOwnMessage,
@@ -1199,9 +1210,14 @@ export function MessageBubble({
             >
               {isOwnMessage ? (
                 <>
-                  {verifiedCheck}
+                  {deliveryTicks}
                   {timeLabel ? (
-                    <span className="text-secondary-400/70 dark:text-secondary-500/70">
+                    <span
+                      className="text-secondary-400/70 dark:text-secondary-500/70"
+                      title={
+                        message.senderVerified ? 'Sender verified' : undefined
+                      }
+                    >
                       {timeLabel}
                     </span>
                   ) : null}
@@ -1216,7 +1232,13 @@ export function MessageBubble({
                           ? 'text-[10px] tabular-nums'
                           : 'text-[11px]'
                       }`}
-                      title={message.senderAddress ?? undefined}
+                      title={
+                        message.senderAddress
+                          ? message.senderVerified
+                            ? `${message.senderAddress} · verified`
+                            : message.senderAddress
+                          : undefined
+                      }
                     >
                       {senderLabel}
                     </span>
@@ -1239,7 +1261,6 @@ export function MessageBubble({
                     </span>
                   ) : null}
                   {editedSuffix}
-                  {verifiedCheck}
                 </>
               )}
             </div>
