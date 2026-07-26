@@ -144,6 +144,9 @@ pub struct Config {
     pub realtime_user_feed_buffer_size: usize,
     /// WebSocket presence refresh interval in seconds (default: 30).
     pub ws_ping_interval_secs: u64,
+    /// Delay before broadcasting Offline after the last WS closes (default: 3).
+    /// Covers brief reconnects; intentional away (tab blur) shows Offline sooner.
+    pub presence_offline_grace_secs: u64,
 
     /// Enable workflow inbox domain (default: false until producers deploy).
     pub workflow_enabled: bool,
@@ -334,6 +337,11 @@ impl Config {
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(30);
+        let presence_offline_grace_secs = env::var("PRESENCE_OFFLINE_GRACE_SECS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(3)
+            .max(1);
         let workflow_enabled = env::var("WORKFLOW_ENABLED")
             .ok()
             .map(|v| v == "true" || v == "1")
@@ -399,6 +407,7 @@ impl Config {
             realtime_group_buffer_size,
             realtime_user_feed_buffer_size,
             ws_ping_interval_secs,
+            presence_offline_grace_secs,
             workflow_enabled,
             internal_sync_secret,
             workflow_expiry_sweep_interval_secs,
@@ -459,6 +468,7 @@ impl Default for Config {
             realtime_group_buffer_size: 256,
             realtime_user_feed_buffer_size: 512,
             ws_ping_interval_secs: 30,
+            presence_offline_grace_secs: 3,
             workflow_enabled: false,
             internal_sync_secret: None,
             workflow_expiry_sweep_interval_secs: 300,

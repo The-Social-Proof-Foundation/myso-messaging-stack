@@ -111,6 +111,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         config.realtime_enabled,
         config.inline_realtime_publish(),
         config.ws_ping_interval_secs,
+        config.presence_offline_grace_secs,
         config.request_ttl_seconds,
         archive_read,
         begin_chat_notify.clone(),

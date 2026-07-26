@@ -23,10 +23,6 @@ use tracing::warn;
 use super::realtime::{PresenceChangedSignal, PresenceUpdatedEvent};
 use crate::state::AppState;
 
-/// Grace period before an offline transition is broadcast. A reconnect within
-/// this window suppresses the offline event entirely.
-const OFFLINE_GRACE: Duration = Duration::from_secs(10);
-
 fn wallet_key(wallet: &str) -> String {
     wallet.to_ascii_lowercase()
 }
@@ -84,13 +80,14 @@ pub async fn note_connect(state: &AppState, wallet: &str) {
 }
 
 /// Called by WS handlers when a connection closes. Offline is debounced:
-/// broadcast only if the wallet is still fully disconnected after the grace
-/// period. (A reconnect inside the window re-broadcasts online, which is
-/// idempotent for observers that never saw an offline.)
+/// broadcast only if the wallet is still fully disconnected after
+/// `AppState::presence_offline_grace_secs` (env `PRESENCE_OFFLINE_GRACE_SECS`,
+/// default 3). A reconnect inside the window suppresses the offline event.
 pub fn note_disconnect(state: AppState, wallet: String) {
     if state.presence_registry.disconnect(&wallet) {
+        let grace = Duration::from_secs(state.presence_offline_grace_secs.max(1));
         tokio::spawn(async move {
-            tokio::time::sleep(OFFLINE_GRACE).await;
+            tokio::time::sleep(grace).await;
             if !state.presence_registry.is_online(&wallet) {
                 broadcast_presence(&state, &wallet, false).await;
             }

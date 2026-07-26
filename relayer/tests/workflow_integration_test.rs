@@ -135,6 +135,7 @@ async fn org_invitation_chain_sync_visible_via_workflow_api() {
         true,
         true,
         30,
+        Config::default().presence_offline_grace_secs,
         900,
         begin_chat,
     );

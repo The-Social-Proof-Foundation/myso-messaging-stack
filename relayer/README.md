@@ -721,6 +721,7 @@ All configuration is loaded from environment variables. The relayer also support
 | `BLOCK_CACHE_MAX_ENTRIES` | `100000` | No | Block check LRU max entries |
 | `PUSH_ENABLED` | `false` | No | Enable APNs push delivery on new messages |
 | `PRESENCE_TTL_SECS` | `45` | No | Skip push if wallet seen within N seconds |
+| `PRESENCE_OFFLINE_GRACE_SECS` | `3` | No | Delay before broadcasting Offline after the last WebSocket closes |
 | `PUSH_NOTIFY_CONCURRENCY` | `50` | No | Max concurrent APNs sends per group message |
 | `PUSH_LARGE_GROUP_WARN_MEMBERS` | `500` | No | Log a warning when push fan-out targets at least this many members |
 | `APNS_KEY_ID`, `APNS_TEAM_ID`, `APNS_BUNDLE_ID`, `APNS_AUTH_KEY_PATH`, `APNS_ENVIRONMENT` | — | When push enabled | APNs credentials (HTTP/2 + JWT via `.p8` key) |

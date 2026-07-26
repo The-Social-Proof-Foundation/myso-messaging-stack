@@ -65,6 +65,7 @@ The app provides working code for common integration patterns: **MySocial OAuth 
 | Send text message      | Text input with Enter-to-send                            | `messaging.sendMessage()`                          |
 | Read message history   | Paginated message display with "load older"              | `messaging.getMessages()`                          |
 | Real-time subscription | Live messages + reaction updates (WS, polling fallback)  | `messaging.subscribe()`                            |
+| Away when unfocused    | Mark-read, push-suppress (`postPresence`), and typing only while visible+focused (`usePageEngaged`); group + user-feed WebSockets pause so peer Online goes Offline, then resume on focus | `usePageEngaged` / AbortController on `subscribe` |
 | Edit message           | Inline edit on own messages                              | `messaging.editMessage()`                          |
 | Delete message         | Delete with confirmation                                 | `messaging.deleteMessage()`                        |
 | React to message       | Left-click a bubble for the emoji picker; click chips to toggle | `messaging.addReaction()` / `removeReaction()` |

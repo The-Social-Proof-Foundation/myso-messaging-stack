@@ -9,11 +9,15 @@
  * The SDK transport handles reconnect/backoff internally and falls back to
  * polling batch unread counts when the WebSocket is unavailable; this hook
  * additionally restarts the stream if it ends unexpectedly.
+ *
+ * Paused while the tab/window is unfocused (`usePageEngaged`) so the relayer
+ * presence registry can drop to Offline; resumes on focus.
  */
 import { useEffect, useRef } from 'react';
 import { useMessagingClient } from '../contexts/MessagingClientContext';
 import { useMySocialAuth } from '../contexts/MySocialAuthContext';
 import type { StoredGroup } from '../lib/group-store';
+import { usePageEngaged } from './usePageEngaged';
 
 export interface UserFeedHandlers {
   /** A message landed in one of your groups (any group, any device). */
@@ -41,6 +45,7 @@ export function useUserFeed(
 ): void {
   const client = useMessagingClient();
   const { keypair: signer } = useMySocialAuth();
+  const pageEngaged = usePageEngaged();
 
   // Handlers live in a ref so changing identities never resubscribes.
   const handlersRef = useRef(handlers);
@@ -54,7 +59,8 @@ export function useUserFeed(
     .join(',');
 
   useEffect(() => {
-    if (!client || !signer) return;
+    // Unfocused → abort sockets (no restart loop) so peer Online can go Offline.
+    if (!client || !signer || !pageEngaged) return;
 
     const messagingClient = client;
     const messagingSigner = signer;
@@ -110,5 +116,5 @@ export function useUserFeed(
     return () => {
       controller.abort();
     };
-  }, [client, signer, groupIdsKey]);
+  }, [client, signer, groupIdsKey, pageEngaged]);
 }

@@ -20,6 +20,7 @@ import {
   upsertMemberReceipt,
 } from '@socialproof/myso-messaging-stack';
 import { useRequiredMessagingClient } from '../contexts/MessagingClientContext';
+import { usePageEngaged } from './usePageEngaged';
 import type {
   AttachmentFile,
   AttachmentHandle,
@@ -312,6 +313,7 @@ export function useMessages(
   options?: UseMessagesOptions,
 ): UseMessagesResult {
   const { client, signer } = useRequiredMessagingClient();
+  const pageEngaged = usePageEngaged();
 
   const recoveryEnabled = isMessageRecoveryEnabled();
   const [messages, setMessages] = useState<Message[]>([]);
@@ -927,10 +929,12 @@ export function useMessages(
 
   // ------------------------------------------------------------------
   // Real-time subscription (messages, reactions, typing, presence, receipts)
+  // Abort when the tab/window is unfocused so peer Online flips Offline;
+  // resubscribe on focus restores Online (do not use messaging.disconnect()).
   // ------------------------------------------------------------------
   useEffect(() => {
-    // Don't subscribe while still loading initial messages
-    if (loading) return;
+    // Don't subscribe while still loading initial messages or while away.
+    if (loading || !pageEngaged) return;
 
     const controller = new AbortController();
 
@@ -1014,6 +1018,7 @@ export function useMessages(
     client,
     signer,
     loading,
+    pageEngaged,
     myAddress,
     resyncPresence,
     resyncReceipts,
@@ -1056,11 +1061,22 @@ export function useMessages(
     return () => clearInterval(timer);
   }, [typingUntil]);
 
-  // Mark thread read + presence heartbeat for push gating.
+  // Clear push-suppress when the tab/window is not engaged (other tab or window).
+  // Peer Online over WS is unchanged — only /devices/presence "recently active".
+  useEffect(() => {
+    if (pageEngaged) return;
+    client.messaging.transport
+      .postPresence({ signer, active: false })
+      .catch((err) => console.warn('Failed to clear presence:', err));
+  }, [pageEngaged, client, signer]);
+
+  // Mark thread read + presence heartbeat for push gating — only while the
+  // document is visible and focused. Background tabs must not advance read
+  // watermarks or suppress push.
   // Private encrypted read-state and peer-visible receipts use separate
   // watermarks so a successful updateReadState never suppresses receipt retries.
   useEffect(() => {
-    if (loading || !groupId || messages.length === 0) return;
+    if (!pageEngaged || loading || !groupId || messages.length === 0) return;
 
     const maxOrder = Math.max(...messages.map((m) => m.order));
     if (!Number.isFinite(maxOrder)) return;
@@ -1086,7 +1102,15 @@ export function useMessages(
     client.messaging.transport
       .postPresence({ signer, active: true })
       .catch((err) => console.warn('Failed to post presence:', err));
-  }, [messages, loading, groupId, client, signer, schedulePeerReadAck]);
+  }, [
+    pageEngaged,
+    messages,
+    loading,
+    groupId,
+    client,
+    signer,
+    schedulePeerReadAck,
+  ]);
 
   // ------------------------------------------------------------------
   // Typing broadcast (fire-and-forget, ephemeral)

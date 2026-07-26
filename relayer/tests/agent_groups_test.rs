@@ -132,6 +132,7 @@ fn create_test_app(agent_group_store: Arc<dyn AgentGroupStore>) -> Router {
         true,
         true,
         30,
+        config.presence_offline_grace_secs,
         900,
         begin_chat,
     );

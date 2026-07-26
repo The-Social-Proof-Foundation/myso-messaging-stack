@@ -6,6 +6,7 @@ import EmojiPicker, {
 } from 'emoji-picker-react';
 import { Smile } from 'lucide-react';
 import type { AttachmentFile } from '../hooks/useMessages';
+import { usePageEngaged } from '../hooks/usePageEngaged';
 
 const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5 MB
 const MAX_FILES = 10;
@@ -54,6 +55,7 @@ export function MessageInput({
   disabled = false,
   sending = false,
 }: Readonly<MessageInputProps>) {
+  const pageEngaged = usePageEngaged();
   const [text, setText] = useState('');
   const [files, setFiles] = useState<File[]>([]);
   const [fileError, setFileError] = useState<string | null>(null);
@@ -70,6 +72,8 @@ export function MessageInput({
   const lastStartRef = useRef(0);
   const isTypingRef = useRef(false);
   const idleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pageEngagedRef = useRef(pageEngaged);
+  pageEngagedRef.current = pageEngaged;
 
   function stopTyping() {
     if (idleTimerRef.current) {
@@ -84,6 +88,10 @@ export function MessageInput({
 
   function noteTyping(value: string) {
     if (!onTypingRef.current) return;
+    if (!pageEngagedRef.current) {
+      stopTyping();
+      return;
+    }
 
     if (!value.trim()) {
       stopTyping();
@@ -100,6 +108,11 @@ export function MessageInput({
     if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
     idleTimerRef.current = setTimeout(stopTyping, TYPING_IDLE_MS);
   }
+
+  // Stop typing when the tab/window loses engagement.
+  useEffect(() => {
+    if (!pageEngaged) stopTyping();
+  }, [pageEngaged]);
 
   // Best-effort stop when the composer unmounts (group switch, sign-out).
   useEffect(() => {

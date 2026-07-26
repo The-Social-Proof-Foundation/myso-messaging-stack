@@ -74,6 +74,8 @@ pub struct AppState {
     pub realtime_enabled: bool,
     pub inline_realtime_publish: bool,
     pub ws_ping_interval_secs: u64,
+    /// Seconds to wait after last WS close before broadcasting Offline.
+    pub presence_offline_grace_secs: u64,
     pub request_ttl_seconds: i64,
     /// Wallet connection refcounts for wallet-scoped presence transitions.
     pub presence_registry: Arc<PresenceRegistry>,
@@ -103,6 +105,7 @@ impl AppState {
         realtime_enabled: bool,
         inline_realtime_publish: bool,
         ws_ping_interval_secs: u64,
+        presence_offline_grace_secs: u64,
         request_ttl_seconds: i64,
         begin_chat_notify: BeginChatNotify,
     ) -> Self {
@@ -122,6 +125,7 @@ impl AppState {
             realtime_enabled,
             inline_realtime_publish,
             ws_ping_interval_secs,
+            presence_offline_grace_secs,
             request_ttl_seconds,
             None,
             begin_chat_notify,
@@ -145,6 +149,7 @@ impl AppState {
         realtime_enabled: bool,
         inline_realtime_publish: bool,
         ws_ping_interval_secs: u64,
+        presence_offline_grace_secs: u64,
         request_ttl_seconds: i64,
         archive_read: Option<Arc<ArchiveReadService>>,
         begin_chat_notify: BeginChatNotify,
@@ -165,6 +170,7 @@ impl AppState {
             realtime_enabled,
             inline_realtime_publish,
             ws_ping_interval_secs,
+            presence_offline_grace_secs,
             request_ttl_seconds,
             presence_registry: Arc::new(PresenceRegistry::new()),
             typing_rate: Arc::new(TypingRateLimiter::default()),
@@ -219,6 +225,7 @@ impl AppState {
             true,
             true,
             30,
+            Config::default().presence_offline_grace_secs,
             900,
             begin_chat_notify,
         )
@@ -256,6 +263,7 @@ impl AppState {
             true,
             true,
             30,
+            Config::default().presence_offline_grace_secs,
             900,
             begin_chat_notify,
         )
