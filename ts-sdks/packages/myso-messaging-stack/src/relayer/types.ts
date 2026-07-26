@@ -356,6 +356,8 @@ export type ReceiptMode = 'full' | 'delivered_only' | 'none';
 export interface ConversationPrefs {
 	notificationMode: NotificationMode;
 	receiptMode: ReceiptMode;
+	/** When true, peers must not see you as Online in this group. */
+	hideOnlinePresence: boolean;
 	version: number;
 }
 
@@ -369,6 +371,7 @@ export interface PutConversationPrefsParams {
 	groupId: string;
 	notificationMode?: NotificationMode;
 	receiptMode?: ReceiptMode;
+	hideOnlinePresence?: boolean;
 }
 
 export interface UserReadStateWire {

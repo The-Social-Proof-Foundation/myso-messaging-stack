@@ -976,6 +976,7 @@ describe('HTTPRelayerTransport', () => {
 					JSON.stringify({
 						notification_mode: 'all',
 						receipt_mode: 'full',
+						hide_online_presence: false,
 						version: 1,
 					}),
 					{ status: 200 },
@@ -990,6 +991,7 @@ describe('HTTPRelayerTransport', () => {
 			expect(prefs).toEqual({
 				notificationMode: 'all',
 				receiptMode: 'full',
+				hideOnlinePresence: false,
 				version: 1,
 			});
 		});
@@ -1005,6 +1007,7 @@ describe('HTTPRelayerTransport', () => {
 					JSON.stringify({
 						notification_mode: 'none',
 						receipt_mode: 'full',
+						hide_online_presence: true,
 						version: 2,
 					}),
 					{ status: 200 },
@@ -1015,13 +1018,16 @@ describe('HTTPRelayerTransport', () => {
 				signer: defaultKeypair,
 				groupId: '0x' + '34'.repeat(32),
 				notificationMode: 'none',
+				hideOnlinePresence: true,
 			});
 
 			const body = JSON.parse(mockFetch.mock.calls[0][1]?.body as string);
 			expect(body.notification_mode).toBe('none');
 			expect(body.receipt_mode).toBeUndefined();
+			expect(body.hide_online_presence).toBe(true);
 			expect(prefs.version).toBe(2);
 			expect(prefs.notificationMode).toBe('none');
+			expect(prefs.hideOnlinePresence).toBe(true);
 		});
 	});
 

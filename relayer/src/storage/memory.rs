@@ -624,6 +624,9 @@ impl StorageAdapter for InMemoryStorage {
                 .notification_mode
                 .unwrap_or(current.notification_mode),
             receipt_mode: patch.receipt_mode.unwrap_or(current.receipt_mode),
+            hide_online_presence: patch
+                .hide_online_presence
+                .unwrap_or(current.hide_online_presence),
             version: if had_row {
                 current.version.saturating_add(1)
             } else {
@@ -1611,12 +1614,14 @@ mod tests {
                 ConversationPreferencesPatch {
                     notification_mode: Some("none".to_string()),
                     receipt_mode: None,
+                    hide_online_presence: None,
                 },
             )
             .await
             .unwrap();
         assert_eq!(first.notification_mode, "none");
         assert_eq!(first.receipt_mode, "full");
+        assert!(!first.hide_online_presence);
         assert_eq!(first.version, 1);
 
         let second = storage
@@ -1626,12 +1631,14 @@ mod tests {
                 ConversationPreferencesPatch {
                     notification_mode: None,
                     receipt_mode: Some("delivered_only".to_string()),
+                    hide_online_presence: Some(true),
                 },
             )
             .await
             .unwrap();
         assert_eq!(second.notification_mode, "none");
         assert_eq!(second.receipt_mode, "delivered_only");
+        assert!(second.hide_online_presence);
         assert_eq!(second.version, 2);
 
         let modes = storage

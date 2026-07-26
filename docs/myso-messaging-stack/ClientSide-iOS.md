@@ -27,7 +27,7 @@ Config: `MESSAGING_RELAYER_URL` in xcconfig / Info.plist as **host only** (e.g. 
 | Unread counts | `POST /v1/users/unread-counts` (body-signed batch) |
 | Read state (private unread) | `GET/PUT /v1/users/read-state` |
 | Receipts (peer delivery/read) | `GET/POST /v1/groups/:id/receipts` |
-| Conversation prefs (mute / receipts) | `GET/PUT /v1/groups/:id/prefs` |
+| Conversation prefs (mute / receipts / online visibility) | `GET/PUT /v1/groups/:id/prefs` |
 | Push token | `POST/DELETE /v1/devices/push-tokens` |
 | Presence | `POST /v1/devices/presence` |
 | Blocks (DM) | Relayer enforces via social-server; Create Conversation picker shows **Blocked** (either direction) and disables select; SDK/relayer still hard-gate on send |
@@ -90,7 +90,7 @@ Ignore unknown / workflow types until those milestones ship.
 
 **Private unread vs public receipts:** encrypted read-state drives **your** badges only. Peer-visible ticks use plaintext receipts (`MessagingRelayerHTTPClient.fetchGroupReceipts` / `postGroupReceipts`). On `markRead`, always advance encrypted read-state; POST `read_upto` only when `receipt_mode == full` (default). After **any** successful tip/message ingest (inbox tip warm or open thread), ACK `delivered_upto` unless mode is `none`. Read ACK stays open-thread only. Own-message meta: single green ✓ = delivered, offset ✓✓ = read (not signature verified).
 
-**Chat settings (Details):** `ChatGroupDetailsView` → **Chat settings** (Notifications + Read receipts toggles) for every member. `GET/PUT /v1/groups/:id/prefs` via `MessagingRelayerHTTPClient`. Process-lifetime cache: `MessagingConversationPrefsCache` — set on thread open, Details load, and successful PUT; empty after process restart (always refetch). Encrypted blob `muted` is not push mute.
+**Chat settings (Details):** `ChatGroupDetailsView` → **Preferences** (Notifications + Read receipts + Show online in this chat) for every member. `GET/PUT /v1/groups/:id/prefs` via `MessagingRelayerHTTPClient` (`hide_online_presence`, default false). When hide is on, the relayer forces Offline (and omits `last_seen`) for that wallet in the group snapshot / `presence.updated` fan-out. Process-lifetime cache: `MessagingConversationPrefsCache` — set on thread open, Details load, and successful PUT; empty after process restart (always refetch). Encrypted blob `muted` is not push mute.
 
 ### Group feed auth (`/v1/ws`)
 

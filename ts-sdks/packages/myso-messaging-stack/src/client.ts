@@ -788,8 +788,8 @@ export class MySoMessagingStackClient<TApproveContext = void> {
 	}
 
 	/**
-	 * Caller's per-conversation notification / read-receipt preferences.
-	 * Missing server row returns defaults (`all` / `full`, version 1).
+	 * Caller's per-conversation notification / read-receipt / online-visibility preferences.
+	 * Missing server row returns defaults (`all` / `full` / show online, version 1).
 	 */
 	async getConversationPrefs(options: {
 		signer: Signer;
@@ -807,6 +807,7 @@ export class MySoMessagingStackClient<TApproveContext = void> {
 		groupRef: GroupRef;
 		notificationMode?: NotificationMode;
 		receiptMode?: ReceiptMode;
+		hideOnlinePresence?: boolean;
 	}): Promise<ConversationPrefs> {
 		const { groupId } = this.derive.resolveGroupRef(options.groupRef);
 		return this.transport.putConversationPrefs({
@@ -814,6 +815,7 @@ export class MySoMessagingStackClient<TApproveContext = void> {
 			groupId,
 			notificationMode: options.notificationMode,
 			receiptMode: options.receiptMode,
+			hideOnlinePresence: options.hideOnlinePresence,
 		});
 	}
 

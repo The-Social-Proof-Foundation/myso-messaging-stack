@@ -65,7 +65,8 @@ The app provides working code for common integration patterns: **MySocial OAuth 
 | Send text message      | Text input with Enter-to-send                            | `messaging.sendMessage()`                          |
 | Read message history   | Paginated message display with "load older"              | `messaging.getMessages()`                          |
 | Real-time subscription | Live messages + reaction updates (WS, polling fallback)  | `messaging.subscribe()`                            |
-| Away when unfocused    | Mark-read, push-suppress (`postPresence`), and typing only while visible+focused (`usePageEngaged`); group + user-feed WebSockets pause so peer Online goes Offline, then resume on focus | `usePageEngaged` / AbortController on `subscribe` |
+| Away when unfocused    | Mark-read / push-suppress / typing require visible+focused (`usePageEngaged`); peer Online follows tab visibility only (`usePageVisible`) — Offline on other browser tab, stay Online when switching to another OS app with the chat tab open | `usePageEngaged` / `usePageVisible` |
+| Show online in this chat | Per-conversation toggle in Chat Details (default on); when off, peers see you Offline in that chat only (`hide_online_presence`) | `getConversationPrefs` / `putConversationPrefs` |
 | Edit message           | Inline edit on own messages                              | `messaging.editMessage()`                          |
 | Delete message         | Delete with confirmation                                 | `messaging.deleteMessage()`                        |
 | React to message       | Left-click a bubble for the emoji picker; click chips to toggle | `messaging.addReaction()` / `removeReaction()` |

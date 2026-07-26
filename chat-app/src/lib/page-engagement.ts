@@ -1,70 +1,98 @@
 /**
- * Document engagement for “actively present” in the chat UI.
+ * Document presence signals for the chat UI.
  *
- * Engaged = tab visible AND window focused. Covers other browser tabs and
- * other OS windows via Page Visibility + focus/blur; Safari bfcache via
- * pagehide/pageshow.
+ * - Visible (`isPageVisible`): tab is shown (`visibilityState === 'visible'`).
+ *   Used for peer Online — stay Online when switching to another OS app while
+ *   the chat tab remains open; go Offline when switching to another browser tab.
+ * - Engaged (`isPageEngaged`): visible AND window focused. Used for mark-read,
+ *   push-suppress presence, and typing (actively reading).
  *
- * Callers use this to gate mark-read / push-suppress presence, pause typing,
- * and abort realtime WebSockets so peer Online flips Offline while away.
+ * Safari bfcache: `pagehide` forces both false until `pageshow`.
  */
 
-type EngagementListener = (engaged: boolean) => void;
+type BooleanListener = (value: boolean) => void;
 
 /** Set on `pagehide` (bfcache / unload); cleared on `pageshow`. */
 let pagehideAway = false;
 
-const listeners = new Set<EngagementListener>();
+const engagementListeners = new Set<BooleanListener>();
+const visibilityListeners = new Set<BooleanListener>();
 let listening = false;
-let lastEmitted: boolean | undefined;
+let lastEngagedEmitted: boolean | undefined;
+let lastVisibleEmitted: boolean | undefined;
 
 function browserAvailable(): boolean {
   return typeof document !== 'undefined' && typeof window !== 'undefined';
 }
 
-/** Current engagement snapshot (safe to call outside React). */
+/** Tab is visible (peer Online). Does not require window focus. */
+export function isPageVisible(): boolean {
+  if (!browserAvailable()) return false;
+  if (pagehideAway) return false;
+  return document.visibilityState === 'visible';
+}
+
+/** Visible and focused (actively reading). */
 export function isPageEngaged(): boolean {
   if (!browserAvailable()) return false;
   if (pagehideAway) return false;
   return document.visibilityState === 'visible' && document.hasFocus();
 }
 
-function emit() {
-  const next = isPageEngaged();
-  if (next === lastEmitted) return;
-  lastEmitted = next;
-  for (const cb of listeners) {
-    cb(next);
+function emitAll() {
+  const visible = isPageVisible();
+  const engaged = isPageEngaged();
+
+  if (visible !== lastVisibleEmitted) {
+    lastVisibleEmitted = visible;
+    for (const cb of visibilityListeners) {
+      cb(visible);
+    }
+  }
+
+  if (engaged !== lastEngagedEmitted) {
+    lastEngagedEmitted = engaged;
+    for (const cb of engagementListeners) {
+      cb(engaged);
+    }
   }
 }
 
 function onPageHide() {
   pagehideAway = true;
-  emit();
+  emitAll();
 }
 
 function onPageShow() {
   pagehideAway = false;
-  emit();
+  emitAll();
 }
 
 function ensureListening() {
   if (listening || !browserAvailable()) return;
   listening = true;
-  document.addEventListener('visibilitychange', emit);
-  window.addEventListener('focus', emit);
-  window.addEventListener('blur', emit);
+  document.addEventListener('visibilitychange', emitAll);
+  window.addEventListener('focus', emitAll);
+  window.addEventListener('blur', emitAll);
   window.addEventListener('pagehide', onPageHide);
   window.addEventListener('pageshow', onPageShow);
 }
 
 function maybeStopListening() {
-  if (!listening || listeners.size > 0 || !browserAvailable()) return;
+  if (
+    !listening ||
+    engagementListeners.size > 0 ||
+    visibilityListeners.size > 0 ||
+    !browserAvailable()
+  ) {
+    return;
+  }
   listening = false;
-  lastEmitted = undefined;
-  document.removeEventListener('visibilitychange', emit);
-  window.removeEventListener('focus', emit);
-  window.removeEventListener('blur', emit);
+  lastEngagedEmitted = undefined;
+  lastVisibleEmitted = undefined;
+  document.removeEventListener('visibilitychange', emitAll);
+  window.removeEventListener('focus', emitAll);
+  window.removeEventListener('blur', emitAll);
   window.removeEventListener('pagehide', onPageHide);
   window.removeEventListener('pageshow', onPageShow);
 }
@@ -73,14 +101,29 @@ function maybeStopListening() {
  * Subscribe to engagement changes. Immediately invokes `cb` with the current
  * value. Returns an unsubscribe function.
  */
-export function subscribePageEngagement(cb: EngagementListener): () => void {
+export function subscribePageEngagement(cb: BooleanListener): () => void {
   ensureListening();
-  listeners.add(cb);
+  engagementListeners.add(cb);
   const current = isPageEngaged();
-  lastEmitted = current;
+  lastEngagedEmitted = current;
   cb(current);
   return () => {
-    listeners.delete(cb);
+    engagementListeners.delete(cb);
+    maybeStopListening();
+  };
+}
+
+/**
+ * Subscribe to visibility changes (tab shown/hidden). Immediately invokes `cb`.
+ */
+export function subscribePageVisibility(cb: BooleanListener): () => void {
+  ensureListening();
+  visibilityListeners.add(cb);
+  const current = isPageVisible();
+  lastVisibleEmitted = current;
+  cb(current);
+  return () => {
+    visibilityListeners.delete(cb);
     maybeStopListening();
   };
 }
@@ -92,8 +135,18 @@ export function subscribePageEngagementStore(onStoreChange: () => void): () => v
   });
 }
 
+export function subscribePageVisibilityStore(onStoreChange: () => void): () => void {
+  return subscribePageVisibility(() => {
+    onStoreChange();
+  });
+}
+
 export function getPageEngagedSnapshot(): boolean {
   return isPageEngaged();
+}
+
+export function getPageVisibleSnapshot(): boolean {
+  return isPageVisible();
 }
 
 /** Server / SSR snapshot — never “reading” until hydrated in the browser. */
@@ -101,15 +154,21 @@ export function getServerPageEngagedSnapshot(): boolean {
   return false;
 }
 
+export function getServerPageVisibleSnapshot(): boolean {
+  return false;
+}
+
 /** Test-only: reset module listeners / pagehide flag. */
 export function __resetPageEngagementForTests(): void {
   pagehideAway = false;
-  listeners.clear();
-  lastEmitted = undefined;
+  engagementListeners.clear();
+  visibilityListeners.clear();
+  lastEngagedEmitted = undefined;
+  lastVisibleEmitted = undefined;
   if (listening && browserAvailable()) {
-    document.removeEventListener('visibilitychange', emit);
-    window.removeEventListener('focus', emit);
-    window.removeEventListener('blur', emit);
+    document.removeEventListener('visibilitychange', emitAll);
+    window.removeEventListener('focus', emitAll);
+    window.removeEventListener('blur', emitAll);
     window.removeEventListener('pagehide', onPageHide);
     window.removeEventListener('pageshow', onPageShow);
   }

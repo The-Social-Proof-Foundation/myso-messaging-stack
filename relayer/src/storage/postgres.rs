@@ -929,7 +929,7 @@ impl StorageAdapter for PostgresStorage {
         wallet: &str,
     ) -> StorageResult<Option<ConversationPreferences>> {
         let row = sqlx::query(
-            r#"SELECT notification_mode, receipt_mode, version
+            r#"SELECT notification_mode, receipt_mode, hide_online_presence, version
                FROM conversation_preferences
                WHERE group_id = $1 AND wallet = $2"#,
         )
@@ -942,6 +942,7 @@ impl StorageAdapter for PostgresStorage {
         Ok(row.map(|r| ConversationPreferences {
             notification_mode: r.get("notification_mode"),
             receipt_mode: r.get("receipt_mode"),
+            hide_online_presence: r.get("hide_online_presence"),
             version: r.get::<i32, _>("version"),
         }))
     }
@@ -953,7 +954,7 @@ impl StorageAdapter for PostgresStorage {
         patch: ConversationPreferencesPatch,
     ) -> StorageResult<ConversationPreferences> {
         let existing = sqlx::query(
-            "SELECT notification_mode, receipt_mode, version FROM conversation_preferences WHERE group_id = $1 AND wallet = $2",
+            "SELECT notification_mode, receipt_mode, hide_online_presence, version FROM conversation_preferences WHERE group_id = $1 AND wallet = $2",
         )
         .bind(group_id)
         .bind(wallet)
@@ -966,6 +967,7 @@ impl StorageAdapter for PostgresStorage {
                 ConversationPreferences {
                     notification_mode: r.get("notification_mode"),
                     receipt_mode: r.get("receipt_mode"),
+                    hide_online_presence: r.get("hide_online_presence"),
                     version: r.get::<i32, _>("version"),
                 },
                 true,
@@ -977,6 +979,9 @@ impl StorageAdapter for PostgresStorage {
                 .notification_mode
                 .unwrap_or(base.notification_mode),
             receipt_mode: patch.receipt_mode.unwrap_or(base.receipt_mode),
+            hide_online_presence: patch
+                .hide_online_presence
+                .unwrap_or(base.hide_online_presence),
             version: if had_row {
                 base.version.saturating_add(1)
             } else {
@@ -986,11 +991,12 @@ impl StorageAdapter for PostgresStorage {
 
         sqlx::query(
             r#"INSERT INTO conversation_preferences
-                 (group_id, wallet, notification_mode, receipt_mode, version, updated_at)
-               VALUES ($1, $2, $3, $4, $5, now())
+                 (group_id, wallet, notification_mode, receipt_mode, hide_online_presence, version, updated_at)
+               VALUES ($1, $2, $3, $4, $5, $6, now())
                ON CONFLICT (group_id, wallet) DO UPDATE SET
                  notification_mode = EXCLUDED.notification_mode,
                  receipt_mode = EXCLUDED.receipt_mode,
+                 hide_online_presence = EXCLUDED.hide_online_presence,
                  version = EXCLUDED.version,
                  updated_at = now()"#,
         )
@@ -998,6 +1004,7 @@ impl StorageAdapter for PostgresStorage {
         .bind(wallet)
         .bind(&next.notification_mode)
         .bind(&next.receipt_mode)
+        .bind(next.hide_online_presence)
         .bind(next.version)
         .execute(&self.pool)
         .await

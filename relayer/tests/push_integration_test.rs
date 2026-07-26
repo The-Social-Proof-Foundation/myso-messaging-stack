@@ -184,6 +184,7 @@ async fn push_skipped_when_notification_mode_none() {
             ConversationPreferencesPatch {
                 notification_mode: Some("none".to_string()),
                 receipt_mode: None,
+                hide_online_presence: None,
             },
         )
         .await

@@ -179,12 +179,31 @@ impl PgListenerService {
                         }
                     };
                     for group_id in self.membership_store.groups_for_member(&signal.member) {
+                        let online = if signal.online {
+                            match self
+                                .storage
+                                .get_conversation_preferences(&group_id, &signal.member)
+                                .await
+                            {
+                                Ok(Some(prefs)) => !prefs.hide_online_presence,
+                                Ok(None) => true,
+                                Err(err) => {
+                                    warn!(
+                                        "presence prefs lookup failed group={} wallet={}: {}",
+                                        group_id, signal.member, err
+                                    );
+                                    true
+                                }
+                            }
+                        } else {
+                            false
+                        };
                         self.hub.publish_presence(
                             &group_id,
                             PresenceUpdatedEvent::new(
                                 group_id.clone(),
                                 signal.member.clone(),
-                                signal.online,
+                                online,
                             ),
                         );
                     }

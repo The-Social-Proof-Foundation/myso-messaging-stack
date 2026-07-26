@@ -84,7 +84,7 @@ Tick UI (own messages, last-in-group): single green ✓ = all other members `del
 
 ## Conversation preferences (server-visible)
 
-Plaintext Postgres table `conversation_preferences` keyed by `(group_id, wallet)`. Missing row = defaults `notification_mode: all`, `receipt_mode: full`, `version: 1`.
+Plaintext Postgres table `conversation_preferences` keyed by `(group_id, wallet)`. Missing row = defaults `notification_mode: all`, `receipt_mode: full`, `hide_online_presence: false`, `version: 1`.
 
 | Method | Path | Auth | Behavior |
 |--------|------|------|----------|
@@ -93,14 +93,14 @@ Plaintext Postgres table `conversation_preferences` keyed by `(group_id, wallet)
 
 ```json
 PUT { "notification_mode": "none" }
-// preserves receipt_mode; version++
+// preserves receipt_mode / hide_online_presence; version++
 ```
 
-Modes: `notification_mode` ∈ `all` \| `none`; `receipt_mode` ∈ `full` \| `delivered_only` \| `none`. Empty PUT → 400.
+Modes: `notification_mode` ∈ `all` \| `none`; `receipt_mode` ∈ `full` \| `delivered_only` \| `none`; `hide_online_presence` ∈ bool (default `false` = show Online). Empty PUT → 400. When `hide_online_presence` is true, peers see you Offline in that group (GET presence + `presence.updated`).
 
 **Push filter order** in `notify_new_message`: members → drop sender → presence (recently active) → **batched** `list_notification_modes` for remaining inactive wallets → drop `notification_mode == none` → token lookup / APNs. Workflow push unchanged. Encrypted `muted` is unused for APNs.
 
-**Clients:** Chat Details (web Info → AdminPanel; iOS Details) expose **Chat settings** with Notifications + Read receipts toggles for every member (default ON). SDK: `getConversationPrefs` / `putConversationPrefs`.
+**Clients:** Chat Details (web Info → AdminPanel; iOS Details) expose **Chat settings** with Notifications + Read receipts + Show online in this chat toggles for every member (defaults ON / show online). SDK: `getConversationPrefs` / `putConversationPrefs` (`hideOnlinePresence`).
 
 ## SDK
 

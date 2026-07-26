@@ -1,28 +1,37 @@
 /**
- * Per-conversation notification + read-receipt toggles (Chat Details).
- * Visible to every member — not admin-gated.
+ * Per-conversation notification, read-receipt, and online-visibility toggles
+ * (Chat Details). Visible to every member — not admin-gated.
  */
 
-export type ChatSettingsSavingKey = 'notifications' | 'readReceipts' | null;
+export type ChatSettingsSavingKey =
+  | 'notifications'
+  | 'readReceipts'
+  | 'onlinePresence'
+  | null;
 
 interface ChatSettingsSectionProps {
   notificationsEnabled: boolean;
   readReceiptsEnabled: boolean;
+  /** Show online in this chat (inverse of hideOnlinePresence). */
+  onlinePresenceEnabled: boolean;
   loading: boolean;
   savingKey: ChatSettingsSavingKey;
   error: string | null;
   onToggleNotifications: (enabled: boolean) => void;
   onToggleReadReceipts: (enabled: boolean) => void;
+  onToggleOnlinePresence: (enabled: boolean) => void;
 }
 
 export function ChatSettingsSection({
   notificationsEnabled,
   readReceiptsEnabled,
+  onlinePresenceEnabled,
   loading,
   savingKey,
   error,
   onToggleNotifications,
   onToggleReadReceipts,
+  onToggleOnlinePresence,
 }: Readonly<ChatSettingsSectionProps>) {
   const busy = loading || savingKey !== null;
 
@@ -48,6 +57,14 @@ export function ChatSettingsSection({
           disabled={busy}
           saving={savingKey === 'readReceipts'}
           onChange={onToggleReadReceipts}
+        />
+        <ToggleRow
+          label="Show online status"
+          helper="Let others see when you’re online in this chat"
+          checked={onlinePresenceEnabled}
+          disabled={busy}
+          saving={savingKey === 'onlinePresence'}
+          onChange={onToggleOnlinePresence}
         />
       </div>
 

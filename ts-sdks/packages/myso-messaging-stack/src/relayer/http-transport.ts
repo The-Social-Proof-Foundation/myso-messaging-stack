@@ -540,6 +540,7 @@ export class HTTPRelayerTransport implements RelayerTransport {
 		const wire = await this.#requestWithGroupHeaderAuth<{
 			notification_mode: string;
 			receipt_mode: string;
+			hide_online_presence?: boolean;
 			version: number;
 		}>(
 			params.signer,
@@ -550,6 +551,7 @@ export class HTTPRelayerTransport implements RelayerTransport {
 		return {
 			notificationMode: wire.notification_mode as NotificationMode,
 			receiptMode: wire.receipt_mode as ReceiptMode,
+			hideOnlinePresence: wire.hide_online_presence === true,
 			version: wire.version,
 		};
 	}
@@ -564,10 +566,14 @@ export class HTTPRelayerTransport implements RelayerTransport {
 		if (params.receiptMode !== undefined) {
 			payload.receipt_mode = params.receiptMode;
 		}
+		if (params.hideOnlinePresence !== undefined) {
+			payload.hide_online_presence = params.hideOnlinePresence;
+		}
 		const { body, headers } = await createBodyAuth(params.signer, payload);
 		const wire = await this.#request<{
 			notification_mode: string;
 			receipt_mode: string;
+			hide_online_presence?: boolean;
 			version: number;
 		}>(this.#relayerPath(`/groups/${params.groupId}/prefs`), {
 			method: 'PUT',
@@ -577,6 +583,7 @@ export class HTTPRelayerTransport implements RelayerTransport {
 		return {
 			notificationMode: wire.notification_mode as NotificationMode,
 			receiptMode: wire.receipt_mode as ReceiptMode,
+			hideOnlinePresence: wire.hide_online_presence === true,
 			version: wire.version,
 		};
 	}

@@ -71,6 +71,12 @@ const noopTransport: RelayerTransport = {
 	postGroupReceipts: () => {
 		throw new Error('noopTransport: postGroupReceipts not implemented');
 	},
+	getConversationPrefs: () => {
+		throw new Error('noopTransport: getConversationPrefs not implemented');
+	},
+	putConversationPrefs: () => {
+		throw new Error('noopTransport: putConversationPrefs not implemented');
+	},
 	getUserReadState: () => {
 		throw new Error('noopTransport: getUserReadState not implemented');
 	},

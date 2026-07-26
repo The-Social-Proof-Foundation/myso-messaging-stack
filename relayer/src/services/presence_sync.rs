@@ -21,7 +21,70 @@ use std::time::Duration;
 use tracing::warn;
 
 use super::realtime::{PresenceChangedSignal, PresenceUpdatedEvent};
+use crate::models::ConversationPreferences;
 use crate::state::AppState;
+
+/// Whether peers may observe this wallet as Online in `group_id`.
+async fn shares_online_in_group(state: &AppState, group_id: &str, wallet: &str) -> bool {
+    match state
+        .storage
+        .get_conversation_preferences(group_id, wallet)
+        .await
+    {
+        Ok(Some(prefs)) => !prefs.hide_online_presence,
+        Ok(None) => !ConversationPreferences::defaults().hide_online_presence,
+        Err(err) => {
+            warn!(
+                "presence prefs lookup failed group={} wallet={}: {}",
+                group_id, wallet, err
+            );
+            // Fail open (show online) so a storage blip doesn't force everyone offline.
+            true
+        }
+    }
+}
+
+/// Effective Online bit for a group channel (registry ∧ share prefs).
+pub async fn effective_online_in_group(
+    state: &AppState,
+    group_id: &str,
+    wallet: &str,
+    registry_online: bool,
+) -> bool {
+    if !registry_online {
+        return false;
+    }
+    shares_online_in_group(state, group_id, wallet).await
+}
+
+/// Re-publish presence after a prefs change so peers refresh immediately.
+///
+/// Inline mode updates the one group; Postgres mode re-emits a wallet-level
+/// `presence.changed` so every instance re-fans out with prefs filtering.
+pub async fn publish_presence_for_group(state: &AppState, group_id: &str, wallet: &str) {
+    if !state.realtime_enabled {
+        return;
+    }
+    let registry_online = state.presence_registry.is_online(wallet);
+    if state.inline_realtime_publish {
+        let online =
+            effective_online_in_group(state, group_id, wallet, registry_online).await;
+        state.realtime_hub.publish_presence(
+            group_id,
+            PresenceUpdatedEvent::new(group_id.to_string(), wallet.to_string(), online),
+        );
+        return;
+    }
+    let signal = PresenceChangedSignal::new(wallet.to_string(), registry_online);
+    match serde_json::to_string(&signal) {
+        Ok(payload) => {
+            if let Err(err) = state.storage.notify_realtime_event(&payload).await {
+                warn!("presence prefs correction notify failed for {}: {}", wallet, err);
+            }
+        }
+        Err(err) => warn!("presence prefs correction serialize failed: {}", err),
+    }
+}
 
 fn wallet_key(wallet: &str) -> String {
     wallet.to_ascii_lowercase()
@@ -101,16 +164,22 @@ async fn broadcast_presence(state: &AppState, wallet: &str, online: bool) {
     }
 
     if state.inline_realtime_publish {
-        // Single-instance (in-memory) mode: fan out locally.
+        // Single-instance (in-memory) mode: fan out locally, prefs-filtered.
         for group_id in state.membership_store.groups_for_member(wallet) {
+            let effective = if online {
+                shares_online_in_group(state, &group_id, wallet).await
+            } else {
+                false
+            };
             state.realtime_hub.publish_presence(
                 &group_id,
-                PresenceUpdatedEvent::new(group_id.clone(), wallet.to_string(), online),
+                PresenceUpdatedEvent::new(group_id.clone(), wallet.to_string(), effective),
             );
         }
     } else {
         // Postgres mode: one NOTIFY; every instance (including this one)
-        // fans out through its own membership store via the LISTEN worker.
+        // fans out through its own membership store via the LISTEN worker,
+        // applying per-group hide_online_presence there.
         let signal = PresenceChangedSignal::new(wallet.to_string(), online);
         match serde_json::to_string(&signal) {
             Ok(payload) => {

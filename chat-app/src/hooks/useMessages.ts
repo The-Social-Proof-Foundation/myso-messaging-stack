@@ -21,6 +21,7 @@ import {
 } from '@socialproof/myso-messaging-stack';
 import { useRequiredMessagingClient } from '../contexts/MessagingClientContext';
 import { usePageEngaged } from './usePageEngaged';
+import { usePageVisible } from './usePageVisible';
 import type {
   AttachmentFile,
   AttachmentHandle,
@@ -314,6 +315,7 @@ export function useMessages(
 ): UseMessagesResult {
   const { client, signer } = useRequiredMessagingClient();
   const pageEngaged = usePageEngaged();
+  const pageVisible = usePageVisible();
 
   const recoveryEnabled = isMessageRecoveryEnabled();
   const [messages, setMessages] = useState<Message[]>([]);
@@ -929,12 +931,13 @@ export function useMessages(
 
   // ------------------------------------------------------------------
   // Real-time subscription (messages, reactions, typing, presence, receipts)
-  // Abort when the tab/window is unfocused so peer Online flips Offline;
-  // resubscribe on focus restores Online (do not use messaging.disconnect()).
+  // Abort when the browser tab is hidden so peer Online flips Offline;
+  // stay connected when switching to another OS app (tab still visible).
+  // Do not use messaging.disconnect() for temporary pause.
   // ------------------------------------------------------------------
   useEffect(() => {
-    // Don't subscribe while still loading initial messages or while away.
-    if (loading || !pageEngaged) return;
+    // Don't subscribe while still loading initial messages or while tab-hidden.
+    if (loading || !pageVisible) return;
 
     const controller = new AbortController();
 
@@ -1018,7 +1021,7 @@ export function useMessages(
     client,
     signer,
     loading,
-    pageEngaged,
+    pageVisible,
     myAddress,
     resyncPresence,
     resyncReceipts,

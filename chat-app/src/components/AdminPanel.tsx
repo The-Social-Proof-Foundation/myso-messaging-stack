@@ -84,6 +84,7 @@ export function AdminPanel({
 
   const [notificationsEnabled, setNotificationsEnabled] = useState(true);
   const [readReceiptsEnabled, setReadReceiptsEnabled] = useState(true);
+  const [onlinePresenceEnabled, setOnlinePresenceEnabled] = useState(true);
   const [prefsLoading, setPrefsLoading] = useState(true);
   const [prefsSavingKey, setPrefsSavingKey] =
     useState<ChatSettingsSavingKey>(null);
@@ -151,10 +152,28 @@ export function AdminPanel({
     setLoadingMembers(false);
     setNotificationsEnabled(true);
     setReadReceiptsEnabled(true);
+    setOnlinePresenceEnabled(true);
     setPrefsLoading(true);
     setPrefsError(null);
     setPrefsSavingKey(null);
   }, [groupId]);
+
+  const applyPrefsLocal = useCallback(
+    (prefs: {
+      notificationMode: string;
+      receiptMode: ReceiptMode;
+      hideOnlinePresence: boolean;
+    }) => {
+      setNotificationsEnabled(prefs.notificationMode === 'all');
+      setReadReceiptsEnabled(prefs.receiptMode === 'full');
+      setOnlinePresenceEnabled(!prefs.hideOnlinePresence);
+      onPrefsChanged?.({
+        notificationsEnabled: prefs.notificationMode === 'all',
+        receiptMode: prefs.receiptMode,
+      });
+    },
+    [onPrefsChanged],
+  );
 
   const fetchPrefs = useCallback(async () => {
     setPrefsLoading(true);
@@ -164,12 +183,7 @@ export function AdminPanel({
         signer,
         groupRef: { uuid: groupUuid },
       });
-      setNotificationsEnabled(prefs.notificationMode === 'all');
-      setReadReceiptsEnabled(prefs.receiptMode === 'full');
-      onPrefsChanged?.({
-        notificationsEnabled: prefs.notificationMode === 'all',
-        receiptMode: prefs.receiptMode,
-      });
+      applyPrefsLocal(prefs);
     } catch (err) {
       console.warn('Failed to load conversation prefs:', err);
       setPrefsError(
@@ -178,7 +192,7 @@ export function AdminPanel({
     } finally {
       setPrefsLoading(false);
     }
-  }, [client, signer, groupUuid, onPrefsChanged]);
+  }, [client, signer, groupUuid, applyPrefsLocal]);
 
   useEffect(() => {
     if (open) {
@@ -199,12 +213,7 @@ export function AdminPanel({
         groupRef: { uuid: groupUuid },
         notificationMode: enabled ? 'all' : 'none',
       });
-      setNotificationsEnabled(prefs.notificationMode === 'all');
-      setReadReceiptsEnabled(prefs.receiptMode === 'full');
-      onPrefsChanged?.({
-        notificationsEnabled: prefs.notificationMode === 'all',
-        receiptMode: prefs.receiptMode,
-      });
+      applyPrefsLocal(prefs);
     } catch (err) {
       setNotificationsEnabled(prev);
       setPrefsError(
@@ -226,16 +235,35 @@ export function AdminPanel({
         groupRef: { uuid: groupUuid },
         receiptMode: enabled ? 'full' : 'delivered_only',
       });
-      setNotificationsEnabled(prefs.notificationMode === 'all');
-      setReadReceiptsEnabled(prefs.receiptMode === 'full');
-      onPrefsChanged?.({
-        notificationsEnabled: prefs.notificationMode === 'all',
-        receiptMode: prefs.receiptMode,
-      });
+      applyPrefsLocal(prefs);
     } catch (err) {
       setReadReceiptsEnabled(prev);
       setPrefsError(
         err instanceof Error ? err.message : 'Failed to update read receipts.',
+      );
+    } finally {
+      setPrefsSavingKey(null);
+    }
+  }
+
+  async function handleToggleOnlinePresence(enabled: boolean) {
+    const prev = onlinePresenceEnabled;
+    setOnlinePresenceEnabled(enabled);
+    setPrefsSavingKey('onlinePresence');
+    setPrefsError(null);
+    try {
+      const prefs = await client.messaging.putConversationPrefs({
+        signer,
+        groupRef: { uuid: groupUuid },
+        hideOnlinePresence: !enabled,
+      });
+      applyPrefsLocal(prefs);
+    } catch (err) {
+      setOnlinePresenceEnabled(prev);
+      setPrefsError(
+        err instanceof Error
+          ? err.message
+          : 'Failed to update online presence.',
       );
     } finally {
       setPrefsSavingKey(null);
@@ -517,11 +545,13 @@ export function AdminPanel({
         <ChatSettingsSection
           notificationsEnabled={notificationsEnabled}
           readReceiptsEnabled={readReceiptsEnabled}
+          onlinePresenceEnabled={onlinePresenceEnabled}
           loading={prefsLoading}
           savingKey={prefsSavingKey}
           error={prefsError}
           onToggleNotifications={handleToggleNotifications}
           onToggleReadReceipts={handleToggleReadReceipts}
+          onToggleOnlinePresence={handleToggleOnlinePresence}
         />
 
         {(permissions.isAdmin || onLeaveGroup) && (

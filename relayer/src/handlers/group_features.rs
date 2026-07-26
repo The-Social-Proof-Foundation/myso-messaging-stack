@@ -75,6 +75,7 @@ pub struct PostReceiptBody {
 pub struct PutPrefsBody {
     pub notification_mode: Option<String>,
     pub receipt_mode: Option<String>,
+    pub hide_online_presence: Option<bool>,
 }
 
 fn validate_notification_mode(mode: &str) -> Result<(), ApiError> {
@@ -223,6 +224,21 @@ pub async fn get_group_presence(
 
     let mut entries = Vec::new();
     for member in state.membership_store.list_member_addresses(&group_id) {
+        let hide = state
+            .storage
+            .get_conversation_preferences(&group_id, &member)
+            .await
+            .map_err(ApiError::from)?
+            .unwrap_or_else(ConversationPreferences::defaults)
+            .hide_online_presence;
+        if hide {
+            entries.push(PresenceEntry {
+                member,
+                last_seen: None,
+                online: false,
+            });
+            continue;
+        }
         let last_seen = state
             .storage
             .get_presence_last_seen(&member)
@@ -346,9 +362,13 @@ pub async fn put_prefs(
     Json(body): Json<PutPrefsBody>,
 ) -> Result<Json<ConversationPreferences>, ApiError> {
     ensure_group(&auth, &group_id)?;
-    if body.notification_mode.is_none() && body.receipt_mode.is_none() {
+    if body.notification_mode.is_none()
+        && body.receipt_mode.is_none()
+        && body.hide_online_presence.is_none()
+    {
         return Err(ApiError::BadRequest(
-            "at least one of notification_mode or receipt_mode is required".to_string(),
+            "at least one of notification_mode, receipt_mode, or hide_online_presence is required"
+                .to_string(),
         ));
     }
     if let Some(ref mode) = body.notification_mode {
@@ -357,6 +377,13 @@ pub async fn put_prefs(
     if let Some(ref mode) = body.receipt_mode {
         validate_receipt_mode(mode)?;
     }
+    let previous_hide = state
+        .storage
+        .get_conversation_preferences(&group_id, auth.sender_address.as_str())
+        .await
+        .map_err(ApiError::from)?
+        .unwrap_or_else(ConversationPreferences::defaults)
+        .hide_online_presence;
     let prefs = state
         .storage
         .upsert_conversation_preferences(
@@ -365,9 +392,21 @@ pub async fn put_prefs(
             ConversationPreferencesPatch {
                 notification_mode: body.notification_mode,
                 receipt_mode: body.receipt_mode,
+                hide_online_presence: body.hide_online_presence,
             },
         )
         .await
         .map_err(ApiError::from)?;
+
+    // Peers need an immediate presence correction when hide flips.
+    if prefs.hide_online_presence != previous_hide {
+        crate::services::presence_sync::publish_presence_for_group(
+            &state,
+            &group_id,
+            auth.sender_address.as_str(),
+        )
+        .await;
+    }
+
     Ok(Json(prefs))
 }

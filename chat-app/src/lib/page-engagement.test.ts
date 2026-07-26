@@ -97,73 +97,101 @@ describe('page-engagement', () => {
     return import('./page-engagement');
   }
 
-  it('is engaged when visible and focused', async () => {
-    const {isPageEngaged} = await load();
+  it('is engaged and visible when visible and focused', async () => {
+    const {isPageEngaged, isPageVisible} = await load();
     expect(isPageEngaged()).toBe(true);
+    expect(isPageVisible()).toBe(true);
   });
 
-  it('is not engaged when the document is hidden', async () => {
-    const {isPageEngaged} = await load();
+  it('is neither engaged nor visible when the document is hidden', async () => {
+    const {isPageEngaged, isPageVisible} = await load();
     mocks.setVisibility('hidden');
     expect(isPageEngaged()).toBe(false);
+    expect(isPageVisible()).toBe(false);
   });
 
-  it('is not engaged when the window is unfocused', async () => {
-    const {isPageEngaged} = await load();
+  it('stays visible but not engaged when the window is unfocused', async () => {
+    const {isPageEngaged, isPageVisible} = await load();
     mocks.setFocused(false);
+    expect(isPageVisible()).toBe(true);
     expect(isPageEngaged()).toBe(false);
   });
 
-  it('notifies subscribers on visibility and focus changes', async () => {
-    const {subscribePageEngagement, __resetPageEngagementForTests} =
-      await load();
-    const seen: boolean[] = [];
-    const unsub = subscribePageEngagement((engaged) => {
-      seen.push(engaged);
+  it('notifies engagement and visibility subscribers independently', async () => {
+    const {
+      subscribePageEngagement,
+      subscribePageVisibility,
+      __resetPageEngagementForTests,
+    } = await load();
+    const engagedSeen: boolean[] = [];
+    const visibleSeen: boolean[] = [];
+    const unsubE = subscribePageEngagement((v) => {
+      engagedSeen.push(v);
     });
-    expect(seen).toEqual([true]);
-
-    mocks.setVisibility('hidden');
-    mocks.dispatchDocument('visibilitychange');
-    expect(seen.at(-1)).toBe(false);
-
-    mocks.setVisibility('visible');
-    mocks.dispatchDocument('visibilitychange');
-    expect(seen.at(-1)).toBe(true);
+    const unsubV = subscribePageVisibility((v) => {
+      visibleSeen.push(v);
+    });
+    expect(engagedSeen).toEqual([true]);
+    expect(visibleSeen).toEqual([true]);
 
     mocks.setFocused(false);
     mocks.dispatchWindow('blur');
-    expect(seen.at(-1)).toBe(false);
+    expect(engagedSeen.at(-1)).toBe(false);
+    // Visibility unchanged — other OS app with tab still open.
+    expect(visibleSeen).toEqual([true]);
 
-    unsub();
+    mocks.setVisibility('hidden');
+    mocks.dispatchDocument('visibilitychange');
+    expect(engagedSeen.at(-1)).toBe(false);
+    expect(visibleSeen.at(-1)).toBe(false);
+
+    mocks.setVisibility('visible');
+    mocks.setFocused(true);
+    mocks.dispatchDocument('visibilitychange');
+    expect(visibleSeen.at(-1)).toBe(true);
+    expect(engagedSeen.at(-1)).toBe(true);
+
+    unsubE();
+    unsubV();
     __resetPageEngagementForTests();
   });
 
-  it('treats pagehide as not engaged until pageshow', async () => {
+  it('treats pagehide as not visible/engaged until pageshow', async () => {
     const {
       isPageEngaged,
+      isPageVisible,
       subscribePageEngagement,
+      subscribePageVisibility,
       __resetPageEngagementForTests,
     } = await load();
-    const seen: boolean[] = [];
-    const unsub = subscribePageEngagement((engaged) => {
-      seen.push(engaged);
+    const engagedSeen: boolean[] = [];
+    const visibleSeen: boolean[] = [];
+    const unsubE = subscribePageEngagement((v) => {
+      engagedSeen.push(v);
     });
-    expect(seen).toEqual([true]);
+    const unsubV = subscribePageVisibility((v) => {
+      visibleSeen.push(v);
+    });
 
     mocks.dispatchWindow('pagehide');
     expect(isPageEngaged()).toBe(false);
-    expect(seen.at(-1)).toBe(false);
+    expect(isPageVisible()).toBe(false);
+    expect(engagedSeen.at(-1)).toBe(false);
+    expect(visibleSeen.at(-1)).toBe(false);
 
     mocks.setVisibility('visible');
     mocks.setFocused(true);
     expect(isPageEngaged()).toBe(false);
+    expect(isPageVisible()).toBe(false);
 
     mocks.dispatchWindow('pageshow');
     expect(isPageEngaged()).toBe(true);
-    expect(seen.at(-1)).toBe(true);
+    expect(isPageVisible()).toBe(true);
+    expect(engagedSeen.at(-1)).toBe(true);
+    expect(visibleSeen.at(-1)).toBe(true);
 
-    unsub();
+    unsubE();
+    unsubV();
     __resetPageEngagementForTests();
   });
 

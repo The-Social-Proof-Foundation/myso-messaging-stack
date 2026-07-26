@@ -42,6 +42,8 @@ pub struct ReceiptStateResponse {
 pub struct ConversationPreferences {
     pub notification_mode: String,
     pub receipt_mode: String,
+    /// When true, peers must not see this wallet as Online in this group.
+    pub hide_online_presence: bool,
     pub version: i32,
 }
 
@@ -50,6 +52,7 @@ impl ConversationPreferences {
         Self {
             notification_mode: "all".to_string(),
             receipt_mode: "full".to_string(),
+            hide_online_presence: false,
             version: 1,
         }
     }
@@ -60,6 +63,7 @@ impl ConversationPreferences {
 pub struct ConversationPreferencesPatch {
     pub notification_mode: Option<String>,
     pub receipt_mode: Option<String>,
+    pub hide_online_presence: Option<bool>,
 }
 
 /// Aggregate message activity for a group: the highest assigned order and the

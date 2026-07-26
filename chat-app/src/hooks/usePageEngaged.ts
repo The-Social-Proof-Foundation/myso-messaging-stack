@@ -7,7 +7,8 @@ import {
 
 /**
  * True when this document is visible and focused (user is actively reading).
- * False in background tabs, other windows, or after pagehide (bfcache).
+ * False in background tabs, unfocused windows (other OS apps), or after pagehide.
+ * Peer Online uses {@link usePageVisible} instead (visibility only).
  */
 export function usePageEngaged(): boolean {
   return useSyncExternalStore(
