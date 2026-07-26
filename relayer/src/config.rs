@@ -153,6 +153,10 @@ pub struct Config {
     pub workflow_expiry_sweep_interval_secs: u64,
     /// Max items transitioned per expiry sweep tick (default: 500).
     pub workflow_expiry_sweep_max_rows: i64,
+
+    /// Debounce window for invitee join activity/push when no human message
+    /// follows (default: 3s). First message within the window cancels it.
+    pub begin_chat_notify_debounce_secs: u64,
 }
 
 impl Config {
@@ -343,6 +347,11 @@ impl Config {
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(500);
+        let begin_chat_notify_debounce_secs = env::var("BEGIN_CHAT_NOTIFY_DEBOUNCE_SECS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(3)
+            .max(1);
 
         let config = Self {
             port,
@@ -394,6 +403,7 @@ impl Config {
             internal_sync_secret,
             workflow_expiry_sweep_interval_secs,
             workflow_expiry_sweep_max_rows,
+            begin_chat_notify_debounce_secs,
         };
 
         info!("Configuration loaded: {:?}", config);
@@ -453,6 +463,7 @@ impl Default for Config {
             internal_sync_secret: None,
             workflow_expiry_sweep_interval_secs: 300,
             workflow_expiry_sweep_max_rows: 500,
+            begin_chat_notify_debounce_secs: 3,
         }
     }
 }

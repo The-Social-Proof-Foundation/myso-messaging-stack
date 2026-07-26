@@ -342,13 +342,17 @@ impl StorageAdapter for InMemoryStorage {
         group_id: &str,
         after_order: i64,
     ) -> StorageResult<GroupActivity> {
+        use crate::models::{MessageKind, SystemType};
+
         let messages = self
             .messages
             .read()
             .map_err(|e| StorageError::OperationFailed(format!("Lock poisoned: {}", e)))?;
 
         let mut latest_order = 0i64;
-        let mut unread_count = 0i64;
+        let mut human = 0i64;
+        let mut other_system = 0i64;
+        let mut has_join = false;
         for m in messages.values().filter(|m| m.group_id == group_id) {
             let order = m.order.unwrap_or(0);
             latest_order = latest_order.max(order);
@@ -356,10 +360,23 @@ impl StorageAdapter for InMemoryStorage {
                 m.sync_status,
                 SyncStatus::DeletePending | SyncStatus::Deleted
             );
-            if order > after_order && !deleted {
-                unread_count += 1;
+            if order <= after_order || deleted {
+                continue;
+            }
+            if m.kind == MessageKind::System {
+                if m.system_type == Some(SystemType::MemberJoined) {
+                    has_join = true;
+                } else {
+                    other_system += 1;
+                }
+            } else {
+                human += 1;
             }
         }
+
+        // Joins collapse to one unread when there is no human tip yet.
+        let join_pending = if has_join && human == 0 { 1 } else { 0 };
+        let unread_count = human + other_system + join_pending;
 
         Ok(GroupActivity {
             latest_order,
@@ -892,6 +909,71 @@ mod tests {
         assert_eq!(activity.latest_order, 3);
         // But deleted messages never count as unread.
         assert_eq!(activity.unread_count, 2);
+    }
+
+    #[tokio::test]
+    async fn test_get_group_activity_coalesces_member_joined() {
+        let storage = InMemoryStorage::new();
+
+        storage
+            .create_message(Message::new_system(
+                "group_1".into(),
+                "0xcreator".into(),
+                SystemType::MemberJoined,
+                None,
+                "tx:0:member_joined".into(),
+                Utc::now(),
+            ))
+            .await
+            .unwrap();
+        storage
+            .create_message(Message::new_system(
+                "group_1".into(),
+                "0xpeer".into(),
+                SystemType::MemberJoined,
+                None,
+                "tx:1:member_joined".into(),
+                Utc::now(),
+            ))
+            .await
+            .unwrap();
+
+        // Invite / join-only: two joins → one unread.
+        let joins_only = storage.get_group_activity("group_1", 0).await.unwrap();
+        assert_eq!(joins_only.latest_order, 2);
+        assert_eq!(joins_only.unread_count, 1);
+
+        storage
+            .create_message(sample_message("group_1", 10))
+            .await
+            .unwrap();
+
+        // Beginning of chat: joins + first human → one unread.
+        let with_text = storage.get_group_activity("group_1", 0).await.unwrap();
+        assert_eq!(with_text.latest_order, 3);
+        assert_eq!(with_text.unread_count, 1);
+
+        storage
+            .create_message(sample_message("group_1", 11))
+            .await
+            .unwrap();
+        let two_text = storage.get_group_activity("group_1", 0).await.unwrap();
+        assert_eq!(two_text.unread_count, 2);
+
+        // Leave still counts alongside human messages.
+        storage
+            .create_message(Message::new_system(
+                "group_1".into(),
+                "0xpeer".into(),
+                SystemType::MemberLeft,
+                None,
+                "tx:2:member_left".into(),
+                Utc::now(),
+            ))
+            .await
+            .unwrap();
+        let with_leave = storage.get_group_activity("group_1", 0).await.unwrap();
+        assert_eq!(with_leave.unread_count, 3);
     }
 
     #[tokio::test]

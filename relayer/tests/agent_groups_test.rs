@@ -107,6 +107,15 @@ fn create_test_app(agent_group_store: Arc<dyn AgentGroupStore>) -> Router {
     let storage = create_storage(StorageType::InMemory);
     let membership_store = Arc::new(InMemoryMembershipStore::new());
     let (sync_tx, _rx) = tokio::sync::mpsc::unbounded_channel::<()>();
+    let hub = Arc::new(messaging_relayer::services::RealtimeHub::new());
+    let push = PushService::from_config(&config);
+    let begin_chat = messaging_relayer::services::BeginChatNotify::new(
+        std::time::Duration::from_secs(config.begin_chat_notify_debounce_secs),
+        hub.clone(),
+        push.clone(),
+        storage.clone(),
+        membership_store.clone(),
+    );
     let app_state = AppState::new(
         storage,
         sync_tx,
@@ -118,12 +127,13 @@ fn create_test_app(agent_group_store: Arc<dyn AgentGroupStore>) -> Router {
         BlockCheckService::from_config(&config),
         messaging_relayer::services::MessageGateService::from_config(&config),
         messaging_relayer::services::fallback_messaging_config_cache(),
-        PushService::from_config(&config),
-        Arc::new(messaging_relayer::services::RealtimeHub::new()),
+        push,
+        hub,
         true,
         true,
         30,
         900,
+        begin_chat,
     );
 
     let auth_state = AuthState {

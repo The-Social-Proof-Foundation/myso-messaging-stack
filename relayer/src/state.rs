@@ -9,6 +9,7 @@ use tokio::sync::mpsc;
 use crate::archive::ArchiveReadService;
 use crate::auth::MembershipStore;
 use crate::config::Config;
+use crate::services::begin_chat_notify::BeginChatNotify;
 use crate::services::block_check::BlockCheckService;
 use crate::services::message_gate::MessageGateService;
 use crate::services::messaging_config::{fallback_messaging_config_cache, MessagingConfigCache};
@@ -80,6 +81,8 @@ pub struct AppState {
     pub typing_rate: Arc<TypingRateLimiter>,
     /// Optional R2 archive recovery reader (`ARCHIVE_BACKEND=r2`).
     pub archive_read: Option<Arc<ArchiveReadService>>,
+    /// Debounced invitee-join activity/push (cancelled by human create_message).
+    pub begin_chat_notify: BeginChatNotify,
 }
 
 impl AppState {
@@ -101,6 +104,7 @@ impl AppState {
         inline_realtime_publish: bool,
         ws_ping_interval_secs: u64,
         request_ttl_seconds: i64,
+        begin_chat_notify: BeginChatNotify,
     ) -> Self {
         Self::new_with_archive(
             storage,
@@ -120,6 +124,7 @@ impl AppState {
             ws_ping_interval_secs,
             request_ttl_seconds,
             None,
+            begin_chat_notify,
         )
     }
 
@@ -142,6 +147,7 @@ impl AppState {
         ws_ping_interval_secs: u64,
         request_ttl_seconds: i64,
         archive_read: Option<Arc<ArchiveReadService>>,
+        begin_chat_notify: BeginChatNotify,
     ) -> Self {
         Self {
             storage,
@@ -163,7 +169,23 @@ impl AppState {
             presence_registry: Arc::new(PresenceRegistry::new()),
             typing_rate: Arc::new(TypingRateLimiter::default()),
             archive_read,
+            begin_chat_notify,
         }
+    }
+
+    fn begin_chat_for_tests(
+        storage: &Arc<dyn StorageAdapter>,
+        membership_store: &Arc<dyn MembershipStore>,
+        push_service: &PushService,
+        realtime_hub: &Arc<RealtimeHub>,
+    ) -> BeginChatNotify {
+        BeginChatNotify::new(
+            Duration::from_secs(Config::default().begin_chat_notify_debounce_secs),
+            realtime_hub.clone(),
+            push_service.clone(),
+            storage.clone(),
+            membership_store.clone(),
+        )
     }
 
     /// Convenience constructor for integration tests.
@@ -174,6 +196,13 @@ impl AppState {
         block_check: BlockCheckService,
         push_service: PushService,
     ) -> Self {
+        let realtime_hub = Arc::new(RealtimeHub::new());
+        let begin_chat_notify = Self::begin_chat_for_tests(
+            &storage,
+            &membership_store,
+            &push_service,
+            &realtime_hub,
+        );
         Self::new(
             storage,
             sync_notifier,
@@ -186,11 +215,12 @@ impl AppState {
             MessageGateService::from_config(&Config::default()),
             fallback_messaging_config_cache(),
             push_service,
-            Arc::new(RealtimeHub::new()),
+            realtime_hub,
             true,
             true,
             30,
             900,
+            begin_chat_notify,
         )
     }
 
@@ -203,6 +233,13 @@ impl AppState {
         message_gate: MessageGateService,
         push_service: PushService,
     ) -> Self {
+        let realtime_hub = Arc::new(RealtimeHub::new());
+        let begin_chat_notify = Self::begin_chat_for_tests(
+            &storage,
+            &membership_store,
+            &push_service,
+            &realtime_hub,
+        );
         Self::new(
             storage,
             sync_notifier,
@@ -215,11 +252,12 @@ impl AppState {
             message_gate,
             fallback_messaging_config_cache(),
             push_service,
-            Arc::new(RealtimeHub::new()),
+            realtime_hub,
             true,
             true,
             30,
             900,
+            begin_chat_notify,
         )
     }
 }

@@ -28,6 +28,7 @@ use crate::models::workflow_item::{
 use crate::models::{Message, PaidEscrowRecord, SystemType};
 use crate::storage::{AgentGroupStore, StorageAdapter, StorageError, WorkflowStore};
 
+use super::begin_chat_notify::BeginChatNotify;
 use super::agent_group_detector::{
     agent_group_from_created_event, detect_agent_groups_in_transaction,
 };
@@ -69,6 +70,8 @@ pub struct MembershipSyncService {
     system_object_addrs: HashSet<String>,
     /// When true and storage is in-memory, publish message.created locally.
     inline_realtime_publish: bool,
+    /// Debounced join notify shared with HTTP create_message cancel path.
+    begin_chat_notify: BeginChatNotify,
     last_cursor: Option<u64>,
 }
 
@@ -84,6 +87,7 @@ impl MembershipSyncService {
         messaging_config: MessagingConfigCache,
         realtime_hub: Arc<RealtimeHub>,
         push_service: PushService,
+        begin_chat_notify: BeginChatNotify,
     ) -> Self {
         let last_cursor = membership_store.get_last_checkpoint_cursor();
         info!(
@@ -121,6 +125,7 @@ impl MembershipSyncService {
                 config.storage_type,
                 crate::storage::StorageType::Postgres(_)
             ),
+            begin_chat_notify,
             last_cursor,
         }
     }
@@ -754,15 +759,26 @@ impl MembershipSyncService {
                 // Clients coalesce adjacent member_joined rows into "A and B joined…".
                 if !had_messaging && !is_system_object(member, &self.system_object_addrs) {
                     let key = format!("{tx_digest}:{event_index}:member_joined");
-                    self.insert_system_message(
-                        group_id,
-                        member,
-                        SystemType::MemberJoined,
-                        None,
-                        key,
-                        checkpoint_ts,
-                    )
-                    .await;
+                    let is_creator =
+                        Self::is_group_creator(creators_in_tx, group_id, member, tx_sender);
+                    if let Some(created) = self
+                        .insert_system_message(
+                            group_id,
+                            member,
+                            SystemType::MemberJoined,
+                            None,
+                            key,
+                            checkpoint_ts,
+                        )
+                        .await
+                    {
+                        // Invitee-only: debounce sidebar/push; first human message cancels.
+                        if !is_creator {
+                            let tip = created.order.unwrap_or(0);
+                            self.begin_chat_notify
+                                .schedule_invitee_join(group_id, tip, member);
+                        }
+                    }
                 }
             }
 
@@ -815,7 +831,7 @@ impl MembershipSyncService {
         actor: Option<String>,
         idempotency_key: String,
         created_at: chrono::DateTime<Utc>,
-    ) {
+    ) -> Option<Message> {
         if idempotency_key.starts_with(':') || idempotency_key.contains("::") {
             // Missing digest would make keys collide across txs — still unique per event_index+type
             // within a single empty digest, but warn.
@@ -841,15 +857,18 @@ impl MembershipSyncService {
                     group_id
                 );
                 if self.inline_realtime_publish {
-                    let wire: MessageResponse = created.into();
+                    let wire: MessageResponse = created.clone().into();
                     self.realtime_hub.publish_wire(group_id, wire);
                 }
+                Some(created)
             }
             Err(StorageError::DuplicateIdempotencyKey) => {
                 debug!("System message already ingested (idempotent skip)");
+                None
             }
             Err(e) => {
                 warn!("Failed to insert system message for group {group_id}: {e}");
+                None
             }
         }
     }

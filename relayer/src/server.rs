@@ -87,6 +87,14 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             }
         };
 
+    let begin_chat_notify = crate::services::BeginChatNotify::new(
+        std::time::Duration::from_secs(config.begin_chat_notify_debounce_secs),
+        realtime_hub.clone(),
+        push_service.clone(),
+        storage.clone(),
+        membership_store.clone(),
+    );
+
     let app_state = AppState::new_with_archive(
         storage.clone(),
         sync_tx,
@@ -98,13 +106,14 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         block_check,
         message_gate.clone(),
         messaging_config.clone(),
-        push_service,
+        push_service.clone(),
         realtime_hub.clone(),
         config.realtime_enabled,
         config.inline_realtime_publish(),
         config.ws_ping_interval_secs,
         config.request_ttl_seconds,
         archive_read,
+        begin_chat_notify.clone(),
     );
 
     if config.realtime_enabled && config.uses_postgres_storage() {
@@ -133,6 +142,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         messaging_config,
         realtime_hub,
         sync_push_service,
+        begin_chat_notify,
     );
     tokio::spawn(async move {
         sync_service.run().await;

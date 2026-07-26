@@ -35,17 +35,27 @@ fn new_sync_service_with_hub(
     store: Arc<dyn MembershipStore>,
     hub: Arc<RealtimeHub>,
 ) -> MembershipSyncService {
+    let storage = Arc::new(InMemoryStorage::new());
+    let push = PushService::from_config(config);
+    let begin_chat = messaging_relayer::services::BeginChatNotify::new(
+        std::time::Duration::from_secs(config.begin_chat_notify_debounce_secs),
+        hub.clone(),
+        push.clone(),
+        storage.clone(),
+        store.clone(),
+    );
     MembershipSyncService::new(
         config,
         store,
         Arc::new(NoOpAgentGroupStore),
         Arc::new(messaging_relayer::storage::NoOpWorkflowStore),
         false,
-        Arc::new(InMemoryStorage::new()),
+        storage,
         MessageGateService::from_config(config),
         messaging_relayer::services::fallback_messaging_config_cache(),
         hub,
-        PushService::from_config(config),
+        push,
+        begin_chat,
     )
 }
 

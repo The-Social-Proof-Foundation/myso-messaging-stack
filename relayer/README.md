@@ -444,7 +444,7 @@ Wire extras on `MessageResponse`:
 }
 ```
 
-v1 types: `member_joined`, `member_left`, `member_removed`. Skips creator auto-membership and GroupLeaver/GroupManager (requires `MESSAGING_NAMESPACE_ID`). No push for system-only inserts; `group.activity` / unread order still advance.
+v1 types: `member_joined`, `member_left`, `member_removed`. Inserts include the creator join (clients coalesce adjacent joins). Skips GroupLeaver/GroupManager when `MESSAGING_NAMESPACE_ID` is set. No immediate push for system-only inserts; `member_joined` does not bump `group.activity` (invitee joins debounce ~3s via `BEGIN_CHAT_NOTIFY_DEBOUNCE_SECS`, cancelled by the first human message). Unread counts coalesce joins to at most 1 when there is no human tip yet.
 
 **Postgres cross-instance signal:** On `STORAGE_TYPE=postgres`, each message `INSERT` atomically emits `pg_notify('message_events', metadata_json)` where the payload contains only `message_id`, `group_id`, `order`, and `sender` — **not** ciphertext. Each relayer instance listens, loads the encrypted row from storage, and fans out the full wire frame to local WebSocket subscribers. Reaction, read-state, typing, and presence changes NOTIFY on the same channel with their full (non-sensitive) payloads, fanned out directly without a storage reload. Discovery events need no NOTIFY — every instance runs its own checkpoint indexer and publishes locally.
 

@@ -561,12 +561,37 @@ impl StorageAdapter for PostgresStorage {
     ) -> StorageResult<GroupActivity> {
         // Single aggregate on idx_messages_group_order; soft-deleted rows keep
         // their order (latest_order includes them) but are excluded from count.
+        // `member_joined` rows coalesce to at most 1 unread when there is no
+        // human message after the watermark (beginning-of-chat / invite-only).
         let row = sqlx::query(
             r#"SELECT COALESCE(MAX(order_num), 0) AS latest_order,
-                      COUNT(*) FILTER (
+                      (
+                        COUNT(*) FILTER (
                           WHERE order_num > $2
                             AND sync_status NOT IN ('DELETE_PENDING', 'DELETED')
-                      ) AS unread_count
+                            AND COALESCE(kind, 'text') <> 'system'
+                        )
+                        + COUNT(*) FILTER (
+                          WHERE order_num > $2
+                            AND sync_status NOT IN ('DELETE_PENDING', 'DELETED')
+                            AND COALESCE(kind, 'text') = 'system'
+                            AND COALESCE(system_type, '') <> 'member_joined'
+                        )
+                        + CASE
+                            WHEN COUNT(*) FILTER (
+                                   WHERE order_num > $2
+                                     AND sync_status NOT IN ('DELETE_PENDING', 'DELETED')
+                                     AND COALESCE(kind, 'text') <> 'system'
+                                 ) = 0
+                             AND COUNT(*) FILTER (
+                                   WHERE order_num > $2
+                                     AND sync_status NOT IN ('DELETE_PENDING', 'DELETED')
+                                     AND COALESCE(kind, 'text') = 'system'
+                                     AND system_type = 'member_joined'
+                                 ) > 0
+                            THEN 1 ELSE 0
+                          END
+                      )::bigint AS unread_count
                FROM messages
                WHERE group_id = $1"#,
         )

@@ -69,6 +69,13 @@ impl SyncTestHarness {
     }
 
     pub fn build_sync_service(&self) -> MembershipSyncService {
+        let begin_chat = messaging_relayer::services::BeginChatNotify::new(
+            std::time::Duration::from_secs(self.config.begin_chat_notify_debounce_secs),
+            self.hub.clone(),
+            self.push_service.clone(),
+            self.storage.clone(),
+            self.membership_store.clone(),
+        );
         MembershipSyncService::new(
             &self.config,
             self.membership_store.clone(),
@@ -80,6 +87,7 @@ impl SyncTestHarness {
             messaging_relayer::services::fallback_messaging_config_cache(),
             self.hub.clone(),
             self.push_service.clone(),
+            begin_chat,
         )
     }
 

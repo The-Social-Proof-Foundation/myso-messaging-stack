@@ -6,6 +6,7 @@
 
 pub mod agent_group_detector;
 pub mod attribution_verify;
+pub mod begin_chat_notify;
 pub mod block_check;
 pub mod event_parser;
 pub mod membership_sync;
@@ -19,6 +20,7 @@ pub mod system_objects;
 pub mod workflow_expiry;
 
 pub use attribution_verify::AttributionVerifyService;
+pub use begin_chat_notify::BeginChatNotify;
 pub use block_check::BlockCheckService;
 pub use membership_sync::MembershipSyncService;
 pub use message_gate::MessageGateService;

@@ -110,6 +110,15 @@ async fn org_invitation_chain_sync_visible_via_workflow_api() {
     service.run_subscription().await.unwrap();
 
     let (sync_tx, _sync_rx) = mpsc::unbounded_channel();
+    let hub = Arc::new(RealtimeHub::new());
+    let push = PushService::from_config(&Config::default());
+    let begin_chat = messaging_relayer::services::BeginChatNotify::new(
+        std::time::Duration::from_secs(Config::default().begin_chat_notify_debounce_secs),
+        hub.clone(),
+        push.clone(),
+        harness.storage_trait(),
+        harness.membership_store.clone(),
+    );
     let app_state = AppState::new(
         harness.storage_trait(),
         sync_tx,
@@ -121,12 +130,13 @@ async fn org_invitation_chain_sync_visible_via_workflow_api() {
         BlockCheckService::from_config(&Config::default()),
         MessageGateService::from_config(&Config::default()),
         messaging_relayer::services::fallback_messaging_config_cache(),
-        PushService::from_config(&Config::default()),
-        Arc::new(RealtimeHub::new()),
+        push,
+        hub,
         true,
         true,
         30,
         900,
+        begin_chat,
     );
 
     let auth_state = AuthState {

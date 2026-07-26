@@ -562,6 +562,14 @@ pub enum RealtimeEvent {
     ReceiptUpdated(ReceiptUpdatedEvent),
 }
 
+fn is_member_joined_wire(message: &MessageResponse) -> bool {
+    message.kind == "system"
+        && message
+            .system
+            .as_ref()
+            .is_some_and(|s| s.system_type == "member_joined")
+}
+
 /// Broadcast fan-out to local WebSocket connections: per-group channels for
 /// conversation feeds plus one global channel for the wallet-scoped user feed
 /// (filtered per connection in the user-feed handler).
@@ -619,16 +627,28 @@ impl RealtimeHub {
     pub fn publish_wire(&self, group_id: &str, message: MessageResponse) {
         // Sidebar metadata for the user feed — covers both the inline publish
         // path and the Postgres LISTEN path (both flow through here).
-        self.publish_user_event(UserFeedEvent::GroupActivity {
-            group_id: group_id.to_string(),
-            latest_order: message.order,
-        });
+        // `member_joined` is coalesced via BeginChatNotify (join-only debounce /
+        // cancel on first human message) so create+joins+first send is one bump.
+        if !is_member_joined_wire(&message) {
+            self.publish_user_event(UserFeedEvent::GroupActivity {
+                group_id: group_id.to_string(),
+                latest_order: message.order,
+            });
+        }
 
         let event = RealtimeEvent::MessageCreated(MessageWireEvent {
             event_type: MESSAGE_CREATED_EVENT_TYPE,
             message,
         });
         self.publish_event(group_id, event);
+    }
+
+    /// Sidebar tip bump without an open-thread message frame (deferred join notify).
+    pub fn publish_group_activity(&self, group_id: &str, latest_order: i64) {
+        self.publish_user_event(UserFeedEvent::GroupActivity {
+            group_id: group_id.to_string(),
+            latest_order,
+        });
     }
 
     /// Open-thread tombstone fan-out. Does **not** bump sidebar `group.activity`
@@ -838,6 +858,32 @@ mod tests {
                 latest_order: 7,
             }
         );
+    }
+
+    #[tokio::test]
+    async fn publish_wire_skips_group_activity_for_member_joined() {
+        use crate::models::SystemType;
+        use chrono::Utc;
+
+        let hub = RealtimeHub::new();
+        let mut rx = hub.subscribe("group-1");
+        let mut feed_rx = hub.subscribe_user_feed();
+
+        let msg = Message::new_system(
+            "group-1".into(),
+            "0xpeer".into(),
+            SystemType::MemberJoined,
+            None,
+            "tx:0:member_joined".into(),
+            Utc::now(),
+        );
+        let mut wire: MessageResponse = msg.into();
+        wire.order = 2;
+        hub.publish_wire("group-1", wire);
+
+        let event = rx.recv().await.expect("group frame");
+        assert!(matches!(event, RealtimeEvent::MessageCreated(_)));
+        assert!(feed_rx.try_recv().is_err());
     }
 
     #[tokio::test]

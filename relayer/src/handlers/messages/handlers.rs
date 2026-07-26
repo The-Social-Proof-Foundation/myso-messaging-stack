@@ -167,6 +167,9 @@ pub async fn create_message(
     // Store message
     let created = state.storage.create_message(message).await?;
 
+    // Human tip wins over a pending invitee-join debounce.
+    state.begin_chat_notify.cancel(&group_id);
+
     if state.realtime_enabled && state.inline_realtime_publish {
         let wire: MessageResponse = created.clone().into();
         state
