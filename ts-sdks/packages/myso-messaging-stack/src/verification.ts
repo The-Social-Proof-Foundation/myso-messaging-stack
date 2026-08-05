@@ -14,19 +14,47 @@ import { publicKeyFromMySoBytes, verifyPersonalMessageSignature } from '@socialp
 // ── Canonical message ────────────────────────────────────────────
 
 /**
+ * Relayer `normalize_shared_post_address`: lowercase `0x` + left-pad to 64 hex.
+ * Returns `null` when the value is not a valid on-chain object id.
+ */
+export function normalizeSharedPostAddress(raw?: string | null): string | null {
+	const trimmed = (raw ?? '').trim().toLowerCase();
+	if (!trimmed.startsWith('0x')) return null;
+	const hex = trimmed.slice(2);
+	if (!hex || hex.length > 64 || !/^[0-9a-f]+$/.test(hex)) return null;
+	return `0x${hex.padStart(64, '0')}`;
+}
+
+/**
  * Build the canonical message bytes that are signed per-message.
  *
- * Format: `"{groupId}:{hex(encryptedText)}:{hex(nonce)}:{keyVersion}"`
+ * Default: `"{groupId}:{kind}:{hex(encryptedText)}:{hex(nonce)}:{keyVersion}"`
+ * `kind === 'post'`:
+ * `"{groupId}:post:{sharedPostAddress}:{idempotencyKey}:{hex(encryptedText)}:{hex(nonce)}:{keyVersion}"`
  *
- * This matches the relayer's `verify_message_signature` canonical string.
+ * `groupId` is lowercased. Post addresses are padded like the relayer verify path.
  */
 export function buildCanonicalMessage(params: {
 	groupId: string;
+	kind?: string;
 	encryptedText: Uint8Array;
 	nonce: Uint8Array;
 	keyVersion: bigint;
+	sharedPostAddress?: string;
+	idempotencyKey?: string;
 }): Uint8Array {
-	const canonical = `${params.groupId}:${toHex(params.encryptedText)}:${toHex(params.nonce)}:${params.keyVersion}`;
+	const kind = params.kind ?? 'text';
+	const groupId = params.groupId.toLowerCase();
+	let canonical: string;
+	if (kind === 'post') {
+		const post =
+			normalizeSharedPostAddress(params.sharedPostAddress) ??
+			(params.sharedPostAddress ?? '').trim().toLowerCase();
+		const idem = (params.idempotencyKey ?? '').trim();
+		canonical = `${groupId}:${kind}:${post}:${idem}:${toHex(params.encryptedText)}:${toHex(params.nonce)}:${params.keyVersion}`;
+	} else {
+		canonical = `${groupId}:${kind}:${toHex(params.encryptedText)}:${toHex(params.nonce)}:${params.keyVersion}`;
+	}
 	return new TextEncoder().encode(canonical);
 }
 
@@ -40,9 +68,12 @@ export async function signMessageContent(
 	signer: Signer,
 	params: {
 		groupId: string;
+		kind?: string;
 		encryptedText: Uint8Array;
 		nonce: Uint8Array;
 		keyVersion: bigint;
+		sharedPostAddress?: string;
+		idempotencyKey?: string;
 	},
 ): Promise<string> {
 	const canonicalBytes = buildCanonicalMessage(params);
@@ -60,6 +91,7 @@ export async function signMessageContent(
 
 export interface VerifyMessageSenderParams {
 	groupId: string;
+	kind?: string;
 	encryptedText: Uint8Array;
 	nonce: Uint8Array;
 	keyVersion: bigint;
@@ -68,6 +100,8 @@ export interface VerifyMessageSenderParams {
 	signature: string;
 	/** Hex-encoded public key with scheme flag prefix (as returned by the relayer). */
 	publicKey: string;
+	sharedPostAddress?: string;
+	idempotencyKey?: string;
 }
 
 /**

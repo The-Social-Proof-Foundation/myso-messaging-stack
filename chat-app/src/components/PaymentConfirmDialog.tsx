@@ -1,6 +1,6 @@
 /**
  * Confirmation dialog for paid messaging: the recipient requires an on-chain
- * MYSO escrow before accepting a first message from a non-follower.
+ * MySo escrow before accepting a first message from a non-follower.
  *
  * Purely presentational — the caller runs the payment transaction on confirm
  * (openPaidDm for new DMs, payDmEscrow for existing groups) and retries the
@@ -51,7 +51,7 @@ export function PaymentConfirmDialog({
           has paid messaging enabled. Sending your first message requires an
           on-chain escrow of{' '}
           <span className="font-semibold text-secondary-900 dark:text-secondary-100">
-            {minCost !== null ? mistToMyso(minCost) : '—'} MYSO
+            {minCost !== null ? mistToMyso(minCost) : '—'} MySo
           </span>
           .
         </p>

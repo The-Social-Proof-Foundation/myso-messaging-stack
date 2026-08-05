@@ -73,8 +73,27 @@ Join/leave/remove are **first-class messages** on `GET /messages` and `message.c
 
 | Field | Meaning |
 |-------|---------|
-| `kind` | `"text"` (default) or `"system"` |
-| `system` | `{ type, member, actor? }` — typed; never raw JSON metadata |
+| `kind` | `"text"` (default), `"system"`, `"post"`, `"request_payment"`, `"poll"` |
+| `system` | `{ type, member, actor? }` — typed; never raw JSON metadata (system only) |
+
+Client creates use `text` | `post` | `request_payment` | `poll`. Signed canonical string is:
+
+```
+{group_id}:{kind}:{encrypted_text}:{nonce}:{key_version}
+```
+
+Optional `idempotency_key` on create — duplicate keys return the existing `message_id`.
+
+**`kind: post` (share-to-chat):** ciphertext UTF-8 is human-readable (not JSON):
+
+```
+Shared a post
+https://dripdrop.social/p/{chainPostId}
+```
+
+Inbox preview: `"Shared a post"`. iOS renders a post card; tap opens `SharedPostDeepLinkView` (refreshes detail; unavailable/deleted if fetch fails). Older clients that treat ciphertext as text still see the title + link.
+
+**`request_payment` / `poll`:** accepted by relayer + decoded on clients; no composer/bubble product UI yet — show neutral `"Message"` preview.
 
 v1 `system.type`: `member_joined` | `member_left` | `member_removed`. Unknown types → generic “Group updated” (or hide); do not crash.
 

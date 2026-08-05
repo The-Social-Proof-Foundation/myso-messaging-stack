@@ -16,8 +16,8 @@ export type SyncStatus =
 	| 'DELETE_PENDING'
 	| 'DELETED';
 
-/** Timeline message kind (`text` today; future: image, video, …). */
-export type MessageKind = 'text' | 'system';
+/** Timeline message kind. */
+export type MessageKind = 'text' | 'system' | 'post' | 'request_payment' | 'poll';
 
 /** Known v1 system event types. Unknown future types arrive as plain `string`. */
 export type SystemEventType = 'member_joined' | 'member_left' | 'member_removed' | (string & {});
@@ -67,6 +67,12 @@ export interface SendMessageParams {
 	encryptedText: Uint8Array;
 	nonce: Uint8Array;
 	keyVersion: bigint;
+	/** Client kind; defaults to `text`. Included in the signed canonical string. */
+	kind?: Exclude<MessageKind, 'system'>;
+	/** Client idempotency key — duplicate POSTs return the existing message_id. */
+	idempotencyKey?: string;
+	/** Cleartext on-chain post id when `kind === 'post'`. */
+	sharedPostAddress?: string;
 	attachments?: Attachment[];
 	/** Hex-encoded per-message signature for sender verification. */
 	messageSignature?: string;

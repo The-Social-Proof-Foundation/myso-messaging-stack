@@ -31,7 +31,7 @@ export function formatRelayerError(err: unknown): string {
   if (isPaymentRequiredError(err)) {
     const minCost = err instanceof PaymentRequiredError ? err.minCost : null;
     return minCost !== null
-      ? `This user requires a ${mistToMyso(minCost)} MYSO escrow before receiving a first message.`
+      ? `This user requires a ${mistToMyso(minCost)} MySo escrow before receiving a first message.`
       : 'This user requires an on-chain payment before receiving a first message.';
   }
 

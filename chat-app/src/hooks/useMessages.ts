@@ -97,7 +97,7 @@ export type MessageReactions = Map<number, RelayerReactionEntry[]>;
 
 /** Paid-DM gate state: the relayer rejected a send with 402 PAYMENT_REQUIRED. */
 export interface PaymentRequiredState {
-  /** Required escrow in MIST (1 MYSO = 10^9 MIST). */
+  /** Required escrow in MIST (1 MySo = 10^9 MIST). */
   minCost: bigint | null;
   /** Recipient wallet that requires payment. */
   recipient: string | null;

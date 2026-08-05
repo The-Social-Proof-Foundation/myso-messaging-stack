@@ -133,6 +133,20 @@ impl StorageAdapter for InMemoryStorage {
         messages.get(&id).cloned().ok_or(StorageError::NotFound(id))
     }
 
+    async fn get_message_by_idempotency_key(
+        &self,
+        idempotency_key: &str,
+    ) -> StorageResult<Option<Message>> {
+        let messages = self
+            .messages
+            .read()
+            .map_err(|e| StorageError::OperationFailed(format!("Lock poisoned: {}", e)))?;
+        Ok(messages
+            .values()
+            .find(|m| m.idempotency_key.as_deref() == Some(idempotency_key))
+            .cloned())
+    }
+
     async fn get_messages_by_group(
         &self,
         group_id: &str,

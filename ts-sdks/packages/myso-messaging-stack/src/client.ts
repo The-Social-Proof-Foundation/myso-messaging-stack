@@ -34,6 +34,7 @@ import type {
 	RelayerUserEvent,
 } from './relayer/types.js';
 import {
+	normalizeSharedPostAddress,
 	signMessageContent,
 	verifyMessageSender,
 	type VerifyMessageSenderParams,
@@ -350,12 +351,28 @@ export class MySoMessagingStackClient<TApproveContext = void> {
 			approveContext,
 		);
 
-		// 3. Sign the ciphertext for sender verification.
+		const kind = options.kind ?? 'text';
+		const sharedPostAddress =
+			kind === 'post' ? normalizeSharedPostAddress(options.sharedPostAddress) : undefined;
+		if (kind === 'post') {
+			if (!sharedPostAddress) {
+				throw new Error('sharedPostAddress is required when kind is post');
+			}
+			if (!options.idempotencyKey?.trim()) {
+				throw new Error('idempotencyKey is required when kind is post');
+			}
+		}
+
+		// 3. Sign the ciphertext for sender verification (includes kind;
+		// post also binds sharedPostAddress + idempotencyKey).
 		const messageSignature = await signMessageContent(options.signer, {
 			groupId,
+			kind,
 			encryptedText: envelope.ciphertext,
 			nonce: envelope.nonce,
 			keyVersion: envelope.keyVersion,
+			sharedPostAddress,
+			idempotencyKey: options.idempotencyKey,
 		});
 
 		// 4. Send via transport.
@@ -365,6 +382,9 @@ export class MySoMessagingStackClient<TApproveContext = void> {
 			encryptedText: envelope.ciphertext,
 			nonce: envelope.nonce,
 			keyVersion: envelope.keyVersion,
+			kind,
+			idempotencyKey: options.idempotencyKey,
+			sharedPostAddress,
 			attachments: attachmentRefs.length > 0 ? attachmentRefs : undefined,
 			messageSignature,
 			attribution: options.attribution
@@ -440,6 +460,14 @@ export class MySoMessagingStackClient<TApproveContext = void> {
 		const approveContext = this.#approveContextSpread(options);
 		const senderAddress = options.signer.toMySoAddress();
 
+		// Resolve existing kind for the signed canonical string.
+		const existing = await this.transport.fetchMessage({
+			signer: options.signer,
+			messageId: options.messageId,
+			groupId,
+		});
+		const kind = existing.kind && existing.kind !== 'system' ? existing.kind : 'text';
+
 		// 1. Encrypt new text.
 		const textBytes = this.#textEncoder.encode(options.text);
 		const keyVersion = await this.view.getCurrentKeyVersion({ encryptionHistoryId });
@@ -479,9 +507,10 @@ export class MySoMessagingStackClient<TApproveContext = void> {
 			}
 		}
 
-		// 3. Sign the ciphertext for sender verification.
+		// 3. Sign the ciphertext for sender verification (includes kind).
 		const messageSignature = await signMessageContent(options.signer, {
 			groupId,
+			kind,
 			encryptedText: envelope.ciphertext,
 			nonce: envelope.nonce,
 			keyVersion: envelope.keyVersion,

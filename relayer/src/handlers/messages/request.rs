@@ -63,8 +63,19 @@ pub struct CreateMessageRequest {
     pub key_version: i64,
     /// Sender's MySo wallet address
     pub sender_address: String,
-    /// Hex-encoded 64-byte signature over "{group_id}:{encrypted_text}:{nonce}:{key_version}"
+    /// Hex-encoded 64-byte signature over
+    /// text: "{group_id}:{kind}:{encrypted_text}:{nonce}:{key_version}"
+    /// post: "{group_id}:post:{shared_post_address}:{idempotency_key}:{encrypted_text}:{nonce}:{key_version}"
     pub message_signature: String,
+    /// Timeline kind: `text` (default), `post`, `request_payment`, `poll`.
+    #[serde(default)]
+    pub kind: Option<String>,
+    /// Client idempotency key — duplicate POSTs return the existing message.
+    #[serde(default)]
+    pub idempotency_key: Option<String>,
+    /// Cleartext on-chain post address when `kind == post` (required; bound into signature).
+    #[serde(default)]
+    pub shared_post_address: Option<String>,
     /// Attachments for this message (optional)
     #[serde(default)]
     pub attachments: Vec<AttachmentRequest>,
@@ -94,7 +105,8 @@ pub struct UpdateMessageRequest {
     pub nonce: String,
     /// Encryption key version
     pub key_version: i64,
-    /// Hex-encoded 64-byte signature over "{group_id}:{encrypted_text}:{nonce}:{key_version}"
+    /// Hex-encoded 64-byte signature over
+    /// "{group_id}:{kind}:{encrypted_text}:{nonce}:{key_version}"
     pub message_signature: String,
     /// Attachments for this message (optional)
     #[serde(default)]

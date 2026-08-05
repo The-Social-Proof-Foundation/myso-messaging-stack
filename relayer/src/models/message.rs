@@ -123,6 +123,8 @@ impl Message {
             signature,
             public_key,
             MessageAttribution::human_message(),
+            MessageKind::Text,
+            None,
         )
     }
 
@@ -136,8 +138,14 @@ impl Message {
         signature: Vec<u8>,
         public_key: Vec<u8>,
         attribution: MessageAttribution,
+        kind: MessageKind,
+        idempotency_key: Option<String>,
     ) -> Self {
         let now = Utc::now();
+        debug_assert!(
+            kind.is_encrypted_client_kind(),
+            "with_attribution is for client encrypted kinds only"
+        );
         Self {
             id: Uuid::new_v4(),
             group_id,
@@ -155,10 +163,10 @@ impl Message {
             signature,
             public_key,
             attribution,
-            kind: MessageKind::Text,
+            kind,
             system_type: None,
             metadata: None,
-            idempotency_key: None,
+            idempotency_key,
         }
     }
 

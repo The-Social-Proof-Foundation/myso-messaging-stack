@@ -9,6 +9,9 @@ pub enum MessageKind {
     #[default]
     Text,
     System,
+    Post,
+    RequestPayment,
+    Poll,
 }
 
 impl MessageKind {
@@ -16,18 +19,44 @@ impl MessageKind {
         match self {
             Self::Text => "text",
             Self::System => "system",
+            Self::Post => "post",
+            Self::RequestPayment => "request_payment",
+            Self::Poll => "poll",
         }
     }
 
+    /// Parse stored / wire kind. Unknown values map to `text` for back-compat.
     pub fn parse(s: &str) -> Self {
         match s {
             "system" => Self::System,
+            "post" => Self::Post,
+            "request_payment" => Self::RequestPayment,
+            "poll" => Self::Poll,
             _ => Self::Text,
+        }
+    }
+
+    /// Client-createable kinds for POST /messages. Rejects `system` and unknown.
+    pub fn parse_client_kind(s: &str) -> Option<Self> {
+        match s {
+            "text" => Some(Self::Text),
+            "post" => Some(Self::Post),
+            "request_payment" => Some(Self::RequestPayment),
+            "poll" => Some(Self::Poll),
+            _ => None,
         }
     }
 
     pub fn is_system(self) -> bool {
         matches!(self, Self::System)
+    }
+
+    /// Kinds that use encrypted client payloads (not cleartext system rows).
+    pub fn is_encrypted_client_kind(self) -> bool {
+        matches!(
+            self,
+            Self::Text | Self::Post | Self::RequestPayment | Self::Poll
+        )
     }
 }
 

@@ -14,6 +14,8 @@ type HoldSignOutButtonProps = {
   holdText?: string;
   icon?: ReactNode;
   className?: string;
+  /** Fill color for the hold progress bar (mysocial: `bg-[var(--destructive-foreground)]`). */
+  progressBarClassName?: string;
 };
 
 /**
@@ -27,6 +29,7 @@ export function HoldSignOutButton({
   holdText = 'Keep holding...',
   icon = <LogOut className="mx-2 h-4 w-4 shrink-0" />,
   className = '',
+  progressBarClassName = 'bg-[var(--destructive-foreground)]',
 }: Readonly<HoldSignOutButtonProps>) {
   const [isHolding, setIsHolding] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -93,7 +96,7 @@ export function HoldSignOutButton({
     >
       <span
         aria-hidden
-        className="absolute inset-y-0 left-0 z-0 bg-danger-500/20 transition-[width] duration-75 dark:bg-danger-400/25"
+        className={`absolute top-0 left-0 z-0 h-full transition-[width] duration-75 ${progressBarClassName}`}
         style={{ width: `${progress}%` }}
       />
       <span className="relative z-10 flex w-full select-none items-center gap-2">

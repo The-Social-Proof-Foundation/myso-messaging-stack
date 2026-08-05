@@ -69,6 +69,7 @@ export { MIST_PER_MYSO, mistToMyso, mysoToMist } from './coin.js';
 export {
 	verifyMessageSender,
 	buildCanonicalMessage,
+	normalizeSharedPostAddress,
 	type VerifyMessageSenderParams,
 } from './verification.js';
 export {

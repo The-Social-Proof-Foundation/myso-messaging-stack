@@ -16,6 +16,7 @@ pub mod file_storage_sync;
 pub mod presence_sync;
 pub mod push;
 pub mod realtime;
+pub mod share_webhook;
 pub mod system_objects;
 pub mod workflow_expiry;
 
@@ -32,3 +33,4 @@ pub use crate::archive::{ArchiveSyncService, FileStorageSyncService};
 pub use presence_sync::PresenceRegistry;
 pub use push::PushService;
 pub use realtime::{PgListenerService, RealtimeHub};
+pub use share_webhook::ShareWebhookNotifier;

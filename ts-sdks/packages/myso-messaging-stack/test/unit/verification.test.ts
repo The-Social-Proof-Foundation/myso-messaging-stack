@@ -8,11 +8,14 @@ import { describe, expect, it } from 'vitest';
 
 import {
 	buildCanonicalMessage,
+	normalizeSharedPostAddress,
 	signMessageContent,
 	verifyMessageSender,
 } from '../../src/verification.js';
 
 const MOCK_GROUP_ID = '0x' + 'ab'.repeat(32);
+const MOCK_POST_ID = '0x' + '11'.repeat(32);
+const MOCK_IDEMPOTENCY = 'idem-abc-123';
 
 function makeMessageParams() {
 	return {
@@ -23,6 +26,32 @@ function makeMessageParams() {
 	};
 }
 
+function makePostParams() {
+	return {
+		...makeMessageParams(),
+		kind: 'post' as const,
+		sharedPostAddress: MOCK_POST_ID,
+		idempotencyKey: MOCK_IDEMPOTENCY,
+	};
+}
+
+describe('normalizeSharedPostAddress', () => {
+	it('left-pads short hex to 0x + 64', () => {
+		expect(normalizeSharedPostAddress('0xabc')).toBe('0x' + '0'.repeat(61) + 'abc');
+	});
+
+	it('lowercases and preserves full-length ids', () => {
+		expect(normalizeSharedPostAddress('0x' + 'AB'.repeat(32))).toBe('0x' + 'ab'.repeat(32));
+		expect(normalizeSharedPostAddress(MOCK_POST_ID)).toBe(MOCK_POST_ID);
+	});
+
+	it('returns null for invalid input', () => {
+		expect(normalizeSharedPostAddress('abc')).toBeNull();
+		expect(normalizeSharedPostAddress('')).toBeNull();
+		expect(normalizeSharedPostAddress(null)).toBeNull();
+	});
+});
+
 describe('buildCanonicalMessage', () => {
 	it('produces deterministic output for the same inputs', () => {
 		const params = makeMessageParams();
@@ -31,13 +60,39 @@ describe('buildCanonicalMessage', () => {
 		expect(a).toEqual(b);
 	});
 
-	it('produces the expected format: groupId:hex(encryptedText):hex(nonce):keyVersion', () => {
+	it('produces the expected format: groupId:kind:hex(encryptedText):hex(nonce):keyVersion', () => {
 		const params = makeMessageParams();
 		const bytes = buildCanonicalMessage(params);
 		const str = new TextDecoder().decode(bytes);
 
 		expect(str).toBe(
-			`${MOCK_GROUP_ID}:${toHex(params.encryptedText)}:${toHex(params.nonce)}:${params.keyVersion}`,
+			`${MOCK_GROUP_ID}:text:${toHex(params.encryptedText)}:${toHex(params.nonce)}:${params.keyVersion}`,
+		);
+	});
+
+	it('lowercases mixed-case groupId for text', () => {
+		const params = { ...makeMessageParams(), groupId: MOCK_GROUP_ID.toUpperCase() };
+		const str = new TextDecoder().decode(buildCanonicalMessage(params));
+		expect(str.startsWith(`${MOCK_GROUP_ID}:text:`)).toBe(true);
+	});
+
+	it('builds 7-field post canonical with padded sharedPostAddress + idempotency', () => {
+		const params = makePostParams();
+		const str = new TextDecoder().decode(buildCanonicalMessage(params));
+		expect(str).toBe(
+			`${MOCK_GROUP_ID}:post:${MOCK_POST_ID}:${MOCK_IDEMPOTENCY}:${toHex(params.encryptedText)}:${toHex(params.nonce)}:${params.keyVersion}`,
+		);
+	});
+
+	it('pads short sharedPostAddress in post canonical', () => {
+		const params = {
+			...makePostParams(),
+			sharedPostAddress: '0xabc',
+		};
+		const str = new TextDecoder().decode(buildCanonicalMessage(params));
+		const padded = '0x' + '0'.repeat(61) + 'abc';
+		expect(str).toBe(
+			`${MOCK_GROUP_ID}:post:${padded}:${MOCK_IDEMPOTENCY}:${toHex(params.encryptedText)}:${toHex(params.nonce)}:${params.keyVersion}`,
 		);
 	});
 
@@ -105,6 +160,29 @@ describe('verifyMessageSender', () => {
 
 		const result = await verifyMessageSender({
 			...params,
+			senderAddress: keypair.toMySoAddress(),
+			signature,
+			publicKey,
+		});
+
+		expect(result).toBe(true);
+	});
+
+	it('returns true for a post kind roundtrip with mixed-case groupId and short post id', async () => {
+		const keypair = Ed25519Keypair.generate();
+		const params = {
+			...makePostParams(),
+			groupId: MOCK_GROUP_ID.toUpperCase(),
+			sharedPostAddress: '0xABC',
+		};
+
+		const signature = await signMessageContent(keypair, params);
+		const publicKey = toHex(keypair.getPublicKey().toMySoBytes());
+
+		const result = await verifyMessageSender({
+			...params,
+			groupId: MOCK_GROUP_ID,
+			sharedPostAddress: '0x' + '0'.repeat(61) + 'abc',
 			senderAddress: keypair.toMySoAddress(),
 			signature,
 			publicKey,

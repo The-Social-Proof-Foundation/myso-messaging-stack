@@ -10,7 +10,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { useRequiredMessagingClient } from '../contexts/MessagingClientContext';
 
 export interface PaidDmGateState {
-  /** The peer escrowed MYSO to us and we have not replied yet. */
+  /** The peer escrowed MySo to us and we have not replied yet. */
   claimPending: boolean;
   /** Latest peer escrow in MIST (set when `claimPending`). */
   peerEscrowAmount: bigint | null;

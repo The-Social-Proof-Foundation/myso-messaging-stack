@@ -130,6 +130,12 @@ pub trait StorageAdapter: Send + Sync {
     /// Returns `StorageError::NotFound` if the message doesn't exist.
     async fn get_message(&self, id: Uuid) -> StorageResult<Message>;
 
+    /// Looks up a message by client/system `idempotency_key`, if present.
+    async fn get_message_by_idempotency_key(
+        &self,
+        idempotency_key: &str,
+    ) -> StorageResult<Option<Message>>;
+
     /// Retrieves messages for a group with bidirectional pagination.
     /// # Pagination
     /// - `after_order`: Get messages with `order > value` (scroll down to newer messages)

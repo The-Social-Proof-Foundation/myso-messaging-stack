@@ -1,8 +1,10 @@
-import defaultAvatar from '../assets/default-avatar.png';
 import type { WalletProfileBits } from '../hooks/useWalletAvatarMap';
-import { ReservationNavAvatar } from './ReservationNavAvatar';
-
-const STACK_SIZE = 48;
+import {
+  ReservationNavAvatar,
+  reservationAvatarShellSize,
+} from './ReservationNavAvatar';
+/** Outer cluster box; smaller = more face overlap (shell ≈ 30px with SPT ring). */
+const STACK_SIZE = 46;
 const FACE_SIZE = 26;
 const SINGLE_SIZE = 44;
 
@@ -18,29 +20,29 @@ function sameAddress(a?: string | null, b?: string | null): boolean {
   return a.toLowerCase() === b.toLowerCase();
 }
 
-function Face({
-  src,
-  className,
+function StackedFace({
+  address,
+  profiles,
 }: Readonly<{
-  src: string | null;
-  className?: string;
+  address: string;
+  profiles: WalletProfileBits;
 }>) {
+  const ring = profiles.ringFor(address);
   return (
-    <img
-      src={src?.trim() || defaultAvatar}
-      alt=""
-      width={FACE_SIZE}
-      height={FACE_SIZE}
-      className={`rounded-full object-cover ring-2 ring-white dark:ring-secondary-900 ${className ?? ''}`}
-      style={{ width: FACE_SIZE, height: FACE_SIZE }}
-      referrerPolicy="no-referrer"
-      draggable={false}
+    <ReservationNavAvatar
+      address={address}
+      imageSrc={profiles.photoFor(address)}
+      size={FACE_SIZE}
+      showRing={ring.showRing}
+      ringPercent={ring.ringPercent}
+      className="shrink-0 shadow-sm dark:shadow-none"
     />
   );
 }
 
 /**
- * Sidebar row avatar: 1:1 peer with SPT ring, or a stacked triangle for groups.
+ * Sidebar row avatar: 1:1 peer with SPT ring, or a stacked cluster for groups
+ * (each face keeps its own SPT identity ring).
  */
 export function ConversationAvatar({
   memberAddresses,
@@ -79,6 +81,9 @@ export function ConversationAvatar({
     );
   }
 
+  // Max shell for a stacked face (layout budget for the cluster box).
+  const faceShell = reservationAvatarShellSize(FACE_SIZE, true);
+
   // Two peers — overlapping pair (no overflow chip).
   if (others.length === 2) {
     return (
@@ -87,11 +92,11 @@ export function ConversationAvatar({
         style={{ width: STACK_SIZE, height: STACK_SIZE }}
         aria-hidden
       >
-        <span className="absolute left-0 top-1">
-          <Face src={profiles.photoFor(others[0]!)} />
+        <span className="absolute left-0 top-0 z-0">
+          <StackedFace address={others[0]!} profiles={profiles} />
         </span>
-        <span className="absolute bottom-0 right-0">
-          <Face src={profiles.photoFor(others[1]!)} />
+        <span className="absolute bottom-0 right-0 z-10">
+          <StackedFace address={others[1]!} profiles={profiles} />
         </span>
       </span>
     );
@@ -109,22 +114,22 @@ export function ConversationAvatar({
       style={{ width: STACK_SIZE, height: STACK_SIZE }}
       aria-hidden
     >
-      <span className="absolute left-1/2 top-0 -translate-x-1/2">
-        <Face src={profiles.photoFor(faceA)} />
+      <span className="absolute left-1/2 top-0 z-0 -translate-x-1/2">
+        <StackedFace address={faceA} profiles={profiles} />
       </span>
-      <span className="absolute bottom-0 left-0">
-        <Face src={profiles.photoFor(faceB)} />
+      <span className="absolute bottom-0 left-0 z-10">
+        <StackedFace address={faceB} profiles={profiles} />
       </span>
-      <span className="absolute bottom-0 right-0">
+      <span className="absolute bottom-0 right-0 z-20">
         {showOverflow ? (
           <span
             className="inline-flex items-center justify-center rounded-full bg-secondary-200 text-[10px] font-semibold text-secondary-700 ring-2 ring-white dark:bg-secondary-600 dark:text-secondary-100 dark:ring-secondary-900"
-            style={{ width: FACE_SIZE, height: FACE_SIZE }}
+            style={{ width: faceShell, height: faceShell }}
           >
             +{extra > 99 ? 99 : extra}
           </span>
         ) : (
-          <Face src={profiles.photoFor(others[2]!)} />
+          <StackedFace address={others[2]!} profiles={profiles} />
         )}
       </span>
     </span>

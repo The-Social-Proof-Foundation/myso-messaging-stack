@@ -279,9 +279,24 @@ function parseSystemMessage(wire: WireSystemMessage | null | undefined): SystemM
 	};
 }
 
+function parseMessageKind(raw: string | undefined | null): MessageKind {
+	switch (raw) {
+		case 'system':
+			return 'system';
+		case 'post':
+			return 'post';
+		case 'request_payment':
+			return 'request_payment';
+		case 'poll':
+			return 'poll';
+		default:
+			return 'text';
+	}
+}
+
 /** Convert a relayer JSON message to a RelayerMessage domain object. */
 export function fromWireMessage(wire: WireMessageResponse): RelayerMessage {
-	const kind: MessageKind = wire.kind === 'system' ? 'system' : 'text';
+	const kind = parseMessageKind(wire.kind);
 	const system = kind === 'system' ? parseSystemMessage(wire.system) : undefined;
 	return {
 		messageId: wire.message_id,

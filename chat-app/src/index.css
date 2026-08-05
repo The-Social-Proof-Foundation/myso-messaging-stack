@@ -106,6 +106,20 @@
 
 @variant dark (&:where(.dark, .dark *));
 
+/*
+ * Match mysocial-frontend hold-to-sign-out progress colors
+ * (`--destructive` / `--destructive-foreground` in globals.css).
+ */
+:root {
+  --destructive: #ef4444;
+  --destructive-foreground: #f6eded;
+}
+
+.dark {
+  --destructive: #ea4d4d;
+  --destructive-foreground: #160e0e;
+}
+
 /* Subtle top → bottom fills for message bubbles */
 @layer utilities {
   .bg-bubble-sent-fill {

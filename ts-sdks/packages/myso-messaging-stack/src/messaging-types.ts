@@ -70,6 +70,12 @@ interface SendMessageOptionsBase {
 	text?: string;
 	/** Files to attach. Requires attachments support to be configured. */
 	files?: AttachmentFile[];
+	/** Timeline kind (`text` default). Signed into the message canonical string. */
+	kind?: 'text' | 'post' | 'request_payment' | 'poll';
+	/** Client idempotency key for safe retries. Required when `kind === 'post'`. */
+	idempotencyKey?: string;
+	/** Cleartext on-chain post id when `kind === 'post'` (bound into signature). */
+	sharedPostAddress?: string;
 	/** Optional agent attribution for relayer POST body. */
 	attribution?: MessageAttribution & {
 		principalOwner: string;

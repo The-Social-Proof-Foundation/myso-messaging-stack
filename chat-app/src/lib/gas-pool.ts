@@ -8,7 +8,7 @@ import type { ClientWithCoreApi } from '@socialproof/myso/client';
 
 const MYSO_COIN_TYPE = '0x2::myso::MYSO';
 
-/** Default affordability threshold — 0.001 MYSO (9 decimals). */
+/** Default affordability threshold — 0.001 MySo (9 decimals). */
 export const GAS_AFFORDABILITY_MIST = 1_000_000;
 
 export interface GasReservationResponse {
@@ -72,7 +72,7 @@ function gasPoolEndpoints(): { reserve: string; execute: string } {
 }
 
 /**
- * Sum MYSO coin balances. On RPC failure returns false (prefer sponsored on public nets).
+ * Sum MySo coin balances. On RPC failure returns false (prefer sponsored on public nets).
  */
 export async function canAffordGas(
   client: ClientWithCoreApi,

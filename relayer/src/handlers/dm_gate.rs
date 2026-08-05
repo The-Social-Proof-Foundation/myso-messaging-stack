@@ -187,7 +187,7 @@ pub struct DmGateResponse {
     /// No prior outbound message from the caller in this group. Combined with
     /// `peer_paid`, clients can show "reply to claim" prompts.
     pub first_outbound: bool,
-    /// The peer already escrowed MYSO to the caller in this group — replying
+    /// The peer already escrowed MySo to the caller in this group — replying
     /// is free and claims the escrow on-chain.
     pub peer_paid: bool,
     /// Latest peer escrow amount (MIST) as a string, when `peer_paid` is true.

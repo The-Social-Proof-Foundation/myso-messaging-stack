@@ -20,23 +20,26 @@ export function isStockSafari(): boolean {
   return true;
 }
 
+/** Mobile (incl. iOS Safari) → redirect; desktop Safari/Chrome/Firefox/Edge → popup. */
 export function shouldUseRedirectAuth(): boolean {
   if (typeof window === 'undefined') return true;
+
   const ua = navigator.userAgent || '';
   const nav = navigator as { userAgentData?: { mobile?: boolean } };
   const isMobile =
     /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini|Mobile/i.test(ua) ||
     nav.userAgentData?.mobile === true;
 
+  // Desktop Safari only → popup
   if (isStockSafari() && !isMobile) return false;
+
   if (isMobile) return true;
   if (window.matchMedia?.('(pointer: coarse)')?.matches) return true;
 
   const isChrome = /Chrome/.test(ua) && !/Edge|Edg|OPR/.test(ua);
-  const isSafari = /Safari/.test(ua) && !/Chrome|Chromium/.test(ua);
   const isFirefox = /Firefox/.test(ua);
   const isEdge = /Edge|Edg/.test(ua);
-  return !(isChrome || isSafari || isFirefox || isEdge);
+  return !(isChrome || isFirefox || isEdge);
 }
 
 function decodeJwtPayload(accessToken: string): Record<string, unknown> | null {

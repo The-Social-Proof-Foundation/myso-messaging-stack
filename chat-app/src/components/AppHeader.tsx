@@ -1,30 +1,57 @@
 import { ArrowRight } from 'lucide-react';
-import { Link } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import { useCreateMessage } from '../contexts/CreateMessageContext';
 import { useMySocialAuth } from '../contexts/MySocialAuthContext';
 import { CalloutButton } from './CalloutButton';
 import { ProfileDropdown } from './ProfileDropdown';
 
+/** Shared horizontal inset from the settings divider to Back / brand. */
+const DIVIDER_INSET = 'px-5';
+
 export function AppHeader() {
   const { auth, session, login } = useMySocialAuth();
   const { canCreateMessage, openCreateMessage } = useCreateMessage();
+  const { pathname } = useLocation();
+  const onSettings =
+    pathname === '/settings' || pathname.startsWith('/settings/');
 
   return (
-    <header className="flex items-center justify-between border-b border-secondary-200 bg-white px-6 py-3 dark:border-secondary-700 dark:bg-secondary-900">
-      <Link
-        to="/"
-        className="font-chakra flex items-center gap-3.5 text-xl font-normal tracking-wide text-primary-900 hover:opacity-90 dark:text-primary-50"
-      >
-        <img
-          src="/myso-logo.webp"
-          alt="Messaging"
-          width={32}
-          height={32}
-          className="h-8 w-8 shrink-0 invert dark:invert-0"
-        />
-        <span className="hidden sm:inline">Messaging</span>
-      </Link>
-      <div className="flex items-center gap-3">
+    <header className="flex items-stretch border-b border-secondary-200 bg-white dark:border-secondary-700 dark:bg-secondary-900">
+      <div className="flex min-w-0 flex-1 items-stretch">
+        {onSettings ? (
+          <>
+            {/* Back is centered in the cell between the left edge and the full-height divider. */}
+            <Link
+              to="/"
+              className={`flex shrink-0 items-center justify-center ${DIVIDER_INSET} text-sm text-secondary-500 transition-colors hover:text-secondary-800 dark:text-secondary-400 dark:hover:text-secondary-200`}
+            >
+              ← Back
+            </Link>
+            <span
+              className="w-px shrink-0 self-stretch bg-secondary-300 dark:bg-secondary-600"
+              aria-hidden
+            />
+          </>
+        ) : null}
+
+        <Link
+          to="/"
+          className={`font-chakra flex min-w-0 items-center gap-3.5 py-3 text-xl font-normal tracking-wide text-primary-900 hover:opacity-90 dark:text-primary-50 ${
+            onSettings ? DIVIDER_INSET : 'px-6'
+          }`}
+        >
+          <img
+            src="/myso-logo.webp"
+            alt=""
+            width={32}
+            height={32}
+            className="h-8 w-8 shrink-0 invert dark:invert-0"
+          />
+          <span className="hidden sm:inline">Messaging</span>
+        </Link>
+      </div>
+
+      <div className="flex items-center gap-3 px-6 py-3">
         {canCreateMessage ? (
           <button
             type="button"

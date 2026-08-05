@@ -226,6 +226,18 @@ impl StorageAdapter for PostgresStorage {
             .ok_or(StorageError::NotFound(id))
     }
 
+    async fn get_message_by_idempotency_key(
+        &self,
+        idempotency_key: &str,
+    ) -> StorageResult<Option<Message>> {
+        let row = sqlx::query("SELECT * FROM messages WHERE idempotency_key = $1 LIMIT 1")
+            .bind(idempotency_key)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| StorageError::OperationFailed(e.to_string()))?;
+        Ok(row.map(|r| row_to_message(&r)))
+    }
+
     async fn get_messages_by_group(
         &self,
         group_id: &str,

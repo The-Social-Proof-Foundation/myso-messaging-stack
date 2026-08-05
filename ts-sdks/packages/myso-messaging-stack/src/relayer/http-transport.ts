@@ -8,6 +8,7 @@ import { fromHex, toHex } from '@socialproof/myso/utils';
 import type { HttpClientConfig } from '../http/types.js';
 import { DEFAULT_HTTP_TIMEOUT } from '../http/types.js';
 import { HttpTimeoutError } from '../http/errors.js';
+import { normalizeSharedPostAddress } from '../verification.js';
 import {
 	createBodyAuth,
 	createHeaderAuth,
@@ -352,9 +353,18 @@ export class HTTPRelayerTransport implements RelayerTransport {
 			encrypted_text: toHex(params.encryptedText),
 			nonce: toHex(params.nonce),
 			key_version: Number(params.keyVersion),
+			kind: params.kind ?? 'text',
 			attachments: params.attachments?.map(toWireAttachment) ?? [],
 		};
 
+		if (params.idempotencyKey) {
+			wirePayload.idempotency_key = params.idempotencyKey;
+		}
+		if (params.sharedPostAddress) {
+			const normalized = normalizeSharedPostAddress(params.sharedPostAddress);
+			wirePayload.shared_post_address =
+				normalized ?? params.sharedPostAddress.trim().toLowerCase();
+		}
 		if (params.messageSignature) {
 			wirePayload.message_signature = params.messageSignature;
 		}

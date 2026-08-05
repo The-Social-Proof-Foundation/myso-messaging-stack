@@ -3,6 +3,8 @@
  * (Chat Details). Visible to every member — not admin-gated.
  */
 
+import { IosToggle } from '../IosToggle';
+
 export type ChatSettingsSavingKey =
   | 'notifications'
   | 'readReceipts'
@@ -91,7 +93,7 @@ function ToggleRow({
   onChange: (next: boolean) => void;
 }>) {
   return (
-    <label className="flex cursor-pointer items-start justify-between gap-3">
+    <div className="flex items-start justify-between gap-3">
       <span className="min-w-0">
         <span className="block text-sm font-medium text-secondary-800 dark:text-secondary-100">
           {label}
@@ -105,14 +107,13 @@ function ToggleRow({
           {helper}
         </span>
       </span>
-      <input
-        type="checkbox"
-        role="switch"
-        className="mt-0.5 h-4 w-4 shrink-0 rounded border-secondary-300 text-primary-600 focus:ring-primary-500 disabled:opacity-50 dark:border-secondary-600 dark:bg-secondary-800"
+      <IosToggle
         checked={checked}
         disabled={disabled}
-        onChange={(e) => onChange(e.target.checked)}
+        onChange={onChange}
+        aria-label={label}
+        className="mt-0.5"
       />
-    </label>
+    </div>
   );
 }

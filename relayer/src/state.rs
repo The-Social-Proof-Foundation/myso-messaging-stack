@@ -16,6 +16,7 @@ use crate::services::messaging_config::{fallback_messaging_config_cache, Messagi
 use crate::services::presence_sync::PresenceRegistry;
 use crate::services::push::PushService;
 use crate::services::realtime::RealtimeHub;
+use crate::services::share_webhook::ShareWebhookNotifier;
 use crate::services::AttributionVerifyService;
 use crate::storage::{AgentGroupStore, StorageAdapter, WorkflowStore};
 
@@ -85,6 +86,8 @@ pub struct AppState {
     pub archive_read: Option<Arc<ArchiveReadService>>,
     /// Debounced invitee-join activity/push (cancelled by human create_message).
     pub begin_chat_notify: BeginChatNotify,
+    /// Optional dripdrop share-count webhook (kind=post).
+    pub share_webhook: ShareWebhookNotifier,
 }
 
 impl AppState {
@@ -176,6 +179,7 @@ impl AppState {
             typing_rate: Arc::new(TypingRateLimiter::default()),
             archive_read,
             begin_chat_notify,
+            share_webhook: ShareWebhookNotifier::from_env(),
         }
     }
 
