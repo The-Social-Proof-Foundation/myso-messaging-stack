@@ -5,6 +5,7 @@ use std::sync::Arc;
 use chrono::Utc;
 use messaging_relayer::auth::{InMemoryMembershipStore, MembershipStore, MessagingPermission};
 use messaging_relayer::models::{MessageAttribution, PushTokenRecord};
+use messaging_relayer::services::notification_push_store::NotificationPushStore;
 use messaging_relayer::services::push::{ApnsClient, ApnsEnvironment, PushService};
 use messaging_relayer::storage::{InMemoryStorage, StorageAdapter};
 use wiremock::matchers::{method, path_regex};
@@ -22,8 +23,30 @@ fn sample_token(environment: &str) -> PushTokenRecord {
         platform: "ios".to_string(),
         token: DEVICE_TOKEN.to_string(),
         environment: environment.to_string(),
+        device_id: None,
         updated_at: Utc::now(),
     }
+}
+
+async fn notify_test_message(
+    push: &PushService,
+    storage: &Arc<dyn StorageAdapter>,
+    membership: &Arc<dyn MembershipStore>,
+) {
+    let notification_push = NotificationPushStore::new();
+    push
+        .notify_new_message(
+            storage,
+            membership,
+            &notification_push,
+            false,
+            GROUP_ID,
+            uuid::Uuid::nil(),
+            SENDER,
+            &MessageAttribution::human_message(),
+            "text",
+        )
+        .await;
 }
 
 fn setup_membership() -> Arc<dyn MembershipStore> {
@@ -69,9 +92,7 @@ async fn push_sent_when_recipient_inactive() {
     let membership = setup_membership();
     let push = setup_push_service(&mock.uri()).await;
 
-    push
-        .notify_new_message(&storage, &membership, GROUP_ID, SENDER, &MessageAttribution::human_message())
-        .await;
+    notify_test_message(&push, &storage, &membership).await;
 
     mock.verify().await;
 }
@@ -96,9 +117,7 @@ async fn push_skipped_when_recipient_recently_active() {
     let membership = setup_membership();
     let push = setup_push_service(&mock.uri()).await;
 
-    push
-        .notify_new_message(&storage, &membership, GROUP_ID, SENDER, &MessageAttribution::human_message())
-        .await;
+    notify_test_message(&push, &storage, &membership).await;
 
     mock.verify().await;
 }
@@ -122,9 +141,7 @@ async fn unregistered_token_is_pruned() {
     let membership = setup_membership();
     let push = setup_push_service(&mock.uri()).await;
 
-    push
-        .notify_new_message(&storage, &membership, GROUP_ID, SENDER, &MessageAttribution::human_message())
-        .await;
+    notify_test_message(&push, &storage, &membership).await;
 
     let remaining = storage
         .list_push_tokens_for_wallet(RECIPIENT)
@@ -153,9 +170,7 @@ async fn push_skipped_when_token_environment_mismatch() {
     let membership = setup_membership();
     let push = setup_push_service(&mock.uri()).await;
 
-    push
-        .notify_new_message(&storage, &membership, GROUP_ID, SENDER, &MessageAttribution::human_message())
-        .await;
+    notify_test_message(&push, &storage, &membership).await;
 
     mock.verify().await;
 }
@@ -193,15 +208,7 @@ async fn push_skipped_when_notification_mode_none() {
     let membership = setup_membership();
     let push = setup_push_service(&mock.uri()).await;
 
-    push
-        .notify_new_message(
-            &storage,
-            &membership,
-            GROUP_ID,
-            SENDER,
-            &MessageAttribution::human_message(),
-        )
-        .await;
+    notify_test_message(&push, &storage, &membership).await;
 
     mock.verify().await;
 }

@@ -76,8 +76,16 @@ AAD is never stored; both sender and receiver reconstruct it from known context.
 Each message includes a per-message signature over the canonical content, protecting against message forgery by allowing clients to validate that a message was authored by the claimed sender:
 
 ```
-"{groupId}:{hex(encryptedText)}:{hex(nonce)}:{keyVersion}"
+"{groupId}:{kind}:{hex(encryptedText)}:{hex(nonce)}:{keyVersion}"
 ```
+
+For `kind === "post"` creates, the canonical also binds the padded shared post address and idempotency key:
+
+```
+"{groupId}:post:{sharedPostAddress}:{idempotencyKey}:{hex(encryptedText)}:{hex(nonce)}:{keyVersion}"
+```
+
+Post edits keep `kind=post` but re-bind with empty post + idem (`"{groupId}:post:::{hex}:{hex}:{keyVersion}"`).
 
 The sender's public key (with scheme flag prefix identifying Ed25519, Secp256k1, or Secp256r1) is stored alongside the message. All group members can independently verify that:
 

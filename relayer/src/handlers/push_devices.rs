@@ -19,6 +19,8 @@ pub struct PostPushTokenBody {
     pub platform: String,
     pub token: String,
     pub environment: String,
+    #[serde(default)]
+    pub device_id: Option<String>,
 }
 
 fn validate_push_token_body(body: &PostPushTokenBody) -> Result<(), ApiError> {
@@ -71,6 +73,11 @@ pub async fn post_push_token(
         platform: body.platform.to_ascii_lowercase(),
         token: body.token.trim().to_string(),
         environment: body.environment.trim().to_ascii_lowercase(),
+        device_id: body
+            .device_id
+            .as_ref()
+            .map(|id| id.trim().to_string())
+            .filter(|id| !id.is_empty()),
         updated_at: Utc::now(),
     };
 
@@ -107,6 +114,7 @@ mod tests {
             platform: "ios".to_string(),
             token: "a".repeat(64),
             environment: "sandbox".to_string(),
+            device_id: None,
         }
     }
 

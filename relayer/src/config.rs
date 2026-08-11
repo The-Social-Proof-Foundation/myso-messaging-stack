@@ -135,6 +135,8 @@ pub struct Config {
     pub apns_auth_key_path: Option<String>,
     /// APNs environment: sandbox or production (default: sandbox).
     pub apns_environment: String,
+    /// Send visible alert + mutable-content pushes (default: false).
+    pub push_visible_alerts: bool,
 
     /// Enable WebSocket realtime + Postgres LISTEN worker (default: true).
     pub realtime_enabled: bool,
@@ -318,6 +320,10 @@ impl Config {
         let apns_bundle_id = env::var("APNS_BUNDLE_ID").ok();
         let apns_auth_key_path = env::var("APNS_AUTH_KEY_PATH").ok();
         let apns_environment = env::var("APNS_ENVIRONMENT").unwrap_or_else(|_| "sandbox".to_string());
+        let push_visible_alerts = env::var("PUSH_VISIBLE_ALERTS")
+            .ok()
+            .map(|v| v == "true" || v == "1")
+            .unwrap_or(false);
 
         let realtime_enabled = env::var("REALTIME_ENABLED")
             .ok()
@@ -403,6 +409,7 @@ impl Config {
             apns_bundle_id,
             apns_auth_key_path,
             apns_environment,
+            push_visible_alerts,
             realtime_enabled,
             realtime_group_buffer_size,
             realtime_user_feed_buffer_size,
@@ -464,6 +471,7 @@ impl Default for Config {
             apns_bundle_id: None,
             apns_auth_key_path: None,
             apns_environment: "sandbox".to_string(),
+            push_visible_alerts: false,
             realtime_enabled: true,
             realtime_group_buffer_size: 256,
             realtime_user_feed_buffer_size: 512,

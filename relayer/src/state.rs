@@ -14,6 +14,7 @@ use crate::services::block_check::BlockCheckService;
 use crate::services::message_gate::MessageGateService;
 use crate::services::messaging_config::{fallback_messaging_config_cache, MessagingConfigCache};
 use crate::services::presence_sync::PresenceRegistry;
+use crate::services::notification_push_store::NotificationPushStore;
 use crate::services::push::PushService;
 use crate::services::realtime::RealtimeHub;
 use crate::services::share_webhook::ShareWebhookNotifier;
@@ -71,6 +72,7 @@ pub struct AppState {
     /// Hot-reloadable on-chain MessagingConfig (fees, reply rules, escrow expiry).
     pub messaging_config: MessagingConfigCache,
     pub push_service: PushService,
+    pub notification_push: NotificationPushStore,
     pub realtime_hub: Arc<RealtimeHub>,
     pub realtime_enabled: bool,
     pub inline_realtime_publish: bool,
@@ -169,6 +171,7 @@ impl AppState {
             message_gate,
             messaging_config,
             push_service,
+            notification_push: NotificationPushStore::new(),
             realtime_hub,
             realtime_enabled,
             inline_realtime_publish,

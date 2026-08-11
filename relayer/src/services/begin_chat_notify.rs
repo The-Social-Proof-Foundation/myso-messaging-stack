@@ -95,9 +95,13 @@ impl BeginChatNotify {
                 .notify_new_message(
                     &inner.storage,
                     &inner.membership_store,
+                    &crate::services::notification_push_store::NotificationPushStore::new(),
+                    inner.push_service.visible_alerts(),
                     &group_id,
+                    uuid::Uuid::nil(),
                     &invitee,
                     &MessageAttribution::human_message(),
+                    "system",
                 )
                 .await;
         });

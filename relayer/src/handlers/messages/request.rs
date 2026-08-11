@@ -50,6 +50,14 @@ impl AttachmentRequest {
     }
 }
 
+/// Opaque per-device notification preview ciphertext (sender-client constructed).
+#[derive(Debug, Deserialize)]
+pub struct NotificationEnvelopeRequest {
+    pub device_id: String,
+    /// Base64-encoded opaque ciphertext for this device only.
+    pub encrypted_preview: String,
+}
+
 /// Request body for POST /messages
 #[derive(Debug, Deserialize)]
 pub struct CreateMessageRequest {
@@ -85,6 +93,9 @@ pub struct CreateMessageRequest {
     pub sub_agent_id: Option<String>,
     /// Identity class: 0=human, 1=delegated AI, 2=organization.
     pub identity_class: Option<i16>,
+    /// Sender-constructed opaque notification envelopes (relayer stores/forwards only).
+    #[serde(default)]
+    pub notification_envelopes: Vec<NotificationEnvelopeRequest>,
 }
 
 /// Request body for PUT /messages
@@ -106,7 +117,9 @@ pub struct UpdateMessageRequest {
     /// Encryption key version
     pub key_version: i64,
     /// Hex-encoded 64-byte signature over
-    /// "{group_id}:{kind}:{encrypted_text}:{nonce}:{key_version}"
+    /// `"{group_id}:{kind}:{encrypted_text}:{nonce}:{key_version}"`.
+    /// For `kind=post` edits, post + idem binds are empty:
+    /// `"{group_id}:post:::{encrypted_text}:{nonce}:{key_version}"`.
     pub message_signature: String,
     /// Attachments for this message (optional)
     #[serde(default)]

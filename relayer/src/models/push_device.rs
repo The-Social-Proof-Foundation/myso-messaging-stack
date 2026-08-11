@@ -9,5 +9,7 @@ pub struct PushTokenRecord {
     pub platform: String,
     pub token: String,
     pub environment: String,
+    #[serde(default)]
+    pub device_id: Option<String>,
     pub updated_at: DateTime<Utc>,
 }

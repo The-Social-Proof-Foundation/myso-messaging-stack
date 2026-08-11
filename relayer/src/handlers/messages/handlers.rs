@@ -15,7 +15,8 @@ use crate::storage::StorageError;
 
 use super::error::ApiError;
 use super::request::{
-    AttachmentRequest, CreateMessageRequest, GetMessagesQuery, UpdateMessageRequest,
+    AttachmentRequest, CreateMessageRequest, GetMessagesQuery, NotificationEnvelopeRequest,
+    UpdateMessageRequest,
 };
 use super::response::{
     CreateMessageResponse, EmptyResponse, GetMessagesResponse, MessageResponse,
@@ -26,6 +27,53 @@ use super::response::{
 const DEFAULT_PAGE_LIMIT: usize = 50;
 /// Maximum allowed messages per page
 const MAX_PAGE_LIMIT: usize = 100;
+
+/// Maximum opaque notification envelope size (4 KiB).
+const MAX_NOTIFICATION_ENVELOPE_BYTES: usize = 4096;
+
+fn store_notification_envelopes(
+    state: &AppState,
+    message_id: Uuid,
+    envelopes: &[NotificationEnvelopeRequest],
+) -> Result<(), ApiError> {
+    if envelopes.is_empty() {
+        return Ok(());
+    }
+    let mut items = Vec::with_capacity(envelopes.len());
+    for envelope in envelopes {
+        let device_id = envelope.device_id.trim();
+        if device_id.is_empty() {
+            return Err(ApiError::BadRequest(
+                "notification_envelopes.device_id must not be empty".to_string(),
+            ));
+        }
+        let preview = envelope.encrypted_preview.trim();
+        if preview.is_empty() {
+            return Err(ApiError::BadRequest(
+                "notification_envelopes.encrypted_preview must not be empty".to_string(),
+            ));
+        }
+        let bytes = base64::Engine::decode(
+            &base64::engine::general_purpose::STANDARD,
+            preview,
+        )
+        .map_err(|_| {
+            ApiError::BadRequest(
+                "notification_envelopes.encrypted_preview must be valid base64".to_string(),
+            )
+        })?;
+        if bytes.is_empty() || bytes.len() > MAX_NOTIFICATION_ENVELOPE_BYTES {
+            return Err(ApiError::BadRequest(format!(
+                "notification envelope size must be 1..={MAX_NOTIFICATION_ENVELOPE_BYTES} bytes"
+            )));
+        }
+        items.push((device_id.to_string(), bytes));
+    }
+    state
+        .notification_push
+        .store_envelopes(message_id, &items);
+    Ok(())
+}
 
 /// POST /messages - Create a new message
 pub async fn create_message(
@@ -237,6 +285,8 @@ pub async fn create_message(
     // Human tip wins over a pending invitee-join debounce.
     state.begin_chat_notify.cancel(&group_id);
 
+    store_notification_envelopes(&state, created.id, &req.notification_envelopes)?;
+
     if state.realtime_enabled && state.inline_realtime_publish {
         let wire: MessageResponse = created.clone().into();
         state
@@ -263,17 +313,25 @@ pub async fn create_message(
     let push = state.push_service.clone();
     let storage = state.storage.clone();
     let membership = state.membership_store.clone();
+    let notification_push = state.notification_push.clone();
+    let push_visible_alerts = state.push_service.visible_alerts();
     let push_attribution = created.attribution.clone();
     let push_group_id = group_id.clone();
     let push_sender = sender_address.clone();
+    let push_message_id = created.id;
+    let push_kind = kind.as_str().to_string();
     tokio::spawn(async move {
         push
             .notify_new_message(
                 &storage,
                 &membership,
+                &notification_push,
+                push_visible_alerts,
                 &push_group_id,
+                push_message_id,
                 &push_sender,
                 &push_attribution,
+                &push_kind,
             )
             .await;
     });
@@ -510,7 +568,50 @@ fn verify_message_signature(
         )));
     }
 
-    let canonical = if kind == "post" {
+    let canonical = message_content_canonical(
+        group_id,
+        kind,
+        encrypted_text,
+        nonce,
+        key_version,
+        shared_post_address,
+        idempotency_key,
+    );
+
+    if let Err(e) = verify_signature(
+        canonical.as_bytes(),
+        &signature_bytes,
+        &auth.public_key,
+        auth.scheme,
+    ) {
+        tracing::warn!(
+            kind = kind,
+            canonical = %canonical,
+            error = %e,
+            "Message signature verification failed"
+        );
+        return Err(ApiError::BadRequest(format!(
+            "Message signature verification failed: {}",
+            e
+        )));
+    }
+
+    Ok(signature_bytes)
+}
+
+/// Canonical string signed per-message (greenfield; kind always included).
+/// Post create binds padded post + idem; post edit passes empty post + idem.
+fn message_content_canonical(
+    group_id: &str,
+    kind: &str,
+    encrypted_text: &str,
+    nonce: &str,
+    key_version: i64,
+    shared_post_address: Option<&str>,
+    idempotency_key: Option<&str>,
+) -> String {
+    let group_id = group_id.to_ascii_lowercase();
+    if kind == "post" {
         let post = shared_post_address.unwrap_or("");
         let idem = idempotency_key.unwrap_or("");
         format!(
@@ -522,17 +623,7 @@ fn verify_message_signature(
             "{}:{}:{}:{}:{}",
             group_id, kind, encrypted_text, nonce, key_version
         )
-    };
-
-    verify_signature(
-        canonical.as_bytes(),
-        &signature_bytes,
-        &auth.public_key,
-        auth.scheme,
-    )
-    .map_err(|e| ApiError::BadRequest(format!("Message signature verification failed: {}", e)))?;
-
-    Ok(signature_bytes)
+    }
 }
 
 fn normalize_shared_post_address(raw: &str) -> Option<String> {
@@ -568,16 +659,51 @@ mod shared_post_canonical_tests {
         let group = "0xGROUP_MIXED";
         let post = normalize_shared_post_address("0xabc").unwrap();
         let padded = format!("0x{}abc", "0".repeat(61));
-        let canonical = format!(
-            "{}:post:{}:idem-1:deadbeef:000000000000000000000000:0",
-            group.to_ascii_lowercase(),
-            post
+        let canonical = message_content_canonical(
+            group,
+            "post",
+            "deadbeef",
+            "000000000000000000000000",
+            0,
+            Some(&post),
+            Some("idem-1"),
         );
         assert_eq!(
             canonical,
             format!("0xgroup_mixed:post:{padded}:idem-1:deadbeef:000000000000000000000000:0")
         );
-        assert_eq!(post, padded);
+    }
+
+    #[test]
+    fn text_and_typed_canonicals_include_kind() {
+        let group = "0xAbCd";
+        for kind in ["text", "request_payment", "poll"] {
+            let c = message_content_canonical(
+                group,
+                kind,
+                "deadbeef",
+                "00",
+                3,
+                None,
+                None,
+            );
+            assert_eq!(c, format!("0xabcd:{kind}:deadbeef:00:3"));
+        }
+    }
+
+    #[test]
+    fn post_edit_canonical_uses_empty_binds() {
+        let c = message_content_canonical(
+            "0xABCD",
+            "post",
+            "cafebabe",
+            "11",
+            1,
+            None,
+            None,
+        );
+        // group:post:"":"":enc:nonce:kv → three colons after "post"
+        assert_eq!(c, "0xabcd:post:::cafebabe:11:1");
     }
 }
 

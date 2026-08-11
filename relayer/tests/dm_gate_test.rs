@@ -189,7 +189,7 @@ fn signed_message_request(group_id: &str) -> Request<Body> {
         let bytes: [u8; 12] = rand::thread_rng().gen();
         hex::encode(bytes)
     };
-    let canonical = format!("{}:{}:{}:{}", group_id, encrypted_text, nonce_hex, 0);
+    let canonical = format!("{}:text:{}:{}:{}", group_id, encrypted_text, nonce_hex, 0);
     let message_signature = sign_bytes_ed25519(canonical.as_bytes());
 
     let body = json!({

@@ -25,6 +25,7 @@ async-trait = "0.1"
 thiserror = "1.0"
 dotenvy = "0.15"
 hex = "0.4"
+base64 = "0.22"
 bytes = "1.5"
 http-body-util = "0.1"
 

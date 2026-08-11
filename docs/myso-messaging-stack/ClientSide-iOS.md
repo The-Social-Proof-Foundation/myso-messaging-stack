@@ -121,6 +121,7 @@ Canonical: `{timestamp}:{sender_address}:{group_id}` plus optional `after_order`
 2. `POST /v1/users/unread-counts` with `{ items: [{ group_id, after_order }] }` → exact batch counts (preferred over paging message heads)
 3. On thread open → merge blob → `PUT /v1/users/read-state` (optional `expected_version` for CAS)
 4. Foreground: user-feed `group.activity` / `read_state.updated` wakes recompute (no ciphertext on the socket)
+5. **Own sends must not self-badge:** after any successful outbound (open-thread text, share-post from feed, etc.), register `MessagingInboxService.noteOwnOutbound(groupId:)` (clear on failure). On the matching `group.activity`, consume the credit and `markRead` to `latest_order` instead of optimistic unread bump. Open-thread paths also advance `localReadUpto` via tip preview / `markLocalRead`. Do not rely on the thread being open — share-from-feed must use the same hook.
 
 iOS: `MessagingRelayerHTTPClient.fetchUnreadCounts` / `getUserReadState` / `putUserReadState` / `fetchMessages`.
 

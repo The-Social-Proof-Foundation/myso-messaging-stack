@@ -118,7 +118,7 @@ async fn bind_test_server(app: Router) -> (u16, tokio::task::JoinHandle<()>) {
 async fn post_message(port: u16, group_id: &str) -> StatusCode {
     let timestamp = chrono::Utc::now().timestamp();
     let nonce = "000000000000000000000000";
-    let canonical = format!("{group_id}:{ENCRYPTED_TEXT}:{nonce}:0");
+    let canonical = format!("{group_id}:text:{ENCRYPTED_TEXT}:{nonce}:0");
     let message_signature = sign_bytes_ed25519(canonical.as_bytes());
     let body = serde_json::json!({
         "group_id": group_id,

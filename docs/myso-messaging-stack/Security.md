@@ -50,7 +50,7 @@ This reflects a deliberate architectural shift from fully on-chain ordering towa
 
 - **End-to-end encryption**: Messages are encrypted client-side with AES-256-GCM before leaving the device. The relayer only stores and serves opaque ciphertext. See [Encryption](./Encryption.md) for the full encryption model.
 - **Ciphertext integrity**: AES-GCM's 16-byte authentication tag detects any tampering with the ciphertext in transit or at rest.
-- **Sender verification**: Each message includes a per-message signature over the canonical content (`groupId:encryptedText:nonce:keyVersion`), along with the sender's public key. This protects against message forgery by allowing clients to validate per-message signatures and independently verify that a message was signed by the claimed sender.
+- **Sender verification**: Each message includes a per-message signature over the canonical content (`groupId:kind:encryptedText:nonce:keyVersion`; post creates also bind `sharedPostAddress` + `idempotencyKey`), along with the sender's public key. This protects against message forgery by allowing clients to validate per-message signatures and independently verify that a message was signed by the claimed sender.
 - **Permission-gated decryption**: Access to the group DEK (Data Encryption Key) is controlled by MyData. Only addresses with `MessagingReader` permission on the group can decrypt the DEK.
 - **AAD binding**: Additional Authenticated Data (`[groupId][keyVersion][senderAddress]`) is included in AES-GCM encryption. If any field mismatches (e.g., a message is moved to a different group or attributed to a different sender), decryption fails.
 

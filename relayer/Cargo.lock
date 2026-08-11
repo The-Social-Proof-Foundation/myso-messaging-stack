@@ -2090,6 +2090,7 @@ dependencies = [
  "aws-credential-types",
  "aws-sdk-s3",
  "axum 0.7.9",
+ "base64 0.22.1",
  "bcs",
  "blake2",
  "bytes",

@@ -754,7 +754,7 @@ async fn test_create_message_sends_sync_notification() {
     // Per-message signature over canonical content
     let encrypted_text = "deadbeef";
     let nonce_hex = "000000000000000000000000";
-    let canonical = format!("{}:{}:{}:{}", group_id, encrypted_text, nonce_hex, 0);
+    let canonical = format!("{}:text:{}:{}:{}", group_id, encrypted_text, nonce_hex, 0);
     let message_signature = sign(canonical.as_bytes());
 
     let timestamp = chrono::Utc::now().timestamp();

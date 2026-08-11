@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use axum::{
     middleware,
-    routing::{delete, get, post},
+    routing::{delete, get, post, put},
     Router,
 };
 use tower_http::cors::{Any, CorsLayer};
@@ -21,6 +21,7 @@ use crate::handlers::dm_gate;
 use crate::handlers::group_features;
 use crate::handlers::health::health_check;
 use crate::handlers::messages::{create_message, delete_message, get_messages, update_message};
+use crate::handlers::notification_push;
 use crate::handlers::presence::post_presence;
 use crate::handlers::push_devices::{delete_push_token, post_push_token};
 use crate::handlers::unread_counts::post_unread_counts;
@@ -205,6 +206,10 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             get(group_features::get_group_presence),
         )
         .route(
+            "/groups/:group_id/notification-keys",
+            get(notification_push::get_group_notification_keys),
+        )
+        .route(
             "/archive/groups/:group_id/messages",
             get(get_archive_messages),
         );
@@ -215,6 +220,8 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .route("/devices/push-tokens", post(post_push_token))
         .route("/devices/push-tokens/:token", delete(delete_push_token))
         .route("/devices/presence", post(post_presence))
+        .route("/devices/notification-keys", put(notification_push::put_notification_key))
+        .route("/users/notification-prefs", get(notification_push::get_notification_prefs).put(notification_push::put_notification_prefs))
         .route("/messaging/dm-gate", get(dm_gate::get_dm_gate))
         .route(
             "/agent-conversations",

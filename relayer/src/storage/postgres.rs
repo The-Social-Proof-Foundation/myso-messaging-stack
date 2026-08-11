@@ -1142,17 +1142,19 @@ impl StorageAdapter for PostgresStorage {
 
     async fn upsert_push_token(&self, record: PushTokenRecord) -> StorageResult<()> {
         sqlx::query(
-            r#"INSERT INTO push_tokens (wallet, token, platform, environment, updated_at)
-               VALUES ($1,$2,$3,$4,$5)
+            r#"INSERT INTO push_tokens (wallet, token, platform, environment, device_id, updated_at)
+               VALUES ($1,$2,$3,$4,$5,$6)
                ON CONFLICT (wallet, token) DO UPDATE SET
                  platform = EXCLUDED.platform,
                  environment = EXCLUDED.environment,
+                 device_id = EXCLUDED.device_id,
                  updated_at = EXCLUDED.updated_at"#,
         )
         .bind(&record.wallet)
         .bind(&record.token)
         .bind(&record.platform)
         .bind(&record.environment)
+        .bind(&record.device_id)
         .bind(record.updated_at)
         .execute(&self.pool)
         .await
@@ -1183,6 +1185,7 @@ impl StorageAdapter for PostgresStorage {
                 platform: r.get("platform"),
                 token: r.get("token"),
                 environment: r.get("environment"),
+                device_id: r.try_get("device_id").ok(),
                 updated_at: r.get("updated_at"),
             })
             .collect())
@@ -1207,6 +1210,7 @@ impl StorageAdapter for PostgresStorage {
                 platform: r.get("platform"),
                 token: r.get("token"),
                 environment: r.get("environment"),
+                device_id: r.try_get("device_id").ok(),
                 updated_at: r.get("updated_at"),
             };
             out.entry(record.wallet.clone()).or_default().push(record);

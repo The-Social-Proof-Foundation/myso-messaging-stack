@@ -14,6 +14,7 @@ pub mod message_gate;
 pub mod messaging_config;
 pub mod file_storage_sync;
 pub mod presence_sync;
+pub mod notification_push_store;
 pub mod push;
 pub mod realtime;
 pub mod share_webhook;

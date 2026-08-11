@@ -15,6 +15,7 @@ use tracing::{debug, info, warn};
 use crate::auth::MembershipStore;
 use crate::config::Config;
 use crate::models::PushTokenRecord;
+use crate::services::notification_push_store::{NotificationPushStore, WalletNotificationMode};
 use crate::storage::StorageAdapter;
 
 pub use apns::{ApnsClient, ApnsEnvironment, ApnsSendError};
@@ -24,6 +25,7 @@ pub use web_push::WebPushClient;
 #[derive(Clone)]
 pub struct PushService {
     enabled: bool,
+    visible_alerts: bool,
     presence_ttl_secs: u64,
     notify_concurrency: usize,
     large_group_warn_members: usize,
@@ -42,6 +44,8 @@ enum PushSendOutcome {
 struct PushSendJob {
     member: String,
     token: PushTokenRecord,
+    device_id: Option<String>,
+    wallet_mode: WalletNotificationMode,
 }
 
 impl PushService {
@@ -67,6 +71,7 @@ impl PushService {
         Self {
             enabled: config.push_enabled
                 && (apns.is_some() || fcm.is_some() || web_push.is_some()),
+            visible_alerts: config.push_visible_alerts,
             presence_ttl_secs: config.presence_ttl_secs,
             notify_concurrency: config.push_notify_concurrency,
             large_group_warn_members: config.push_large_group_warn_members,
@@ -81,6 +86,7 @@ impl PushService {
     pub fn new_for_test(apns: ApnsClient, presence_ttl_secs: u64) -> Self {
         Self {
             enabled: true,
+            visible_alerts: false,
             presence_ttl_secs,
             notify_concurrency: 50,
             large_group_warn_members: 500,
@@ -94,14 +100,22 @@ impl PushService {
         self.enabled
     }
 
+    pub fn visible_alerts(&self) -> bool {
+        self.visible_alerts
+    }
+
     /// Notify offline group members about a new message (metadata-only).
     pub async fn notify_new_message(
         &self,
         storage: &Arc<dyn StorageAdapter>,
         membership_store: &Arc<dyn MembershipStore>,
+        notification_push: &NotificationPushStore,
+        push_visible_alerts: bool,
         group_id: &str,
+        message_id: uuid::Uuid,
         sender: &str,
         attribution: &crate::models::MessageAttribution,
+        message_kind: &str,
     ) {
         if !self.is_enabled() {
             return;
@@ -170,6 +184,12 @@ impl PushService {
             .filter(|wallet| !muted.contains(wallet))
             .collect();
 
+        let group_unread = storage
+            .get_group_activity(group_id, 0)
+            .await
+            .map(|activity| activity.unread_count)
+            .unwrap_or(0);
+
         let tokens_by_wallet = match storage.list_push_tokens_for_wallets(&push_recipients).await {
             Ok(tokens) => tokens,
             Err(err) => {
@@ -180,6 +200,11 @@ impl PushService {
 
         let mut jobs = Vec::new();
         for member in &push_recipients {
+            let wallet_mode = notification_push.get_wallet_mode(member);
+            if wallet_mode == WalletNotificationMode::None {
+                continue;
+            }
+            let device_keys = notification_push.list_device_keys_for_wallets(&[member.clone()]);
             let Some(tokens) = tokens_by_wallet.get(member) else {
                 continue;
             };
@@ -197,9 +222,21 @@ impl PushService {
                     );
                     continue;
                 }
+                let device_id = token
+                    .device_id
+                    .clone()
+                    .or_else(|| {
+                        if device_keys.len() == 1 {
+                            Some(device_keys[0].device_id.clone())
+                        } else {
+                            None
+                        }
+                    });
                 jobs.push(PushSendJob {
                     member: member.clone(),
                     token: token.clone(),
+                    device_id,
+                    wallet_mode,
                 });
             }
         }
@@ -208,20 +245,59 @@ impl PushService {
         let concurrency = self.notify_concurrency.max(1);
         let apns = apns.clone();
         let storage = Arc::clone(storage);
+        let notification_push = notification_push.clone();
         let group_id_owned = group_id.to_string();
         let attribution = attribution.clone();
+        let sender_wallet = sender.to_string();
 
         let outcomes: Vec<PushSendOutcome> = stream::iter(jobs)
             .map(|job| {
                 let apns = apns.clone();
                 let storage = Arc::clone(&storage);
+                let notification_push = notification_push.clone();
                 let group_id = group_id_owned.clone();
                 let attribution = attribution.clone();
+                let sender_wallet = sender_wallet.clone();
                 async move {
-                    match apns
-                        .send_new_message(&job.token, &group_id, &attribution)
-                        .await
-                    {
+                    let encrypted_notification = job
+                        .device_id
+                        .as_deref()
+                        .and_then(|device_id| {
+                            notification_push
+                                .get_envelope(message_id, device_id)
+                                .map(|bytes| {
+                                    base64::Engine::encode(
+                                        &base64::engine::general_purpose::STANDARD,
+                                        bytes,
+                                    )
+                                })
+                        });
+                    let send_alert = push_visible_alerts
+                        && job.wallet_mode == WalletNotificationMode::All;
+                    let result = if send_alert {
+                        apns
+                            .send_new_message_alert(
+                                &job.token,
+                                &group_id,
+                                message_id,
+                                &sender_wallet,
+                                message_kind,
+                                group_unread,
+                                encrypted_notification.as_deref(),
+                                &attribution,
+                            )
+                            .await
+                    } else {
+                        apns
+                            .send_new_message(
+                                &job.token,
+                                &group_id,
+                                group_unread,
+                                &attribution,
+                            )
+                            .await
+                    };
+                    match result {
                         Ok(()) => PushSendOutcome::Sent,
                         Err(ApnsSendError::Unregistered) => {
                             info!(

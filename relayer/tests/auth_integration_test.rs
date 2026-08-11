@@ -236,7 +236,7 @@ async fn test_valid_auth_succeeds(
     // Per-message signature over canonical content
     let encrypted_text = "deadbeef";
     let nonce_hex = "000000000000000000000000";
-    let canonical = format!("{}:{}:{}:{}", group_id, encrypted_text, nonce_hex, 0);
+    let canonical = format!("{}:text:{}:{}:{}", group_id, encrypted_text, nonce_hex, 0);
     let message_signature = sign_fn(canonical.as_bytes());
 
     let body = json!({
@@ -504,7 +504,7 @@ async fn create_message_as_ed25519(app: &Router, group_id: &str) -> uuid::Uuid {
     // Per-message signature over canonical content
     let encrypted_text = "deadbeef";
     let nonce_hex = random_nonce_hex();
-    let canonical = format!("{}:{}:{}:{}", group_id, encrypted_text, &nonce_hex, 0);
+    let canonical = format!("{}:text:{}:{}:{}", group_id, encrypted_text, &nonce_hex, 0);
     let message_signature = sign_bytes_ed25519(canonical.as_bytes());
 
     let body = json!({
@@ -644,7 +644,7 @@ async fn test_replay_same_post_nonce_rejected() {
 
     // Use a fixed nonce so both requests have the same one
     let nonce = "aabbccddeeff001122334455";
-    let canonical = format!("{}:{}:{}:{}", group_id, "deadbeef", nonce, 0);
+    let canonical = format!("{}:text:{}:{}:{}", group_id, "deadbeef", nonce, 0);
     let message_signature = sign_bytes_ed25519(canonical.as_bytes());
     let body = json!({
         "group_id": group_id,
@@ -704,7 +704,7 @@ async fn test_different_nonces_both_accepted() {
     // First request with nonce A
     let timestamp1 = chrono::Utc::now().timestamp();
     let nonce1 = "aaaaaaaaaaaaaaaaaaaaaaaa";
-    let canonical1 = format!("{}:{}:{}:{}", group_id, "deadbeef", nonce1, 0);
+    let canonical1 = format!("{}:text:{}:{}:{}", group_id, "deadbeef", nonce1, 0);
     let msg_sig1 = sign_bytes_ed25519(canonical1.as_bytes());
     let body1 = json!({
         "group_id": group_id,
@@ -733,7 +733,7 @@ async fn test_different_nonces_both_accepted() {
     // Second request with nonce B (different nonce)
     let timestamp2 = chrono::Utc::now().timestamp();
     let nonce2 = "bbbbbbbbbbbbbbbbbbbbbbbb";
-    let canonical2 = format!("{}:{}:{}:{}", group_id, "deadbeef", nonce2, 0);
+    let canonical2 = format!("{}:text:{}:{}:{}", group_id, "deadbeef", nonce2, 0);
     let msg_sig2 = sign_bytes_ed25519(canonical2.as_bytes());
     let body2 = json!({
         "group_id": group_id,
@@ -909,9 +909,9 @@ fn build_update_request(
     let nonce_hex = random_nonce_hex();
     let key_version = 1;
 
-    // Per-message signature over canonical content
+    // Per-message signature over canonical content (kind from existing row; creates use text).
     let canonical = format!(
-        "{}:{}:{}:{}",
+        "{}:text:{}:{}:{}",
         group_id, encrypted_text, nonce_hex, key_version
     );
     let message_signature = sign_fn(canonical.as_bytes());

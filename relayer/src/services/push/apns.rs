@@ -96,12 +96,55 @@ pub fn workflow_item_payload_json(item_type: &str, item_id: &str) -> Value {
     })
 }
 
-pub fn new_message_payload_json(group_id: &str, attribution: &MessageAttribution) -> Value {
+pub fn new_message_payload_json(
+    group_id: &str,
+    message_unread_count: i64,
+    attribution: &MessageAttribution,
+) -> Value {
     let mut payload = json!({
         "aps": { "content-available": 1 },
         "group_id": group_id,
+        "message_unread_count": message_unread_count,
         "is_agent_message": attribution.is_agent_message(),
     });
+    if let Some(principal) = &attribution.principal_owner {
+        if let Some(obj) = payload.as_object_mut() {
+            obj.insert("principal_owner".to_string(), json!(principal));
+        }
+    }
+    payload
+}
+
+pub fn new_message_alert_payload_json(
+    group_id: &str,
+    message_id: uuid::Uuid,
+    sender_wallet: &str,
+    message_kind: &str,
+    message_unread_count: i64,
+    encrypted_notification: Option<&str>,
+    attribution: &MessageAttribution,
+) -> Value {
+    let mut payload = json!({
+        "aps": {
+            "alert": {
+                "title": "New message",
+                "body": "Open to read"
+            },
+            "sound": "default",
+            "mutable-content": 1
+        },
+        "group_id": group_id,
+        "message_id": message_id.to_string(),
+        "sender_wallet": sender_wallet,
+        "message_kind": message_kind,
+        "message_unread_count": message_unread_count,
+        "is_agent_message": attribution.is_agent_message(),
+    });
+    if let Some(envelope) = encrypted_notification {
+        if let Some(obj) = payload.as_object_mut() {
+            obj.insert("encrypted_notification".to_string(), json!(envelope));
+        }
+    }
     if let Some(principal) = &attribution.principal_owner {
         if let Some(obj) = payload.as_object_mut() {
             obj.insert("principal_owner".to_string(), json!(principal));
@@ -190,6 +233,7 @@ impl ApnsClient {
         &self,
         token: &PushTokenRecord,
         group_id: &str,
+        message_unread_count: i64,
         attribution: &crate::models::MessageAttribution,
     ) -> Result<(), ApnsSendError> {
         if !Self::is_ios_token(token) {
@@ -203,10 +247,74 @@ impl ApnsClient {
         }
 
         match &self.backend {
-            ApnsBackend::A2(client) => self.send_via_a2(client, token, group_id, attribution).await,
-            ApnsBackend::HttpTest { client, base_url } => {
-                self.send_via_http_test(client, base_url, token, group_id, attribution)
+            ApnsBackend::A2(client) => {
+                self.send_via_a2(client, token, group_id, message_unread_count, attribution)
                     .await
+            }
+            ApnsBackend::HttpTest { client, base_url } => {
+                self.send_via_http_test(
+                    client,
+                    base_url,
+                    token,
+                    group_id,
+                    message_unread_count,
+                    attribution,
+                )
+                .await
+            }
+        }
+    }
+
+    pub async fn send_new_message_alert(
+        &self,
+        token: &PushTokenRecord,
+        group_id: &str,
+        message_id: uuid::Uuid,
+        sender_wallet: &str,
+        message_kind: &str,
+        message_unread_count: i64,
+        encrypted_notification: Option<&str>,
+        attribution: &crate::models::MessageAttribution,
+    ) -> Result<(), ApnsSendError> {
+        if !Self::is_ios_token(token) {
+            return Err(ApnsSendError::Other("non-ios platform".to_string()));
+        }
+
+        let token_environment = ApnsEnvironment::from_token_str(&token.environment)
+            .map_err(ApnsSendError::Other)?;
+        if token_environment != self.environment {
+            return Err(ApnsSendError::EnvironmentMismatch);
+        }
+
+        match &self.backend {
+            ApnsBackend::A2(client) => {
+                self.send_alert_via_a2(
+                    client,
+                    token,
+                    group_id,
+                    message_id,
+                    sender_wallet,
+                    message_kind,
+                    message_unread_count,
+                    encrypted_notification,
+                    attribution,
+                )
+                .await
+            }
+            ApnsBackend::HttpTest { client, base_url } => {
+                self.send_alert_via_http_test(
+                    client,
+                    base_url,
+                    token,
+                    group_id,
+                    message_id,
+                    sender_wallet,
+                    message_kind,
+                    message_unread_count,
+                    encrypted_notification,
+                    attribution,
+                )
+                .await
             }
         }
     }
@@ -312,6 +420,7 @@ impl ApnsClient {
         client: &Client,
         token: &PushTokenRecord,
         group_id: &str,
+        message_unread_count: i64,
         attribution: &crate::models::MessageAttribution,
     ) -> Result<(), ApnsSendError> {
         let mut payload = DefaultNotificationBuilder::new()
@@ -327,6 +436,9 @@ impl ApnsClient {
             );
         payload
             .add_custom_data("group_id", &group_id)
+            .map_err(|err| ApnsSendError::Other(err.to_string()))?;
+        payload
+            .add_custom_data("message_unread_count", &message_unread_count)
             .map_err(|err| ApnsSendError::Other(err.to_string()))?;
         payload
             .add_custom_data("is_agent_message", &attribution.is_agent_message())
@@ -352,12 +464,74 @@ impl ApnsClient {
         }
     }
 
+    async fn send_alert_via_a2(
+        &self,
+        client: &Client,
+        token: &PushTokenRecord,
+        group_id: &str,
+        message_id: uuid::Uuid,
+        sender_wallet: &str,
+        message_kind: &str,
+        message_unread_count: i64,
+        encrypted_notification: Option<&str>,
+        attribution: &crate::models::MessageAttribution,
+    ) -> Result<(), ApnsSendError> {
+        let body = new_message_alert_payload_json(
+            group_id,
+            message_id,
+            sender_wallet,
+            message_kind,
+            message_unread_count,
+            encrypted_notification,
+            attribution,
+        );
+        let mut payload = DefaultNotificationBuilder::new()
+            .set_title("New message")
+            .set_body("Open to read")
+            .set_mutable_content()
+            .set_sound("default")
+            .build(
+                &token.token,
+                NotificationOptions {
+                    apns_topic: Some(&self.bundle_id),
+                    apns_push_type: Some(PushType::Alert),
+                    apns_priority: Some(Priority::High),
+                    ..Default::default()
+                },
+            );
+        if let Some(obj) = body.as_object() {
+            for (key, value) in obj {
+                if key == "aps" {
+                    continue;
+                }
+                payload
+                    .add_custom_data(key, value)
+                    .map_err(|err| ApnsSendError::Other(err.to_string()))?;
+            }
+        }
+
+        debug!(
+            "APNs alert push: topic={} env={:?} token={} group={} message={}",
+            self.bundle_id, self.environment, token.token, group_id, message_id
+        );
+
+        match client.send(payload).await {
+            Ok(_) => Ok(()),
+            Err(A2Error::ResponseError(response)) => map_apns_status(response.code),
+            Err(A2Error::RequestTimeout(secs)) => Err(ApnsSendError::Transient(format!(
+                "request timeout after {secs}s"
+            ))),
+            Err(err) => classify_a2_error(err),
+        }
+    }
+
     async fn send_via_http_test(
         &self,
         client: &reqwest::Client,
         base_url: &str,
         token: &PushTokenRecord,
         group_id: &str,
+        message_unread_count: i64,
         attribution: &crate::models::MessageAttribution,
     ) -> Result<(), ApnsSendError> {
         let url = format!(
@@ -365,13 +539,54 @@ impl ApnsClient {
             base_url.trim_end_matches('/'),
             token.token
         );
-        let body = new_message_payload_json(group_id, attribution);
+        let body = new_message_payload_json(group_id, message_unread_count, attribution);
 
         let response = client
             .post(url)
             .header("apns-topic", &self.bundle_id)
             .header("apns-push-type", "background")
             .header("apns-priority", "5")
+            .json(&body)
+            .send()
+            .await
+            .map_err(|err| ApnsSendError::Transient(err.to_string()))?;
+
+        map_apns_status(response.status().as_u16())
+    }
+
+    async fn send_alert_via_http_test(
+        &self,
+        client: &reqwest::Client,
+        base_url: &str,
+        token: &PushTokenRecord,
+        group_id: &str,
+        message_id: uuid::Uuid,
+        sender_wallet: &str,
+        message_kind: &str,
+        message_unread_count: i64,
+        encrypted_notification: Option<&str>,
+        attribution: &crate::models::MessageAttribution,
+    ) -> Result<(), ApnsSendError> {
+        let url = format!(
+            "{}/3/device/{}",
+            base_url.trim_end_matches('/'),
+            token.token
+        );
+        let body = new_message_alert_payload_json(
+            group_id,
+            message_id,
+            sender_wallet,
+            message_kind,
+            message_unread_count,
+            encrypted_notification,
+            attribution,
+        );
+
+        let response = client
+            .post(url)
+            .header("apns-topic", &self.bundle_id)
+            .header("apns-push-type", "alert")
+            .header("apns-priority", "10")
             .json(&body)
             .send()
             .await
@@ -412,6 +627,7 @@ mod tests {
             platform: "ios".to_string(),
             token: "a".repeat(64),
             environment: environment.to_string(),
+            device_id: None,
             updated_at: Utc::now(),
         }
     }
@@ -455,10 +671,31 @@ mod tests {
 
     #[test]
     fn new_message_payload_shape() {
-        let payload = new_message_payload_json("group-123", &MessageAttribution::human_message());
+        let payload = new_message_payload_json(
+            "group-123",
+            2,
+            &MessageAttribution::human_message(),
+        );
         assert_eq!(payload["aps"]["content-available"], 1);
         assert_eq!(payload["group_id"], "group-123");
+        assert_eq!(payload["message_unread_count"], 2);
         assert_eq!(payload["is_agent_message"], false);
+    }
+
+    #[test]
+    fn new_message_alert_payload_shape() {
+        let payload = new_message_alert_payload_json(
+            "group-123",
+            uuid::Uuid::nil(),
+            "0xsender",
+            "text",
+            3,
+            Some("abc123"),
+            &MessageAttribution::human_message(),
+        );
+        assert_eq!(payload["aps"]["mutable-content"], 1);
+        assert_eq!(payload["message_unread_count"], 3);
+        assert_eq!(payload["encrypted_notification"], "abc123");
     }
 
     #[test]

@@ -458,6 +458,7 @@ async fn org_invitation_created_sends_workflow_push() {
             platform: "ios".to_string(),
             token: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".to_string(),
             environment: "sandbox".to_string(),
+            device_id: None,
             updated_at: chrono::Utc::now(),
         })
         .await
@@ -506,6 +507,7 @@ async fn workflow_push_skipped_when_recipient_active() {
             platform: "ios".to_string(),
             token: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".to_string(),
             environment: "sandbox".to_string(),
+            device_id: None,
             updated_at: chrono::Utc::now(),
         })
         .await
