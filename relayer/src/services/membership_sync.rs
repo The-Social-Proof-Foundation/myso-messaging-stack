@@ -732,12 +732,15 @@ impl MembershipSyncService {
                 if permissions.is_empty() {
                     if is_system_object(member, &self.system_object_addrs) {
                         debug!(
-                            "Ignoring system-actor PermissionsGranted (no messaging perms): {} -> {}",
+                            "Ignoring system-actor PermissionsGranted (no messaging API perms): {} -> {}",
                             member, group_id
                         );
                     } else {
-                        warn!(
-                            "PermissionsGranted with no recognized messaging permissions: {} -> {} (check GROUPS_PACKAGE_ID / event type names)",
+                        // Expected when on-chain grants include admin/non-API caps
+                        // (EncryptionKeyRotator, PermissionsAdmin, etc.) emitted separately
+                        // from MessagingSender/Reader/Editor/Deleter.
+                        debug!(
+                            "PermissionsGranted with no messaging API permissions (admin caps only): {} -> {}",
                             member, group_id
                         );
                     }

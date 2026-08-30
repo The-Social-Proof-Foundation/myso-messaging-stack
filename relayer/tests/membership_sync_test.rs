@@ -410,6 +410,89 @@ async fn test_permissions_granted_event() {
 }
 
 #[tokio::test]
+async fn test_permissions_granted_mixed_api_and_admin_caps() {
+    let group_id = [0x11u8; 32];
+    let member = [0x22u8; 32];
+
+    // Mirrors grant_all_messaging_permissions(): separate events per permission type.
+    // Admin/non-API caps must not produce WARN-level noise; API caps must still apply.
+    let checkpoints = vec![make_checkpoint_response(
+        1,
+        vec![
+            make_permissions_granted_event(
+                PACKAGE_ID,
+                &group_id,
+                &member,
+                vec![
+                    format!("{}::messaging::MessagingSender", PACKAGE_ID),
+                    format!("{}::messaging::MessagingReader", PACKAGE_ID),
+                    format!("{}::messaging::MessagingEditor", PACKAGE_ID),
+                    format!("{}::messaging::MessagingDeleter", PACKAGE_ID),
+                ],
+            ),
+            make_permissions_granted_event(
+                PACKAGE_ID,
+                &group_id,
+                &member,
+                vec![format!(
+                    "{}::messaging::EncryptionKeyRotator",
+                    PACKAGE_ID
+                )],
+            ),
+            make_permissions_granted_event(
+                PACKAGE_ID,
+                &group_id,
+                &member,
+                vec![format!("{}::permissioned_group::PermissionsAdmin", PACKAGE_ID)],
+            ),
+            make_permissions_granted_event(
+                PACKAGE_ID,
+                &group_id,
+                &member,
+                vec![format!(
+                    "{}::messaging::GroupHandleAdmin",
+                    PACKAGE_ID
+                )],
+            ),
+        ],
+    )];
+
+    let addr = start_mock_server(checkpoints).await;
+    let mock_url = format!("http://{}", addr);
+
+    let store: Arc<dyn MembershipStore> = Arc::new(InMemoryMembershipStore::new());
+    let config = test_config(&mock_url, PACKAGE_ID);
+    let mut service = new_sync_service(&config, store.clone());
+
+    let result = service.run_subscription().await;
+    assert!(result.is_ok());
+
+    let group_hex = to_hex_address(&group_id);
+    let member_hex = to_hex_address(&member);
+
+    assert!(store.has_permission(
+        &group_hex,
+        &member_hex,
+        MessagingPermission::MessagingSender
+    ));
+    assert!(store.has_permission(
+        &group_hex,
+        &member_hex,
+        MessagingPermission::MessagingReader
+    ));
+    assert!(store.has_permission(
+        &group_hex,
+        &member_hex,
+        MessagingPermission::MessagingEditor
+    ));
+    assert!(store.has_permission(
+        &group_hex,
+        &member_hex,
+        MessagingPermission::MessagingDeleter
+    ));
+}
+
+#[tokio::test]
 async fn test_permissions_revoked_event() {
     let group_id = [0x11u8; 32];
     let member = [0x22u8; 32];

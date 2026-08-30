@@ -6,7 +6,7 @@
 use crate::auth::MessagingPermission;
 use serde::Deserialize;
 use myso_rpc::proto::myso::rpc::v2::Event;
-use tracing::{debug, warn};
+use tracing::{debug, trace, warn};
 
 /// Domain events parsed from Groups SDK MySo events
 #[derive(Debug, Clone)]
@@ -1066,6 +1066,23 @@ pub fn parse_myso_event(event: &Event, groups_package_id: &str) -> Option<Groups
     result
 }
 
+fn filter_messaging_permissions(
+    permission_type_names: &[TypeNameBcs],
+) -> Vec<MessagingPermission> {
+    let mut permissions = Vec::new();
+    for tn in permission_type_names {
+        if let Some(perm) = MessagingPermission::from_type_name(&tn.name) {
+            permissions.push(perm);
+        } else {
+            trace!(
+                "Ignoring non-messaging API permission in Groups event: {}",
+                tn.name
+            );
+        }
+    }
+    permissions
+}
+
 /// Parses a PermissionsGranted event from BCS bytes
 fn parse_permissions_granted(bcs_bytes: &[u8]) -> Option<GroupsEvent> {
     let event_data: PermissionsEventBcs = bcs::from_bytes(bcs_bytes)
@@ -1075,11 +1092,7 @@ fn parse_permissions_granted(bcs_bytes: &[u8]) -> Option<GroupsEvent> {
     let group_id = format!("0x{}", hex::encode(event_data.group_id));
     let member = format!("0x{}", hex::encode(event_data.member));
 
-    let permissions = event_data
-        .permissions
-        .iter()
-        .filter_map(|tn| MessagingPermission::from_type_name(&tn.name))
-        .collect();
+    let permissions = filter_messaging_permissions(&event_data.permissions);
 
     Some(GroupsEvent::PermissionsGranted {
         group_id,
@@ -1097,11 +1110,7 @@ fn parse_permissions_revoked(bcs_bytes: &[u8]) -> Option<GroupsEvent> {
     let group_id = format!("0x{}", hex::encode(event_data.group_id));
     let member = format!("0x{}", hex::encode(event_data.member));
 
-    let permissions = event_data
-        .permissions
-        .iter()
-        .filter_map(|tn| MessagingPermission::from_type_name(&tn.name))
-        .collect();
+    let permissions = filter_messaging_permissions(&event_data.permissions);
 
     Some(GroupsEvent::PermissionsRevoked {
         group_id,
