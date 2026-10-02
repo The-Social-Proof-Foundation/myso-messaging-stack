@@ -53,15 +53,12 @@ fn store_notification_envelopes(
                 "notification_envelopes.encrypted_preview must not be empty".to_string(),
             ));
         }
-        let bytes = base64::Engine::decode(
-            &base64::engine::general_purpose::STANDARD,
-            preview,
-        )
-        .map_err(|_| {
-            ApiError::BadRequest(
-                "notification_envelopes.encrypted_preview must be valid base64".to_string(),
-            )
-        })?;
+        let bytes = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, preview)
+            .map_err(|_| {
+                ApiError::BadRequest(
+                    "notification_envelopes.encrypted_preview must be valid base64".to_string(),
+                )
+            })?;
         if bytes.is_empty() || bytes.len() > MAX_NOTIFICATION_ENVELOPE_BYTES {
             return Err(ApiError::BadRequest(format!(
                 "notification envelope size must be 1..={MAX_NOTIFICATION_ENVELOPE_BYTES} bytes"
@@ -69,9 +66,7 @@ fn store_notification_envelopes(
         }
         items.push((device_id.to_string(), bytes));
     }
-    state
-        .notification_push
-        .store_envelopes(message_id, &items);
+    state.notification_push.store_envelopes(message_id, &items);
     Ok(())
 }
 
@@ -116,9 +111,7 @@ pub async fn create_message(
             .map(str::trim)
             .filter(|s| !s.is_empty())
             .ok_or_else(|| {
-                ApiError::BadRequest(
-                    "shared_post_address is required when kind is post".into(),
-                )
+                ApiError::BadRequest("shared_post_address is required when kind is post".into())
             })?;
         let normalized = normalize_shared_post_address(raw).ok_or_else(|| {
             ApiError::BadRequest(
@@ -173,20 +166,17 @@ pub async fn create_message(
 
     // Resolve the 1:1 DM peer once (exactly one other member in the group's
     // on-chain-synced membership) — shared by the block check and paid-DM gate.
-    let dm_peer: Option<String> = if state.block_check.is_enabled()
-        || state.message_gate.is_enabled()
-    {
-        let members = state
-            .membership_store
-            .list_member_addresses(&req.group_id);
-        let mut peers = members.into_iter().filter(|m| m != &req.sender_address);
-        match (peers.next(), peers.next()) {
-            (Some(peer), None) => Some(peer),
-            _ => None,
-        }
-    } else {
-        None
-    };
+    let dm_peer: Option<String> =
+        if state.block_check.is_enabled() || state.message_gate.is_enabled() {
+            let members = state.membership_store.list_member_addresses(&req.group_id);
+            let mut peers = members.into_iter().filter(|m| m != &req.sender_address);
+            match (peers.next(), peers.next()) {
+                (Some(peer), None) => Some(peer),
+                _ => None,
+            }
+        } else {
+            None
+        };
 
     // DM block check
     if state.block_check.is_enabled() {
@@ -204,9 +194,7 @@ pub async fn create_message(
                     .block_check
                     .check_either_blocked(principal, peer_addr)
                     .await
-                    .map_err(|e| {
-                        ApiError::Internal(format!("Block check unavailable: {}", e))
-                    })?;
+                    .map_err(|e| ApiError::Internal(format!("Block check unavailable: {}", e)))?;
                 if principal_blocked {
                     return Err(ApiError::Blocked);
                 }
@@ -264,11 +252,7 @@ pub async fn create_message(
         Ok(m) => m,
         Err(StorageError::DuplicateIdempotencyKey) => {
             if let Some(key) = idempotency_key.as_deref() {
-                if let Some(existing) = state
-                    .storage
-                    .get_message_by_idempotency_key(key)
-                    .await?
-                {
+                if let Some(existing) = state.storage.get_message_by_idempotency_key(key).await? {
                     return Ok((
                         StatusCode::OK,
                         Json(CreateMessageResponse {
@@ -289,16 +273,13 @@ pub async fn create_message(
 
     if state.realtime_enabled && state.inline_realtime_publish {
         let wire: MessageResponse = created.clone().into();
-        state
-            .realtime_hub
-            .publish_wire(&group_id, wire);
+        state.realtime_hub.publish_wire(&group_id, wire);
     }
 
     // Dripdrop share-count: notify after accept+persist (not recipient ACK).
     if kind == MessageKind::Post {
         if let Some(post_address) = shared_post_address.clone() {
-            let destination_type =
-                resolve_destination_type(&state, &group_id, &sender_address);
+            let destination_type = resolve_destination_type(&state, &group_id, &sender_address);
             state.share_webhook.notify_post_share(
                 created.id,
                 post_address,
@@ -321,19 +302,18 @@ pub async fn create_message(
     let push_message_id = created.id;
     let push_kind = kind.as_str().to_string();
     tokio::spawn(async move {
-        push
-            .notify_new_message(
-                &storage,
-                &membership,
-                &notification_push,
-                push_visible_alerts,
-                &push_group_id,
-                push_message_id,
-                &push_sender,
-                &push_attribution,
-                &push_kind,
-            )
-            .await;
+        push.notify_new_message(
+            &storage,
+            &membership,
+            &notification_push,
+            push_visible_alerts,
+            &push_group_id,
+            push_message_id,
+            &push_sender,
+            &push_attribution,
+            &push_kind,
+        )
+        .await;
     });
 
     // Notify the File Storage sync worker that a new message was created.
@@ -401,7 +381,11 @@ pub async fn get_messages(
         fetched.into_iter().take(limit).collect::<Vec<_>>()
     } else {
         let skip = fetched.len().saturating_sub(limit);
-        fetched.into_iter().skip(skip).take(limit).collect::<Vec<_>>()
+        fetched
+            .into_iter()
+            .skip(skip)
+            .take(limit)
+            .collect::<Vec<_>>()
     };
     let messages: Vec<MessageResponse> = page.into_iter().map(|m| m.into()).collect();
 
@@ -678,30 +662,14 @@ mod shared_post_canonical_tests {
     fn text_and_typed_canonicals_include_kind() {
         let group = "0xAbCd";
         for kind in ["text", "request_payment", "poll"] {
-            let c = message_content_canonical(
-                group,
-                kind,
-                "deadbeef",
-                "00",
-                3,
-                None,
-                None,
-            );
+            let c = message_content_canonical(group, kind, "deadbeef", "00", 3, None, None);
             assert_eq!(c, format!("0xabcd:{kind}:deadbeef:00:3"));
         }
     }
 
     #[test]
     fn post_edit_canonical_uses_empty_binds() {
-        let c = message_content_canonical(
-            "0xABCD",
-            "post",
-            "cafebabe",
-            "11",
-            1,
-            None,
-            None,
-        );
+        let c = message_content_canonical("0xABCD", "post", "cafebabe", "11", 1, None, None);
         // group:post:"":"":enc:nonce:kv → three colons after "post"
         assert_eq!(c, "0xabcd:post:::cafebabe:11:1");
     }

@@ -19,10 +19,15 @@ import { useRequiredMessagingClient } from '../contexts/MessagingClientContext';
 import { useAuthenticatedAddress } from '../contexts/MySocialAuthContext';
 import { signAndExecuteTransactionAndWait } from '../lib/sign-and-wait';
 import { useMessages } from '../hooks/useMessages';
+import { useAgentMemoryReply } from '../hooks/agents/useAgentMemoryReply';
+import { useRepairAgentChatSend } from '../hooks/agents/useAgentChatActions';
+import { useAgentNamesByAddress } from '../hooks/agents/useSubAgents';
+import { conversationPeerLabel } from '../lib/agents/agent-display-name';
 import { usePaidDmGate } from '../hooks/usePaidDmGate';
 import { usePermissions } from '../hooks/usePermissions';
 import { useWalletAvatarMap } from '../hooks/useWalletAvatarMap';
-import { mistToMyso } from '../lib/mys-coin';
+import { MysoAmount } from './agents/MysoAmount';
+import { formatMistAmount } from '../lib/agents/format';
 import { MessageBubble } from './MessageBubble';
 import { SystemMessage } from './SystemMessage';
 import { MessageInput } from './MessageInput';
@@ -147,7 +152,7 @@ export function ChatArea({
         ) : null}
         <div className="flex flex-1 items-center justify-center">
           <p className="text-secondary-400 dark:text-secondary-500">
-            Select a group to start chatting
+            Please select a conversation.
           </p>
         </div>
       </div>
@@ -332,6 +337,12 @@ function ChatView({
   const { client, signer } = useRequiredMessagingClient();
   const { permissions, loading: permissionsLoading, refresh: refreshPermissions } =
     usePermissions(group.groupId);
+  useRepairAgentChatSend({
+    groupId: group.groupId,
+    canSend: permissions.canSend,
+    permissionsLoading,
+    refreshPermissions,
+  });
   const isMobileNav = useIsMobileNav();
   const [adminPanelOpen, setAdminPanelOpen] = useState(false);
   /** Set only after Details prefs toggle so useMessages can keep its loaded mode. */
@@ -508,6 +519,8 @@ function ChatView({
     receiptMode: receiptModeOverride,
     tickPeerAddresses,
   });
+  const memoryReply = useAgentMemoryReply(group.groupId, group.uuid);
+  const composerError = memoryReply.error ?? error;
 
   const systemObjectAddresses = useMemo(
     () => client.messaging.derive.systemObjectAddresses(),
@@ -562,6 +575,22 @@ function ChatView({
     headerTitleFor,
     ringFor,
   } = useWalletAvatarMap(profileAddresses);
+  const agentNames = useAgentNamesByAddress();
+  const displayLabelFor = useCallback(
+    (addr: string) =>
+      conversationPeerLabel(
+        addr,
+        agentNames,
+        headerTitleFor(addr) || profileLabelFor(addr) || labelFor(addr),
+      ) ?? labelFor(addr),
+    [agentNames, headerTitleFor, profileLabelFor, labelFor],
+  );
+  const memberLabelFor = useCallback(
+    (addr: string) =>
+      conversationPeerLabel(addr, agentNames, profileLabelFor(addr)) ??
+      profileLabelFor(addr),
+    [agentNames, profileLabelFor],
+  );
 
   /** Humans for DM join backfill (exclude system actors). */
   const humanMemberAddresses = useMemo(() => {
@@ -579,16 +608,10 @@ function ChatView({
     () =>
       planTimelineMemberJoinedDisplay(
         timelineMessages,
-        (addr) => headerTitleFor(addr) || profileLabelFor(addr) || labelFor(addr),
+        displayLabelFor,
         humanMemberAddresses,
       ),
-    [
-      timelineMessages,
-      headerTitleFor,
-      profileLabelFor,
-      labelFor,
-      humanMemberAddresses,
-    ],
+    [timelineMessages, displayLabelFor, humanMemberAddresses],
   );
 
   const typingTypers = typingMembers.map((address) => {
@@ -995,11 +1018,7 @@ function ChatView({
                     )}
                     <SystemMessage
                       system={msg.system}
-                      labelFor={(addr) =>
-                        headerTitleFor(addr) ||
-                        profileLabelFor(addr) ||
-                        labelFor(addr)
-                      }
+                      labelFor={displayLabelFor}
                       text={joinText}
                     />
                   </div>
@@ -1123,13 +1142,13 @@ function ChatView({
       )}
 
       {/* Error banner */}
-      {error && (
+      {composerError && (
         <div className="border-t border-danger-400 bg-danger-400/10 px-4 py-2 text-sm text-danger-500 dark:border-danger-500 dark:text-danger-400">
           {permissions.canSend &&
-          (error.includes('relayer has not synced') ||
-            error.includes('waiting for relayer sync'))
+          (composerError.includes('relayer has not synced') ||
+            composerError.includes('waiting for relayer sync'))
             ? 'On-chain permissions OK — waiting for relayer sync. Try again in a few seconds.'
-            : error}
+            : composerError}
         </div>
       )}
 
@@ -1139,9 +1158,11 @@ function ChatView({
       {paidGate.claimPending && !permissionsLoading && permissions.canSend && (
         <div className="border-t border-amber-300 bg-amber-50 px-4 py-2 text-center text-xs font-medium text-amber-900 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-100">
           Reply with at least 6 characters to claim{' '}
-          {paidGate.peerEscrowAmount !== null
-            ? `${mistToMyso(paidGate.peerEscrowAmount)} MYSO`
-            : 'the escrow'}{' '}
+          {paidGate.peerEscrowAmount !== null ? (
+            <MysoAmount amount={formatMistAmount(paidGate.peerEscrowAmount)} />
+          ) : (
+            'the escrow'
+          )}{' '}
           from this sender.
         </div>
       )}
@@ -1160,13 +1181,19 @@ function ChatView({
               Claiming escrow…
             </p>
           )}
+          {memoryReply.replying && (
+            <p className="border-t border-secondary-200 px-4 py-1 text-center text-xs text-secondary-500 dark:border-secondary-700 dark:text-secondary-400">
+              Asking this agent's memory…
+            </p>
+          )}
           <MessageInput
             onSend={async (text, files) => {
               await sendMessage(text, files);
               paidGate.refresh();
+              if (text.trim()) await memoryReply.reply(text);
             }}
             onTyping={sendTyping}
-            sending={sending || claiming}
+            sending={sending || claiming || memoryReply.replying}
           />
         </>
       ) : (
@@ -1205,7 +1232,7 @@ function ChatView({
         leaving={leaving}
         leaveError={leaveError}
         photoFor={photoFor}
-        labelFor={profileLabelFor}
+        labelFor={memberLabelFor}
         ringFor={ringFor}
         onPrefsChanged={({ receiptMode: next }) => {
           setReceiptModeOverride(next);

@@ -1,37 +1,45 @@
-import {
-  useState,
-  useCallback,
-  useRef,
-  useMemo,
-  useEffect,
-} from 'react';
-import { Sidebar } from './Sidebar';
-import { ChatArea } from './ChatArea';
-import { CreateGroupModal } from './CreateGroupModal';
-import { useGroupDiscovery } from '../hooks/useGroupDiscovery';
-import { usePaidDmRequests } from '../hooks/usePaidDmRequests';
-import { useGroupActivityOrder } from '../hooks/useGroupActivityOrder';
-import { useUserFeed } from '../hooks/useUserFeed';
-import { useRegisterCreateMessageHandler } from '../contexts/CreateMessageContext';
-import { useMobileChatNav } from '../contexts/MobileChatNavContext';
-import { useAuthenticatedAddress, useMySocialAuth } from '../contexts/MySocialAuthContext';
-import { useIsMobileNav } from '../hooks/useMediaQuery';
-import { AgentDevSendPanel } from './AgentDevSendPanel';
-import {
-  getSelectedGroupKey,
-  setSelectedGroupKey,
-} from '../lib/group-store';
-import { CHAT_LIST_WIDTH_PX } from '../lib/chat-layout';
+import {useCallback, useEffect, useMemo, useRef, useState} from 'react';
+import {useLocation, useNavigate} from 'react-router-dom';
+
+import {Sidebar} from './Sidebar';
+import {ChatArea} from './ChatArea';
+import {CreateGroupModal} from './CreateGroupModal';
+import {AgentChatEmptyState} from './agents/AgentChatEmptyState';
+import {AgentListView} from './agents/AgentListView';
+import {CreateAgentDialog} from './agents/CreateAgentDialog';
+import {CreateOrganizationDialog} from './agents/CreateOrganizationDialog';
+import {OrganizationChartPane} from './agents/OrganizationChartPane';
+import {useGroupDiscovery} from '../hooks/useGroupDiscovery';
+import {usePaidDmRequests} from '../hooks/usePaidDmRequests';
+import {useGroupActivityOrder} from '../hooks/useGroupActivityOrder';
+import {useUserFeed} from '../hooks/useUserFeed';
+import {useRegisterCreateMessageHandler} from '../contexts/CreateMessageContext';
+import {useMobileChatNav} from '../contexts/MobileChatNavContext';
+import {useAuthenticatedAddress, useMySocialAuth} from '../contexts/MySocialAuthContext';
+import {useIsMobileNav} from '../hooks/useMediaQuery';
+import {AgentDevSendPanel} from './AgentDevSendPanel';
+import {useSubAgentByObjectId, useSubAgents} from '../hooks/agents/useSubAgents';
+import {useCreateAgentChat, useOpenAgentChat} from '../hooks/agents/useAgentChatActions';
+import {findAgentChatRef, useAgentChatIndex} from '../hooks/agents/useAgentChats';
+import {useMemoryAccount} from '../hooks/agents/useMemoryAccount';
+import type {SubAgentRow} from '../lib/agents/social-api';
+import {writeSelectedAgent} from '../lib/agents/selected-agent-store';
+import {getSelectedGroupKey, setSelectedGroupKey} from '../lib/group-store';
+import {CHAT_LIST_WIDTH_PX} from '../lib/chat-layout';
 
 interface AuthenticatedAppProps {
   isUsingDevMessengerSigner: boolean;
 }
+
+type ListView = 'chats' | 'agents';
 
 export function AuthenticatedApp({
   isUsingDevMessengerSigner,
 }: Readonly<AuthenticatedAppProps>) {
   const address = useAuthenticatedAddress();
   const { keypair } = useMySocialAuth();
+  const location = useLocation();
+  const navigate = useNavigate();
 
   const {
     groups,
@@ -71,9 +79,104 @@ export function AuthenticatedApp({
   const openCreateModal = useCallback(() => setShowCreateModal(true), []);
   useRegisterCreateMessageHandler(openCreateModal);
 
+  // --- Agents view state ---------------------------------------------------
+  const [listView, setListView] = useState<ListView>('chats');
+  const [selectedOrganizationId, setSelectedOrganizationId] = useState<string | null>(null);
+  const [showNewOrganization, setShowNewOrganization] = useState(false);
+  const [selectedAgentObjectId, setSelectedAgentObjectId] = useState<string | null>(null);
+  const [showNewAgent, setShowNewAgent] = useState(false);
+
+  const agentsEnabled = Boolean(selectedAgentObjectId);
+  const agentList = useSubAgents(false, { enabled: agentsEnabled });
+  const localAgentMatch = useMemo(
+    () =>
+      agentList.items.find((agent) => agent.agent_object_id === selectedAgentObjectId) ?? null,
+    [agentList.items, selectedAgentObjectId],
+  );
+  // Only ask the server for a single agent when the paged list has not reached it.
+  const agentById = useSubAgentByObjectId(localAgentMatch ? null : selectedAgentObjectId);
+  const selectedAgentRow = localAgentMatch ?? agentById.data ?? null;
+
+  const create = useCreateAgentChat();
+  const openChat = useOpenAgentChat();
+  const chatIndex = useAgentChatIndex(groups);
+  const memoryAccount = useMemoryAccount();
+
+  const selectGroup = useCallback(
+    (key: string | null) => {
+      setSelectedUuid(key);
+      setSelectedGroupKey(address, key);
+      if (key) setSelectedOrganizationId(null);
+    },
+    [address],
+  );
+
+  const selectOrganization = useCallback(
+    (organizationId: string) => {
+      setSelectedOrganizationId(organizationId);
+      setSelectedUuid(null);
+      setSelectedGroupKey(address, null);
+      setSelectedAgentObjectId(null);
+    },
+    [address],
+  );
+
+  const startAgentChat = useCallback(
+    async (agent: SubAgentRow) => {
+      try {
+        const existing = await findAgentChatRef(agent, chatIndex.refs);
+        const hydrated = existing
+          ? await openChat(existing)
+          : await create.createChat(agent);
+        if (existing && memoryAccount.data?.account_id) {
+          writeSelectedAgent({
+            agentObjectId: agent.agent_object_id,
+            derivedAddress: agent.derived_address,
+            memoryAccountId: memoryAccount.data.account_id,
+            label: agent.label,
+            organizationId: agent.organization_id,
+          });
+        }
+        refreshGroups();
+        chatIndex.refresh();
+        selectGroup(hydrated.uuid);
+      } catch {
+        setSelectedOrganizationId(null);
+        setSelectedAgentObjectId(agent.agent_object_id);
+      }
+    },
+    [chatIndex, create, memoryAccount.data?.account_id, openChat, refreshGroups, selectGroup],
+  );
+
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    if (params.get('view') !== 'organizations') return;
+    setListView('agents');
+    params.delete('view');
+    const next = params.toString();
+    navigate(
+      {pathname: location.pathname, search: next ? `?${next}` : ''},
+      {replace: true},
+    );
+  }, [location.search, location.pathname, navigate]);
+
+  // `/agents` → "Chat" hands the agent over through router state.
+  useEffect(() => {
+    const state = location.state as { openAgentObjectId?: string } | null;
+    const requested = state?.openAgentObjectId;
+    if (!requested) return;
+    setSelectedAgentObjectId(requested);
+    setSelectedOrganizationId(null);
+    setSelectedGroupKey(address, null);
+    setSelectedUuid(null);
+    navigate(location.pathname, { replace: true, state: null });
+  }, [location.state, location.pathname, navigate, address]);
+
   const isMobileNav = useIsMobileNav();
   const { setHideAppHeader } = useMobileChatNav();
-  const mobileChatOpen = isMobileNav && Boolean(selectedUuid);
+  const mobileChatOpen =
+    isMobileNav &&
+    (Boolean(selectedUuid) || Boolean(selectedAgentRow) || Boolean(selectedOrganizationId));
 
   // Hide AppHeader only while a mobile chat thread is open.
   useEffect(() => {
@@ -81,10 +184,17 @@ export function AuthenticatedApp({
     return () => setHideAppHeader(false);
   }, [mobileChatOpen, setHideAppHeader]);
 
-  // Re-hydrate selection when the wallet address becomes available / changes.
+  const locationStateRef = useRef(location.state);
+  locationStateRef.current = location.state;
+
+  // Re-hydrate the open conversation when the wallet address becomes available.
+  // A restored agent must not take over the center pane.
   useEffect(() => {
-    const cached = getSelectedGroupKey(address);
-    setSelectedUuid(cached);
+    setSelectedUuid(getSelectedGroupKey(address));
+    const requested = (locationStateRef.current as {openAgentObjectId?: string} | null)
+      ?.openAgentObjectId;
+    if (!requested) setSelectedAgentObjectId(null);
+    setSelectedOrganizationId(null);
   }, [address]);
 
   const selectedGroup =
@@ -92,34 +202,12 @@ export function AuthenticatedApp({
       (g) => g.uuid === selectedUuid || g.groupId === selectedUuid,
     ) ?? null;
 
-  // Stable view of the active conversation for user-feed handlers.
-  const selectedGroupIdRef = useRef<string | null>(null);
-  selectedGroupIdRef.current = selectedGroup?.groupId ?? null;
-
-  const selectGroup = useCallback(
-    (key: string | null) => {
-      setSelectedUuid(key);
-      setSelectedGroupKey(address, key);
-    },
-    [address],
-  );
-
-  // Persist preferred uuid once the group list resolves a cached groupId match.
-  useEffect(() => {
-    if (!selectedGroup || !address) return;
-    const preferred = selectedGroup.uuid || selectedGroup.groupId;
-    if (preferred && preferred !== selectedUuid) {
-      setSelectedUuid(preferred);
-    }
-    setSelectedGroupKey(address, preferred);
-  }, [selectedGroup, address, selectedUuid]);
-
   // One user-feed socket per wallet drives sidebar badges, cross-device
   // read-state sync, and group discovery. Polling remains as reconciliation.
   useUserFeed(groups, {
     onGroupActivity: (groupId, latestOrder) => {
       activity.recordActivity(groupId, latestOrder);
-      if (groupId !== selectedGroupIdRef.current) {
+      if (groupId !== (selectedGroup?.groupId ?? null)) {
         activity.bump(groupId);
       }
     },
@@ -140,7 +228,7 @@ export function AuthenticatedApp({
     },
     onGroupHidden: (groupId) => {
       handleHidden(groupId);
-      if (selectedGroupIdRef.current === groupId) {
+      if (selectedGroup?.groupId === groupId) {
         selectGroup(null);
       }
     },
@@ -189,47 +277,75 @@ export function AuthenticatedApp({
               isMobileNav ? undefined : { width: CHAT_LIST_WIDTH_PX }
             }
           >
-            <Sidebar
-              groups={sortedGroups}
-              selectedUuid={selectedUuid}
-              unreadCounts={activity.counts}
-              latestOrders={activity.latestOrders}
-              paidDmGroupIds={paidDmGroupIds}
-              onSelectGroup={selectGroup}
-              loading={discoveryLoading}
-            />
+            {listView === 'agents' ? (
+              <AgentListView
+                selectedOrganizationId={selectedOrganizationId}
+                onBack={() => setListView('chats')}
+                onSelectOrganization={selectOrganization}
+                onNewOrganization={() => setShowNewOrganization(true)}
+              />
+            ) : (
+              <Sidebar
+                groups={sortedGroups}
+                selectedUuid={selectedUuid}
+                unreadCounts={activity.counts}
+                latestOrders={activity.latestOrders}
+                paidDmGroupIds={paidDmGroupIds}
+                onSelectGroup={selectGroup}
+                onOpenAgentView={() => setListView('agents')}
+                loading={discoveryLoading}
+              />
+            )}
           </div>
         </div>
         <div
           className={
-            isMobileNav && !selectedUuid
+            isMobileNav && !selectedUuid && !selectedAgentRow && !selectedOrganizationId
               ? 'hidden md:flex md:min-w-0 md:flex-1 md:flex-col'
               : 'flex min-h-0 min-w-0 flex-1 flex-col'
           }
         >
-          <ChatArea
-            selectedGroup={selectedGroup}
-            onLeaveGroup={handleLeaveGroup}
-            onReadStateChanged={activity.markRead}
-            onGroupActivity={
-              selectedGroup
-                ? (order) =>
-                    activity.recordActivity(selectedGroup.groupId, order)
-                : undefined
-            }
-            receiptApplyRef={receiptApplyRef}
-            onMobileBack={
-              isMobileNav ? () => selectGroup(null) : undefined
-            }
-            devAgentPanel={
-              keypair && selectedGroup ? (
-                <AgentDevSendPanel
-                  humanSigner={keypair}
-                  groupUuid={selectedGroup.uuid}
-                />
-              ) : null
-            }
-          />
+          {selectedOrganizationId ? (
+            <OrganizationChartPane
+              organizationId={selectedOrganizationId}
+              onCreateAgent={() => setShowNewAgent(true)}
+              onChat={(agent) => void startAgentChat(agent)}
+              onMobileBack={isMobileNav ? () => setSelectedOrganizationId(null) : undefined}
+            />
+          ) : !selectedGroup && selectedAgentRow ? (
+            <AgentChatEmptyState
+              agent={selectedAgentRow}
+              canChat={create.canChat(selectedAgentRow)}
+              stage={create.stage}
+              error={create.error}
+              onStartChat={() => void startAgentChat(selectedAgentRow)}
+              onEnableMessaging={() => void create.enableMessaging(selectedAgentRow)}
+            />
+          ) : (
+            <ChatArea
+              selectedGroup={selectedGroup}
+              onLeaveGroup={handleLeaveGroup}
+              onReadStateChanged={activity.markRead}
+              onGroupActivity={
+                selectedGroup
+                  ? (order) =>
+                      activity.recordActivity(selectedGroup.groupId, order)
+                  : undefined
+              }
+              receiptApplyRef={receiptApplyRef}
+              onMobileBack={
+                isMobileNav ? () => selectGroup(null) : undefined
+              }
+              devAgentPanel={
+                keypair && selectedGroup ? (
+                  <AgentDevSendPanel
+                    humanSigner={keypair}
+                    groupUuid={selectedGroup.uuid}
+                  />
+                ) : null
+              }
+            />
+          )}
         </div>
       </div>
       {showCreateModal && (
@@ -239,6 +355,20 @@ export function AuthenticatedApp({
           onGroupCreated={handleGroupCreated}
         />
       )}
+      <CreateOrganizationDialog
+        open={showNewOrganization}
+        onClose={() => setShowNewOrganization(false)}
+        onCreated={(organizationId) => {
+          setListView('agents');
+          selectOrganization(organizationId);
+        }}
+      />
+      <CreateAgentDialog
+        key={selectedOrganizationId ?? 'none'}
+        open={showNewAgent}
+        defaultOrganizationId={selectedOrganizationId}
+        onClose={() => setShowNewAgent(false)}
+      />
     </>
   );
 }

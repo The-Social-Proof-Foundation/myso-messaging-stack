@@ -124,3 +124,39 @@ export async function waitForGroupReady(
     signal,
   });
 }
+
+export interface WaitForAgentChatReadyOptions {
+  client: MessagingClient;
+  signer: Signer;
+  groupId: string;
+  uuid: string;
+  /** The human principal owner of the agent that created the group. */
+  principalAddress: string;
+  timeoutMs?: number;
+  signal?: AbortSignal;
+}
+
+/**
+ * Readiness for an **agent-created** group.
+ *
+ * `waitForGroupReady` probes `MessagingSender`, which the human principal never receives on
+ * an agent group (`create_agent_group` grants them `MessagingReader` + `PermissionsAdmin`
+ * and explicitly revokes the agent's admin caps). Probing the sender permission there would
+ * always time out, so agent chats wait on `MessagingReader` instead.
+ */
+export async function waitForAgentChatReady(
+  options: WaitForAgentChatReadyOptions,
+): Promise<void> {
+  const { client, signer, groupId, uuid, principalAddress, timeoutMs, signal } = options;
+
+  await waitForMembership({
+    messaging: client.messaging,
+    groupId,
+    memberAddress: principalAddress,
+    permission: 'MessagingReader',
+    timeoutMs,
+    signal,
+  });
+
+  await waitForRelayerMembership({ client, signer, groupId, uuid, timeoutMs, signal });
+}

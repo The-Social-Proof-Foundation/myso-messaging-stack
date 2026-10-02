@@ -10,9 +10,10 @@ use axum::{
 use tower_http::cors::{Any, CorsLayer};
 use tracing::info;
 
+use crate::archive::ArchiveSyncService;
 use crate::auth::{
-    auth_middleware, create_membership_store_async, internal_sync_middleware, wallet_auth_middleware,
-    AuthState, InternalSyncState,
+    auth_middleware, create_membership_store_async, internal_sync_middleware,
+    wallet_auth_middleware, AuthState, InternalSyncState,
 };
 use crate::config::Config;
 use crate::handlers::agent_groups;
@@ -24,6 +25,7 @@ use crate::handlers::messages::{create_message, delete_message, get_messages, up
 use crate::handlers::notification_push;
 use crate::handlers::presence::post_presence;
 use crate::handlers::push_devices::{delete_push_token, post_push_token};
+use crate::handlers::reports::post_report;
 use crate::handlers::unread_counts::post_unread_counts;
 use crate::handlers::user_read_state::{get_read_state, put_read_state};
 use crate::handlers::user_ws::user_ws_handler;
@@ -32,14 +34,15 @@ use crate::handlers::workflow::{
     workflow_badge,
 };
 use crate::handlers::ws::ws_handler;
-use crate::archive::ArchiveSyncService;
 use crate::services::{
-    AttributionVerifyService, BlockCheckService, MembershipSyncService, MessageGateService,
-    PgListenerService, PushService, RealtimeHub, bootstrap_messaging_config_cache,
-    fallback_messaging_config_cache,
+    bootstrap_messaging_config_cache, fallback_messaging_config_cache, AttributionVerifyService,
+    BlockCheckService, MembershipSyncService, MessageGateService, PgListenerService, PushService,
+    RealtimeHub,
 };
 use crate::state::AppState;
-use crate::storage::{create_agent_group_store_async, create_storage_async, create_workflow_store_async};
+use crate::storage::{
+    create_agent_group_store_async, create_storage_async, create_workflow_store_async,
+};
 
 pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     dotenvy::dotenv().ok();
@@ -53,9 +56,11 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let (sync_tx, sync_rx) = tokio::sync::mpsc::unbounded_channel::<()>();
 
     let database_url = std::env::var("DATABASE_URL").ok();
-    let membership_store =
-        create_membership_store_async(config.membership_store_type.clone(), database_url.as_deref())
-            .await;
+    let membership_store = create_membership_store_async(
+        config.membership_store_type.clone(),
+        database_url.as_deref(),
+    )
+    .await;
     let agent_group_store = create_agent_group_store_async(
         config.membership_store_type.clone(),
         database_url.as_deref(),
@@ -220,9 +225,17 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .route("/devices/push-tokens", post(post_push_token))
         .route("/devices/push-tokens/:token", delete(delete_push_token))
         .route("/devices/presence", post(post_presence))
-        .route("/devices/notification-keys", put(notification_push::put_notification_key))
-        .route("/users/notification-prefs", get(notification_push::get_notification_prefs).put(notification_push::put_notification_prefs))
+        .route(
+            "/devices/notification-keys",
+            put(notification_push::put_notification_key),
+        )
+        .route(
+            "/users/notification-prefs",
+            get(notification_push::get_notification_prefs)
+                .put(notification_push::put_notification_prefs),
+        )
         .route("/messaging/dm-gate", get(dm_gate::get_dm_gate))
+        .route("/reports", post(post_report))
         .route(
             "/agent-conversations",
             get(agent_groups::list_agent_conversations),
@@ -268,7 +281,10 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .with_state(app_state.clone());
 
     let internal_routes = Router::new()
-        .route("/internal/workflow/items", post(ingest_workflow_item_internal))
+        .route(
+            "/internal/workflow/items",
+            post(ingest_workflow_item_internal),
+        )
         .layer(middleware::from_fn_with_state(
             InternalSyncState {
                 config: config.clone(),
@@ -296,10 +312,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .await
         .map_err(|e| format!("Failed to bind to {}: {}", addr, e))?;
 
-    info!(
-        "Messaging Relayer listening on {}",
-        listener.local_addr()?
-    );
+    info!("Messaging Relayer listening on {}", listener.local_addr()?);
 
     axum::serve(listener, app.into_make_service()).await?;
 

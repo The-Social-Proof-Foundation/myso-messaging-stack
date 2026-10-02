@@ -280,6 +280,9 @@ mod tests {
         assert_eq!(msg.sync_status, SyncStatus::Synced);
         assert!(msg.encrypted_msg.is_empty());
         assert_eq!(msg.nonce.len(), 12);
-        assert_eq!(msg.idempotency_key.as_deref(), Some("digest:0:member_joined"));
+        assert_eq!(
+            msg.idempotency_key.as_deref(),
+            Some("digest:0:member_joined")
+        );
     }
 }

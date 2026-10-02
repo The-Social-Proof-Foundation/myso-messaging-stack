@@ -130,7 +130,12 @@ pub async fn ack_workflow_item(
 ) -> Result<Json<WorkflowItemWire>, ApiError> {
     let row = state
         .workflow_store
-        .transition_status(id, &auth.sender_address, STATUS_ACTIONED, Some(&auth.sender_address))
+        .transition_status(
+            id,
+            &auth.sender_address,
+            STATUS_ACTIONED,
+            Some(&auth.sender_address),
+        )
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?
         .ok_or_else(|| ApiError::NotFound("workflow item not found".into()))?;
@@ -144,7 +149,12 @@ pub async fn dismiss_workflow_item(
 ) -> Result<Json<WorkflowItemWire>, ApiError> {
     let row = state
         .workflow_store
-        .transition_status(id, &auth.sender_address, STATUS_DISMISSED, Some(&auth.sender_address))
+        .transition_status(
+            id,
+            &auth.sender_address,
+            STATUS_DISMISSED,
+            Some(&auth.sender_address),
+        )
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?
         .ok_or_else(|| ApiError::NotFound("workflow item not found".into()))?;
@@ -181,8 +191,7 @@ pub async fn ingest_workflow_item_internal(
     let item_type = row.item_type.clone();
     let item_id = row.id.to_string();
     tokio::spawn(async move {
-        push
-            .notify_workflow_item(&storage, &recipient, &item_type, &item_id)
+        push.notify_workflow_item(&storage, &recipient, &item_type, &item_id)
             .await;
     });
 

@@ -10,9 +10,9 @@ use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
 use crate::models::{
-    Attachment, ConversationPreferences, ConversationPreferencesPatch, EncryptedBlobRecord,
-    GroupActivity, MemberReceipt, Message, MessageAttribution, PaidEscrowRecord, PushTokenRecord,
-    ReactionEntry, ReceiptStateResponse, SyncStatus,
+    Attachment, ConversationPreferences, ConversationPreferencesPatch, ConversationReport,
+    EncryptedBlobRecord, GroupActivity, MemberReceipt, Message, MessageAttribution,
+    PaidEscrowRecord, PushTokenRecord, ReactionEntry, ReceiptStateResponse, SyncStatus,
 };
 use crate::services::realtime::{
     MessageCreatedEvent, MessageDeletedEvent, MessageEditedEvent, ReactionUpdatedEvent,
@@ -474,39 +474,35 @@ impl StorageAdapter for PostgresStorage {
         validity: Option<crate::storage::PaidEscrowValidityFilter>,
     ) -> StorageResult<bool> {
         let exists: bool = match validity {
-            None => {
-                sqlx::query_scalar(
-                    r#"SELECT EXISTS(
+            None => sqlx::query_scalar(
+                r#"SELECT EXISTS(
                          SELECT 1 FROM paid_message_escrows
                          WHERE group_id = $1 AND payer = $2 AND recipient = $3 AND amount >= $4
                        )"#,
-                )
-                .bind(group_id)
-                .bind(payer)
-                .bind(recipient)
-                .bind(min_amount)
-                .fetch_one(&self.pool)
-                .await
-                .map_err(|e| StorageError::OperationFailed(e.to_string()))?
-            }
-            Some(v) => {
-                sqlx::query_scalar(
-                    r#"SELECT EXISTS(
+            )
+            .bind(group_id)
+            .bind(payer)
+            .bind(recipient)
+            .bind(min_amount)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| StorageError::OperationFailed(e.to_string()))?,
+            Some(v) => sqlx::query_scalar(
+                r#"SELECT EXISTS(
                          SELECT 1 FROM paid_message_escrows
                          WHERE group_id = $1 AND payer = $2 AND recipient = $3 AND amount >= $4
                            AND created_at_ms + $5 > $6
                        )"#,
-                )
-                .bind(group_id)
-                .bind(payer)
-                .bind(recipient)
-                .bind(min_amount)
-                .bind(v.payment_expiration_ms as i64)
-                .bind(v.now_ms)
-                .fetch_one(&self.pool)
-                .await
-                .map_err(|e| StorageError::OperationFailed(e.to_string()))?
-            }
+            )
+            .bind(group_id)
+            .bind(payer)
+            .bind(recipient)
+            .bind(min_amount)
+            .bind(v.payment_expiration_ms as i64)
+            .bind(v.now_ms)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| StorageError::OperationFailed(e.to_string()))?,
         };
         Ok(exists)
     }
@@ -519,37 +515,33 @@ impl StorageAdapter for PostgresStorage {
         validity: Option<crate::storage::PaidEscrowValidityFilter>,
     ) -> StorageResult<Option<i64>> {
         let amount: Option<i64> = match validity {
-            None => {
-                sqlx::query_scalar(
-                    r#"SELECT amount FROM paid_message_escrows
+            None => sqlx::query_scalar(
+                r#"SELECT amount FROM paid_message_escrows
                        WHERE group_id = $1 AND payer = $2 AND recipient = $3
                        ORDER BY seq DESC
                        LIMIT 1"#,
-                )
-                .bind(group_id)
-                .bind(payer)
-                .bind(recipient)
-                .fetch_optional(&self.pool)
-                .await
-                .map_err(|e| StorageError::OperationFailed(e.to_string()))?
-            }
-            Some(v) => {
-                sqlx::query_scalar(
-                    r#"SELECT amount FROM paid_message_escrows
+            )
+            .bind(group_id)
+            .bind(payer)
+            .bind(recipient)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| StorageError::OperationFailed(e.to_string()))?,
+            Some(v) => sqlx::query_scalar(
+                r#"SELECT amount FROM paid_message_escrows
                        WHERE group_id = $1 AND payer = $2 AND recipient = $3
                          AND created_at_ms + $4 > $5
                        ORDER BY seq DESC
                        LIMIT 1"#,
-                )
-                .bind(group_id)
-                .bind(payer)
-                .bind(recipient)
-                .bind(v.payment_expiration_ms as i64)
-                .bind(v.now_ms)
-                .fetch_optional(&self.pool)
-                .await
-                .map_err(|e| StorageError::OperationFailed(e.to_string()))?
-            }
+            )
+            .bind(group_id)
+            .bind(payer)
+            .bind(recipient)
+            .bind(v.payment_expiration_ms as i64)
+            .bind(v.now_ms)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| StorageError::OperationFailed(e.to_string()))?,
         };
         Ok(amount)
     }
@@ -771,13 +763,12 @@ impl StorageAdapter for PostgresStorage {
     }
 
     async fn list_pins(&self, group_id: &str) -> StorageResult<Vec<i64>> {
-        let rows = sqlx::query(
-            "SELECT chain_seq FROM group_pins WHERE group_id = $1 ORDER BY chain_seq",
-        )
-        .bind(group_id)
-        .fetch_all(&self.pool)
-        .await
-        .map_err(|e| StorageError::OperationFailed(e.to_string()))?;
+        let rows =
+            sqlx::query("SELECT chain_seq FROM group_pins WHERE group_id = $1 ORDER BY chain_seq")
+                .bind(group_id)
+                .fetch_all(&self.pool)
+                .await
+                .map_err(|e| StorageError::OperationFailed(e.to_string()))?;
         Ok(rows.iter().map(|r| r.get("chain_seq")).collect())
     }
 
@@ -884,10 +875,7 @@ impl StorageAdapter for PostgresStorage {
         Ok(Some(receipt))
     }
 
-    async fn list_group_receipts(
-        &self,
-        group_id: &str,
-    ) -> StorageResult<Vec<MemberReceipt>> {
+    async fn list_group_receipts(&self, group_id: &str) -> StorageResult<Vec<MemberReceipt>> {
         let rows = sqlx::query(
             r#"SELECT wallet, delivered_upto, read_upto
                FROM group_member_receipts
@@ -987,9 +975,7 @@ impl StorageAdapter for PostgresStorage {
             None => (ConversationPreferences::defaults(), false),
         };
         let next = ConversationPreferences {
-            notification_mode: patch
-                .notification_mode
-                .unwrap_or(base.notification_mode),
+            notification_mode: patch.notification_mode.unwrap_or(base.notification_mode),
             receipt_mode: patch.receipt_mode.unwrap_or(base.receipt_mode),
             hide_online_presence: patch
                 .hide_online_presence
@@ -1050,7 +1036,10 @@ impl StorageAdapter for PostgresStorage {
             .collect())
     }
 
-    async fn get_user_read_state(&self, wallet: &str) -> StorageResult<Option<EncryptedBlobRecord>> {
+    async fn get_user_read_state(
+        &self,
+        wallet: &str,
+    ) -> StorageResult<Option<EncryptedBlobRecord>> {
         let row = sqlx::query(
             "SELECT encrypted_blob, blob_version, updated_at FROM user_read_states WHERE wallet = $1",
         )
@@ -1172,7 +1161,10 @@ impl StorageAdapter for PostgresStorage {
         Ok(())
     }
 
-    async fn list_push_tokens_for_wallet(&self, wallet: &str) -> StorageResult<Vec<PushTokenRecord>> {
+    async fn list_push_tokens_for_wallet(
+        &self,
+        wallet: &str,
+    ) -> StorageResult<Vec<PushTokenRecord>> {
         let rows = sqlx::query("SELECT * FROM push_tokens WHERE wallet = $1")
             .bind(wallet)
             .fetch_all(&self.pool)
@@ -1268,6 +1260,25 @@ impl StorageAdapter for PostgresStorage {
             .into_iter()
             .map(|r| (r.get("wallet"), r.get("last_seen_at")))
             .collect())
+    }
+
+    async fn insert_conversation_report(&self, report: ConversationReport) -> StorageResult<()> {
+        sqlx::query(
+            r#"INSERT INTO conversation_reports
+               (id, reporter, group_id, reported_wallet, reason, note, created_at)
+               VALUES ($1, $2, $3, $4, $5, $6, $7)"#,
+        )
+        .bind(report.id)
+        .bind(report.reporter)
+        .bind(report.group_id)
+        .bind(report.reported_wallet)
+        .bind(report.reason)
+        .bind(report.note)
+        .bind(report.created_at)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| StorageError::OperationFailed(e.to_string()))?;
+        Ok(())
     }
 
     async fn notify_realtime_event(&self, payload_json: &str) -> StorageResult<()> {

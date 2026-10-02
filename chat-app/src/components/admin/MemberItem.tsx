@@ -35,12 +35,38 @@ function permissionLabel(permType: string): string {
   if (permType.includes('MessagingDeleter')) return 'Delete';
   if (permType.includes('EncryptionKeyRotator')) return 'Rotate Key';
   if (permType.includes('MetadataAdmin')) return 'Metadata';
-  if (permType.includes('PermissionsAdmin')) return 'Admin';
+  // Check this before PermissionsAdmin: the longer name contains that substring.
   if (permType.includes('ExtensionPermissionsAdmin')) return 'Ext Admin';
+  if (permType.includes('PermissionsAdmin')) return 'Admin';
   if (permType.includes('ObjectAdmin')) return 'Obj Admin';
   if (permType.includes('GroupDeleter')) return 'Deleter';
   const parts = permType.split('::');
   return parts.at(-1) || permType;
+}
+
+/**
+ * Extension-admin is granted automatically so Admin can turn on Send.
+ * It is not a second admin role in this list.
+ */
+function isExtensionPermissionsAdmin(permType: string): boolean {
+  return permType.includes('ExtensionPermissionsAdmin');
+}
+
+function visibleHeldPermissions(
+  permissions: string[],
+  messagingPermTypes: PermType[],
+): string[] {
+  const seen = new Set<string>();
+  const visible: string[] = [];
+  for (const held of permissions) {
+    if (isExtensionPermissionsAdmin(held)) continue;
+    if (messagingPermTypes.some((perm) => memberHasPermission([held], perm.value))) continue;
+    const label = permissionLabel(held);
+    if (seen.has(label)) continue;
+    seen.add(label);
+    visible.push(held);
+  }
+  return visible;
 }
 
 /** `module::Type` suffix — package ID may be short vs padded / V1 vs latest. */
@@ -129,8 +155,17 @@ export function MemberItem({
         />
       </button>
 
-      {/* Permission toggles (expanded view, admin + not self) */}
-      {isExpanded && isAdmin && !isSelf && (
+      <div
+        className={`grid transition-[grid-template-rows,opacity] duration-200 ease-[cubic-bezier(0.22,1,0.36,1)] ${
+          isExpanded
+            ? 'grid-rows-[1fr] opacity-100'
+            : 'pointer-events-none grid-rows-[0fr] opacity-0'
+        }`}
+        aria-hidden={!isExpanded}
+      >
+        <div className="min-h-0 overflow-hidden">
+      {/* Permission toggles when the signed-in member is an admin, including their own row. */}
+      {isAdmin ? (
         <div className="space-y-1 border-t border-secondary-200 bg-secondary-50/50 px-3 pb-3 pt-2 dark:border-secondary-700 dark:bg-secondary-900/60">
           {messagingPermTypes.map((perm) => {
             const has = memberHasPermission(permissions, perm.value);
@@ -147,8 +182,8 @@ export function MemberItem({
                   disabled={togglingPerm === toggleKey}
                   className={`rounded px-2 py-0.5 text-[10px] font-medium transition-colors disabled:opacity-50 ${
                     has
-                      ? 'bg-green-100 text-green-700 hover:bg-green-200 dark:bg-green-900/30 dark:text-green-400'
-                      : 'bg-secondary-100 text-secondary-500 hover:bg-secondary-200 dark:bg-secondary-600 dark:text-secondary-400'
+                      ? 'bg-green-100 text-green-700 hover:bg-green-200 dark:bg-green-900/30 dark:text-green-400 dark:hover:bg-green-900/50'
+                      : 'bg-secondary-100 text-secondary-500 hover:bg-secondary-200 dark:bg-secondary-600 dark:text-secondary-400 dark:hover:bg-secondary-500'
                   }`}
                 >
                   {togglingPerm === toggleKey ? '...' : has ? 'ON' : 'OFF'}
@@ -157,33 +192,44 @@ export function MemberItem({
             );
           })}
 
-          <div className="mt-2 flex items-center justify-end gap-3 border-t border-secondary-200 pt-2 dark:border-secondary-700">
-            <button
-              type="button"
-              onClick={() => onRemoveAndRotate(address)}
-              disabled={removingMember === address}
-              className="text-[10px] font-medium text-danger-500 hover:text-danger-600 disabled:opacity-50"
-              title="Remove member and rotate encryption key"
-            >
-              {removingMember === address ? '...' : 'Remove+Key'}
-            </button>
-            <button
-              type="button"
-              onClick={() => onRemoveMember(address)}
-              disabled={removingMember === address}
-              className="text-[10px] font-medium text-danger-400 hover:text-danger-500 disabled:opacity-50"
-              title="Remove member (no key rotation)"
-            >
-              Remove
-            </button>
-          </div>
-        </div>
-      )}
+          {visibleHeldPermissions(permissions, messagingPermTypes).map((held) => (
+              <div
+                key={held}
+                className="flex items-center justify-between text-xs text-secondary-600 dark:text-secondary-400"
+              >
+                <span>{permissionLabel(held)}</span>
+                <span className="rounded bg-green-100 px-2 py-0.5 text-[10px] font-medium text-green-700 dark:bg-green-900/30 dark:text-green-400">
+                  ON
+                </span>
+              </div>
+            ))}
 
-      {/* Read-only permissions (expanded, non-admin or self) */}
-      {isExpanded && (!isAdmin || isSelf) && (
+          {isSelf ? null : (
+            <div className="mt-2 flex items-center justify-end gap-3 border-t border-secondary-200 pt-2 dark:border-secondary-700">
+              <button
+                type="button"
+                onClick={() => onRemoveAndRotate(address)}
+                disabled={removingMember === address}
+                className="text-[10px] font-medium text-danger-500 hover:text-danger-600 disabled:opacity-50"
+                title="Remove member and rotate encryption key"
+              >
+                {removingMember === address ? '...' : 'Remove+Key'}
+              </button>
+              <button
+                type="button"
+                onClick={() => onRemoveMember(address)}
+                disabled={removingMember === address}
+                className="text-[10px] font-medium text-danger-400 hover:text-danger-500 disabled:opacity-50"
+                title="Remove member (no key rotation)"
+              >
+                Remove
+              </button>
+            </div>
+          )}
+        </div>
+      ) : (
         <div className="space-y-1 border-t border-secondary-200 bg-secondary-50/50 px-3 pb-3 pt-2 dark:border-secondary-700 dark:bg-secondary-900/60">
-          {permissions.map((p) => (
+          {visibleHeldPermissions(permissions, []).map((p) => (
             <div
               key={p}
               className="flex items-center justify-between text-xs text-secondary-600 dark:text-secondary-400"
@@ -196,6 +242,8 @@ export function MemberItem({
           ))}
         </div>
       )}
+        </div>
+      </div>
     </li>
   );
 }

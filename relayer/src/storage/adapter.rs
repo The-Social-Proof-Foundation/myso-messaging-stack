@@ -326,7 +326,8 @@ pub trait StorageAdapter: Send + Sync {
 
     // === Encrypted user read-state (opaque blob) ===
 
-    async fn get_user_read_state(&self, wallet: &str) -> StorageResult<Option<EncryptedBlobRecord>>;
+    async fn get_user_read_state(&self, wallet: &str)
+        -> StorageResult<Option<EncryptedBlobRecord>>;
 
     /// Stores the encrypted read-state blob with server-assigned versioning.
     ///
@@ -349,7 +350,10 @@ pub trait StorageAdapter: Send + Sync {
 
     async fn delete_push_token(&self, wallet: &str, token: &str) -> StorageResult<()>;
 
-    async fn list_push_tokens_for_wallet(&self, wallet: &str) -> StorageResult<Vec<PushTokenRecord>>;
+    async fn list_push_tokens_for_wallet(
+        &self,
+        wallet: &str,
+    ) -> StorageResult<Vec<PushTokenRecord>>;
 
     /// Batch presence lookup for push fan-out. Postgres overrides with `WHERE wallet = ANY($1)`.
     async fn get_presence_last_seen_for_wallets(
@@ -387,7 +391,10 @@ pub trait StorageAdapter: Send + Sync {
     /// Clears last-seen after explicit logout / confirmed WS offline.
     async fn clear_presence(&self, wallet: &str) -> StorageResult<()>;
 
-    async fn get_presence_last_seen(&self, wallet: &str) -> StorageResult<Option<chrono::DateTime<chrono::Utc>>>;
+    async fn get_presence_last_seen(
+        &self,
+        wallet: &str,
+    ) -> StorageResult<Option<chrono::DateTime<chrono::Utc>>>;
 
     /// Postgres pool for cross-instance NOTIFY when this backend uses Postgres.
     fn postgres_pool(&self) -> Option<&sqlx::PgPool> {
@@ -395,6 +402,12 @@ pub trait StorageAdapter: Send + Sync {
     }
 
     // === Cross-instance realtime signal (ephemeral events) ===
+
+    /// Stores a metadata-only conversation report. Does not persist message content.
+    async fn insert_conversation_report(
+        &self,
+        report: crate::models::ConversationReport,
+    ) -> StorageResult<()>;
 
     /// Broadcasts a pre-serialized realtime payload to all relayer instances.
     /// Postgres: `pg_notify` on the message-events channel (each instance's

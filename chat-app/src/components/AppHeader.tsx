@@ -3,9 +3,10 @@ import { Link, useLocation } from 'react-router-dom';
 import { useCreateMessage } from '../contexts/CreateMessageContext';
 import { useMySocialAuth } from '../contexts/MySocialAuthContext';
 import { CalloutButton } from './CalloutButton';
+import { HeaderBalances } from './HeaderBalances';
 import { ProfileDropdown } from './ProfileDropdown';
 
-/** Shared horizontal inset from the settings divider to Back / brand. */
+/** Shared horizontal inset on both sides of the settings divider (brand / Back). */
 const DIVIDER_INSET = 'px-5';
 
 export function AppHeader() {
@@ -18,22 +19,6 @@ export function AppHeader() {
   return (
     <header className="flex items-stretch border-b border-secondary-200 bg-white dark:border-secondary-700 dark:bg-secondary-900">
       <div className="flex min-w-0 flex-1 items-stretch">
-        {onSettings ? (
-          <>
-            {/* Back is centered in the cell between the left edge and the full-height divider. */}
-            <Link
-              to="/"
-              className={`flex shrink-0 items-center justify-center ${DIVIDER_INSET} text-sm text-secondary-500 transition-colors hover:text-secondary-800 dark:text-secondary-400 dark:hover:text-secondary-200`}
-            >
-              ← Back
-            </Link>
-            <span
-              className="w-px shrink-0 self-stretch bg-secondary-300 dark:bg-secondary-600"
-              aria-hidden
-            />
-          </>
-        ) : null}
-
         <Link
           to="/"
           className={`font-chakra flex min-w-0 items-center gap-3.5 py-3 text-xl font-normal tracking-wide text-primary-900 hover:opacity-90 dark:text-primary-50 ${
@@ -49,18 +34,38 @@ export function AppHeader() {
           />
           <span className="hidden sm:inline">Messaging</span>
         </Link>
+
+        {onSettings ? (
+          <>
+            <span
+              className="w-px shrink-0 self-stretch bg-secondary-300 dark:bg-secondary-600"
+              aria-hidden
+            />
+            {/* Back sits to the right of the brand, in its own cell past the divider. */}
+            <Link
+              to="/"
+              className={`flex shrink-0 items-center justify-center ${DIVIDER_INSET} text-sm text-secondary-500 transition-colors hover:text-secondary-800 dark:text-secondary-400 dark:hover:text-secondary-200`}
+            >
+              ← Back
+            </Link>
+          </>
+        ) : null}
       </div>
 
       <div className="flex items-center gap-3 px-6 py-3">
+        {session ? <HeaderBalances /> : null}
         {canCreateMessage ? (
-          <button
+          <CalloutButton
             type="button"
+            borderOpacity={false}
             onClick={openCreateMessage}
-            className="inline-flex h-9 shrink-0 items-center rounded-md border border-secondary-300 bg-white px-4 text-xs font-medium text-secondary-700 transition-none hover:bg-secondary-100 dark:border-secondary-600 dark:bg-secondary-800 dark:text-secondary-200 dark:hover:bg-secondary-700"
+            className="h-9 shrink-0 px-4 text-secondary-700 dark:text-secondary-400"
           >
-            <span aria-hidden="true">+</span>
-            <span className="ml-1.5">New</span>
-          </button>
+            <div className="flex items-center gap-1.5">
+              <span aria-hidden="true">+</span>
+              <span className="font-chakra">Create New</span>
+            </div>
+          </CalloutButton>
         ) : null}
         {session ? (
           <ProfileDropdown />

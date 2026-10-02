@@ -161,6 +161,7 @@ The app follows a 3-layer architecture:
 | `@socialproof/mysocial-auth`         | npm       | MySocial OAuth + session APIs    |
 | `@socialproof/myso`                 | ^0.x      | MySo RPC (`MySoJsonRpcClient`) |
 | `@socialproof/mydata`               | ^0.x      | Threshold encryption           |
+| `@socialproof/memory`               | ^0.0.5    | Agent memory client (`/api/remember`, `/api/recall`, signed requests) |
 
 ### Application Dependencies
 
@@ -328,6 +329,7 @@ curl -H "Client-Sdk-Version: 0.0.4" \
 | 9001 | JSON-RPC (`VITE_MYSO_RPC_URL`; browser uses `/api/rpc` proxy in dev) |
 | 2024 | MyData key server HTTP |
 | 3003 | Relayer (`VITE_RELAYER_URL`) |
+| 8000 | Memory server (`VITE_MEMORY_SERVER_URL`) |
 
 ### Paid messaging panel shows `Failed to fetch`
 
@@ -351,7 +353,173 @@ See [AgentMessaging.md](../docs/myso-messaging-stack/AgentMessaging.md) and [Pai
 
 ---
 
-## 9. References
+## 9. Agents workspace
+
+`/agents` is the **configuration** workspace: AI credit balance, organizations, and agents
+(tabs `Overview` / `Organizations` / `Agents`, selectable with `?tab=`). Agent **chats** do
+not live here.
+
+Agent conversations live in the **home sidebar**:
+
+- A button at the **top** of the conversation list ("Agents & Organizations") swaps the list
+  into a list of every organization and its agents; a back button returns to the human chat
+  list.
+- **An agent row is its chat row.** Clicking an agent opens its conversation — an on-chain
+  `PermissionedGroup<Messaging>` rendered by the same `ChatArea` as every other chat. There is
+  deliberately **one chat view**, so there is never a question of which surface you are in.
+- An agent with no chat yet shows a small start state in the main pane with a single
+  **Start chat** action.
+- **Ask its memory** (the brain icon on an agent row) opens the memory ask/remember dialog.
+  It is a dialog rather than a second full-height conversation view for the same reason.
+- Creating is done from dialogs: **New** in the sidebar agents header, the Agents tab, or the
+  Organizations tab all open a modal form.
+- `/agents → Agents → Chat` hands the agent over to the home view via router state.
+
+Agent keys are derived in the browser
+(`sha256("mysocial-agent-v1" || human secret || org id || u32 index)`) and never stored on a
+server.
+
+### Agent chat lifecycle
+
+Creating an agent chat requires three things, all enforced on chain:
+
+1. **`CAP_MESSAGE_SEND` (64)** on the registered sub-agent. The `Chat assistant` preset does
+   not include it — the UI offers "Enable messaging", which adds `MESSAGE_SEND` +
+   `MESSAGE_READ` via `update_sub_agent`.
+2. **The agent key must sign.** `create_agent_and_share_group` asserts
+   `actor_address == ctx.sender()`, so there is no human-signed path that attributes to an
+   agent. Derived agent addresses hold no MYSO, so gas comes from the human as gas owner
+   (the same `executeAsAgent` path used by child-agent registration).
+3. **`platform::has_joined_platform(platform, principal)`** — the human owner must belong to
+   an approved `Platform`. This is an on-chain precondition of
+   `create_agent_and_share_group`, not a product choice, so it is **never a user-facing
+   step**: approved platforms are discovered from the indexer
+   (`platforms(approvedOnly: true)`), membership is read with `platformUserAccess`, and the
+   join transaction is sent automatically as the first stage of starting a chat.
+   `VITE_PLATFORM_ID` remains an optional override and is not required.
+
+4. **The owner must be able to send.** `create_agent_and_share_group` grants the human
+   principal only `MessagingReader` + `PermissionsAdmin`, so an agent chat is readable but
+   *not writable* until someone grants `MessagingSender`. The app does it automatically: the
+   grant is sent as the final stage of starting a chat, and opening an existing agent chat
+   repairs it once per session. Because the principal holds `PermissionsAdmin`, they can grant
+   it to themselves — no other party is involved.
+
+The association is **on-chain group metadata** written by `attach_agent_creator_metadata`:
+`agent_chat="true"`, `creator_actor`, `creator_principal`, `creator_sub_agent_id`,
+`creator_identity_class`. `organization_id` is event-only, so it is recovered by mapping
+`creator_sub_agent_id` onto the sub-agent rows.
+
+**Discovery is device-independent.** `MemberAdded` fires for the human principal (granting a
+permission adds the member), so agent groups arrive through the normal group-discovery path;
+`groupsMetadata` then classifies them. Three sources are merged and de-duplicated by group
+id: chain metadata (authoritative, self-healing), the social indexer's
+`/organizations/:id/messaging-groups` (watermark-resumable), and the relayer's
+`/v1/agent-conversations` (insert-only, no backfill, so never the sole source).
+
+Reload, a second browser, or a relayer restart therefore all reproduce the same list with no
+session storage involved. Opening a chat hydrates the local group store from
+`groupsMetadata` before selecting, because selecting a group absent from the store is a
+no-op.
+
+Readiness waits on **`MessagingReader`**, not `MessagingSender`: the principal of an agent
+group is granted `MessagingReader` + `PermissionsAdmin`, and the agent's admin caps are
+revoked in the same transaction.
+
+### Pagination
+
+Every list read goes through `src/lib/pagination.ts`. The social server clamps `limit` to 100
+and reports `total_count` on the organization and sub-agent endpoints, so lists page with
+`limit` + `offset` instead of silently truncating:
+
+| Behaviour | Where |
+|---|---|
+| Stops on empty page, short page, or when `total_count` is reached | `collectAllPages` / `nextPageRequest` |
+| De-duplicates rows across page boundaries | `flattenPages` |
+| Stops on a full page that adds nothing new (no infinite loop) | `reason: 'no-progress'` |
+| Hard page ceiling (50) | `DEFAULT_MAX_PAGES` |
+| A later page failing keeps the rows already fetched and shows the error | `partialError` |
+| Endpoints without `offset` support degrade to an explicit "first N" state | `pagingSupported: false` |
+
+Servers older than the pagination fix reject numeric query params outright
+(`#[serde(flatten)]` made `serde_urlencoded` buffer them as strings). `social-api.ts` detects
+that specific 400, retries once with only the pagination params removed (filters such as
+`active_only` are preserved), and reports the list as partial — so the app works against both
+patched and unpatched social servers rather than failing outright.
+
+### Chat-app env
+
+| Env var | Purpose |
+|---------|---------|
+| `VITE_MEMORY_SERVER_URL` | myso-memory server (default `http://127.0.0.1:8000`). Dev traffic goes through the Vite `/api/memory` proxy. |
+| `VITE_SOCIAL_SERVER_URL` | Social server for memory-account, AI-credit, org, sub-agent, and messaging-group reads. |
+| `VITE_PLATFORM_ID` | Optional. Overrides the auto-discovered Platform used for agent chats. |
+
+### Server prerequisites
+
+The agent memory chat talks to the myso-memory server (`myso-memory/services/server`, default
+port 8000). Set these on the memory server:
+
+| Memory server env | Value |
+|-------------------|-------|
+| `ALLOWED_ORIGINS` | Must include the chat-app origin (e.g. `http://localhost:5173`) for production builds. In `pnpm dev` the browser goes through the `/api/memory` proxy, so CORS is not involved. |
+| `AI_CREDIT_ENABLED` | `true`, so `/api/ask` reserves and captures AI credits for each reply. |
+| `AI_CREDIT_ORACLE_URL` | The AI credit oracle (localnet default `http://127.0.0.1:8095`), plus `AI_CREDIT_ORACLE_API_SECRET`. |
+| `SOCIAL_SERVER_URL` | The local social server (`http://127.0.0.1:9126`), used to resolve the signing agent. |
+
+### Local run order
+
+1. Localnet with social indexer, GraphQL, and MyData (`myso start --with-faucet --with-social-indexer --with-mydata --with-graphql`).
+2. AI credit oracle.
+3. myso-memory server (`AI_CREDIT_ENABLED=true`, `SOCIAL_SERVER_URL` pointing at the social server).
+4. Relayer (for agent conversations and message delivery).
+5. `pnpm dev` in `chat-app`.
+
+### Permissions model
+
+- Root agents are registered on an `AgenticOrganization` and signed by the human owner.
+- Child agents are registered with `register_sub_agent_delegated`, signed by the parent agent's derived key (`CAP_AGENT_REGISTER`).
+- Chat needs `MEMORY_READ`, `MEMORY_WRITE`, and `AI_SPEND`. Messenger adds message caps; Manager adds agent and budget caps.
+- Agent messaging groups additionally need `CAP_MESSAGE_SEND` and a joined Platform (see above).
+- Shared org memory requires `ensure_org_memory_group` plus an `OrgMemoryWriter` grant. Remember defaults to private visibility unless that grant exists.
+- Governance voting is not available to agents: the contract checks the signing wallet, not the agent object.
+
+### Organization permissions
+
+Organization permissions (`ORG_PERM_*`) live on the organization's memory-share group and are
+what the social server's dashboard routes read. **Nothing grants them implicitly — not even to
+the creator** — so `create_agentic_organization` alone leaves the owner unable to read their own
+dashboard. The app handles this two ways:
+
+- Enabling shared memory also grants the owner the full mask (memory read/write, agent manager,
+  budget manager, spend approver, dashboard viewer, auditor) in a follow-up transaction.
+- If a dashboard read still returns 403, the dashboard shows a **Grant dashboard access**
+  callout that sends the same grant for the group the organization already has.
+
+### Organization dashboard
+
+`/agents → Organizations` is a full dashboard, and every section is an independent paged
+query so one failing read cannot blank the rest:
+
+| Section | Endpoint | Auth |
+|---|---|---|
+| Agents | `/profiles/:addr/sub-agents` (complete walk, filtered by org) | none |
+| Agent chats | `/organizations/:id/messaging-groups` | none |
+| Memory permissions | `/organizations/:id/memory-permissions` | wallet + dashboard access |
+| Roles | `/organizations/:id/roles` | wallet + dashboard access |
+| Role assignments | `/organizations/:id/role-assignments` | wallet + dashboard access |
+| Invitations | `/organizations/:id/invitations` | wallet + dashboard access |
+| Spend approvals | `/organizations/:id/approvals` | wallet + dashboard access |
+| Spend breakdown | `/organizations/:id/spend-breakdown` | wallet + dashboard access |
+| Audit log | `/organizations/:id/audit-logs` | wallet + **auditor** access |
+
+`member`, `active_only`, `invitee`, `status`, `agent`, `window`, `action`, and `actor` filters
+are sent to the server rather than applied in the browser. A 403 on the audit log renders as
+"auditor access required", distinct from a generic failure.
+
+---
+
+## 10. References
 
 | Resource             | Link                                                                                                                      |
 |----------------------|---------------------------------------------------------------------------------------------------------------------------|

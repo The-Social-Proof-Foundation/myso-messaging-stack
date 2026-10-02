@@ -5,12 +5,15 @@ import {
   dmPeerAddress,
   selfGroupNameLabels,
 } from '../lib/wallet-profile';
+import { conversationPeerLabel } from '../lib/agents/agent-display-name';
+import { useAgentNamesByAddress } from './agents/useSubAgents';
 import { useOwnWalletProfile } from './useOwnWalletProfile';
 import { useWalletAvatarMap } from './useWalletAvatarMap';
 
 /**
  * Sidebar / chat-header title.
- * 1:1 → other member's profile label; groups → official name minus self.
+ * 1:1 → the other member's name. An agent uses its label; a person uses their profile.
+ * Multi-member groups → official name minus self.
  */
 export function useDisplayGroupTitle(
   officialName: string,
@@ -24,6 +27,7 @@ export function useDisplayGroupTitle(
   );
   const peerAddrs = useMemo(() => (peer ? [peer] : []), [peer]);
   const profiles = useWalletAvatarMap(peerAddrs);
+  const agentNames = useAgentNamesByAddress();
 
   return useMemo(() => {
     const selfLabels = selfGroupNameLabels(address, profile);
@@ -32,7 +36,11 @@ export function useDisplayGroupTitle(
       selfLabels,
       memberAddresses,
       selfAddress: address,
-      peerLabel: peer ? profiles.labelFor(peer) : null,
+      peerLabel: conversationPeerLabel(
+        peer,
+        agentNames,
+        peer ? profiles.labelFor(peer) : null,
+      ),
     });
-  }, [officialName, address, profile, memberAddresses, peer, profiles]);
+  }, [officialName, address, profile, memberAddresses, peer, profiles, agentNames]);
 }

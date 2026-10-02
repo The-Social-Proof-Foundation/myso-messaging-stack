@@ -47,14 +47,9 @@ pub async fn ws_handler(
     let sender = auth.sender_address.clone();
     let ping_interval = Duration::from_secs(state.ws_ping_interval_secs);
 
-    Ok(ws.on_upgrade(move |socket| handle_socket(
-        socket,
-        state,
-        group_id,
-        sender,
-        after_order,
-        ping_interval,
-    )))
+    Ok(ws.on_upgrade(move |socket| {
+        handle_socket(socket, state, group_id, sender, after_order, ping_interval)
+    }))
 }
 
 async fn handle_socket(

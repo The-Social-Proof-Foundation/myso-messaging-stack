@@ -5,12 +5,20 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { ChevronLeft } from 'lucide-react';
 import { useRequiredMessagingClient } from '../contexts/MessagingClientContext';
+import { grantMessagingPermission } from '../lib/agents/agent-chat-permissions';
 import { signAndExecuteTransactionAndWait } from '../lib/sign-and-wait';
 import { updateStoredGroupName } from '../lib/group-store';
+import { clearEitherBlockCache } from '../lib/block-check';
+import { blockWalletTx } from '../lib/block-wallet';
+import {
+  submitConversationReport,
+  type ReportReason,
+} from '../lib/report-conversation';
+import { dmPeerAddress } from '../lib/wallet-profile';
 import type { Permissions } from '../hooks/usePermissions';
 import { GroupNameSection } from './admin/GroupNameSection';
 import { MemberList } from './admin/MemberList';
-import { AddMemberForm } from './admin/AddMemberForm';
+import { AddMemberDialog } from './admin/AddMemberDialog';
 import { GroupActionsSection } from './admin/GroupActionsSection';
 import {
   ChatSettingsSection,
@@ -79,8 +87,10 @@ export function AdminPanel({
 
   const [members, setMembers] = useState<MemberWithPermissions[]>([]);
   const [loadingMembers, setLoadingMembers] = useState(false);
+  const [membersLoaded, setMembersLoaded] = useState(false);
   const membersRef = useRef(members);
   membersRef.current = members;
+  const memberFetchGen = useRef(0);
 
   const [notificationsEnabled, setNotificationsEnabled] = useState(true);
   const [readReceiptsEnabled, setReadReceiptsEnabled] = useState(true);
@@ -90,9 +100,24 @@ export function AdminPanel({
     useState<ChatSettingsSavingKey>(null);
   const [prefsError, setPrefsError] = useState<string | null>(null);
 
+  // Available messaging permission types
+  const messagingPermTypes = [
+    { key: 'Send', value: client.messaging.bcs.MessagingSender.name },
+    { key: 'Read', value: client.messaging.bcs.MessagingReader.name },
+    { key: 'Edit', value: client.messaging.bcs.MessagingEditor.name },
+    { key: 'Delete', value: client.messaging.bcs.MessagingDeleter.name },
+    { key: 'Rotate Key', value: client.messaging.bcs.EncryptionKeyRotator.name },
+    { key: 'Metadata', value: client.messaging.bcs.MetadataAdmin.name },
+    { key: 'Group handle', value: client.messaging.bcs.GroupHandleAdmin.name },
+  ];
+
   // Add member form
+  const [addMemberOpen, setAddMemberOpen] = useState(false);
   const [newAddress, setNewAddress] = useState('');
-  const [selectedPerms, setSelectedPerms] = useState<string[]>([]);
+  // All permissions are granted by default; the multi-select prunes them.
+  const [selectedPerms, setSelectedPerms] = useState<string[]>(() =>
+    messagingPermTypes.map((p) => p.value),
+  );
   const [adding, setAdding] = useState(false);
   const [addError, setAddError] = useState<string | null>(null);
   const [addMemberBlocked, setAddMemberBlocked] = useState(false);
@@ -112,19 +137,9 @@ export function AdminPanel({
   // Action error
   const [actionError, setActionError] = useState<string | null>(null);
 
-  // Available messaging permission types
-  const messagingPermTypes = [
-    { key: 'Send', value: client.messaging.bcs.MessagingSender.name },
-    { key: 'Read', value: client.messaging.bcs.MessagingReader.name },
-    { key: 'Edit', value: client.messaging.bcs.MessagingEditor.name },
-    { key: 'Delete', value: client.messaging.bcs.MessagingDeleter.name },
-    { key: 'Rotate Key', value: client.messaging.bcs.EncryptionKeyRotator.name },
-    { key: 'Metadata', value: client.messaging.bcs.MetadataAdmin.name },
-    { key: 'Group handle', value: client.messaging.bcs.GroupHandleAdmin.name },
-  ];
-
   // Fetch members — keep existing rows mounted; only show the spinner on first load.
   const fetchMembers = useCallback(async () => {
+    const gen = ++memberFetchGen.current;
     const showSpinner = membersRef.current.length === 0;
     if (showSpinner) setLoadingMembers(true);
     try {
@@ -134,6 +149,7 @@ export function AdminPanel({
         groupId,
         exhaustive: true,
       });
+      if (gen !== memberFetchGen.current) return;
       const next = (result.members as MemberWithPermissions[]).filter(
         (m) => !systemAddresses.has(m.address),
       );
@@ -142,7 +158,9 @@ export function AdminPanel({
     } catch (err) {
       console.error('Failed to fetch members:', err);
     } finally {
+      if (gen !== memberFetchGen.current) return;
       if (showSpinner) setLoadingMembers(false);
+      setMembersLoaded(true);
     }
   }, [client, groupId]);
 
@@ -150,6 +168,7 @@ export function AdminPanel({
   useEffect(() => {
     setMembers([]);
     setLoadingMembers(false);
+    setMembersLoaded(false);
     setNotificationsEnabled(true);
     setReadReceiptsEnabled(true);
     setOnlinePresenceEnabled(true);
@@ -273,6 +292,15 @@ export function AdminPanel({
   // ------------------------------------------------------------------
   // Add member
   // ------------------------------------------------------------------
+  /** Close the dialog and drop the in-flight pick so the next open is clean. */
+  function closeAddMemberDialog() {
+    setAddMemberOpen(false);
+    setNewAddress('');
+    setAddError(null);
+    setAddMemberBlocked(false);
+    setSelectedPerms(messagingPermTypes.map((p) => p.value));
+  }
+
   async function handleAddMember(e: React.SyntheticEvent) {
     e.preventDefault();
     setAddError(null);
@@ -295,7 +323,9 @@ export function AdminPanel({
       });
       await signAndExecuteTransactionAndWait(client, signer, tx);
       setNewAddress('');
-      setSelectedPerms([]);
+      // Reset to the full default set so the next add starts from all permissions.
+      setSelectedPerms(messagingPermTypes.map((p) => p.value));
+      setAddMemberOpen(false);
       // Append immediately; silent refetch reconciles permissions / ordering.
       setMembers((prev) =>
         prev.some((m) => m.address.toLowerCase() === address.toLowerCase())
@@ -353,12 +383,13 @@ export function AdminPanel({
         });
         await signAndExecuteTransactionAndWait(client, signer, tx);
       } else {
-        const tx = client.groups.tx.grantPermission({
+        await grantMessagingPermission({
+          client,
+          signer,
           groupId,
           member,
           permissionType: permType,
         });
-        await signAndExecuteTransactionAndWait(client, signer, tx);
       }
       await fetchMembers();
       onPermissionsChanged?.();
@@ -454,18 +485,42 @@ export function AdminPanel({
     }
   }
 
-  // Permission checkbox helpers for Add Member form
-  function togglePerm(permValue: string) {
-    setSelectedPerms((prev) =>
-      prev.includes(permValue) ? prev.filter((p) => p !== permValue) : [...prev, permValue],
-    );
+  // Permission multi-select for the Add Member form.
+  function handlePermsChange(permValues: string[]) {
+    setSelectedPerms(permValues);
   }
 
-  function selectAllPerms() {
-    if (selectedPerms.length === messagingPermTypes.length) {
-      setSelectedPerms([]);
-    } else {
-      setSelectedPerms(messagingPermTypes.map((p) => p.value));
+  const peerAddress = membersLoaded
+    ? dmPeerAddress(
+        members.map((member) => member.address),
+        signer.toMySoAddress(),
+      )
+    : undefined;
+
+  async function handleReport(input: { reason: ReportReason; note?: string }) {
+    await submitConversationReport(signer, {
+      groupId,
+      reportedWallet: peerAddress ?? null,
+      reason: input.reason,
+      note: input.note,
+    });
+  }
+
+  async function handleBlock() {
+    if (!peerAddress) {
+      throw new Error('This chat does not have a single person to block.');
+    }
+    const tx = blockWalletTx(
+      {
+        blockListRegistryId: client.messaging.packageConfig.blockListRegistryId,
+        socialGraphId: client.messaging.packageConfig.socialGraphId,
+      },
+      peerAddress,
+    );
+    await signAndExecuteTransactionAndWait(client, signer, tx);
+    clearEitherBlockCache();
+    if (onLeaveGroup) {
+      await onLeaveGroup();
     }
   }
 
@@ -520,27 +575,29 @@ export function AdminPanel({
           onRemoveMember={handleRemoveMember}
           onRemoveAndRotate={handleRemoveAndRotate}
           onTogglePermission={handleTogglePermission}
+          onAddMember={
+            permissions.isAdmin ? () => setAddMemberOpen(true) : undefined
+          }
           onlineMembers={onlineMembers}
           photoFor={photoFor}
           labelFor={labelFor}
           ringFor={ringFor}
         />
 
-        {permissions.isAdmin && (
-          <AddMemberForm
-            newAddress={newAddress}
-            selectedPerms={selectedPerms}
-            adding={adding}
-            addError={addError}
-            messagingPermTypes={messagingPermTypes}
-            existingMemberAddresses={members.map((m) => m.address)}
-            onAddressChange={setNewAddress}
-            onTogglePerm={togglePerm}
-            onSelectAllPerms={selectAllPerms}
-            onSubmit={handleAddMember}
-            onBlockedChange={setAddMemberBlocked}
-          />
-        )}
+        <AddMemberDialog
+          open={addMemberOpen}
+          onClose={closeAddMemberDialog}
+          newAddress={newAddress}
+          selectedPerms={selectedPerms}
+          adding={adding}
+          addError={addError}
+          messagingPermTypes={messagingPermTypes}
+          existingMemberAddresses={members.map((m) => m.address)}
+          onAddressChange={setNewAddress}
+          onPermsChange={handlePermsChange}
+          onSubmit={handleAddMember}
+          onBlockedChange={setAddMemberBlocked}
+        />
 
         <ChatSettingsSection
           notificationsEnabled={notificationsEnabled}
@@ -569,6 +626,9 @@ export function AdminPanel({
             }
             leaving={leaving}
             leaveError={leaveError}
+            peerAddress={peerAddress}
+            onReport={handleReport}
+            onBlock={handleBlock}
           />
         )}
       </div>

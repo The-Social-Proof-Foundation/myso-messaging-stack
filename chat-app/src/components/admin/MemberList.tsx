@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { ChevronRight, UserPlus } from 'lucide-react';
 import { useAuthenticatedAddress } from '../../contexts/MySocialAuthContext';
 import type { WalletRingBits } from '../../hooks/useWalletAvatarMap';
 import { MemberItem } from './MemberItem';
@@ -24,6 +25,8 @@ interface MemberListProps {
   onRemoveMember: (address: string) => void;
   onRemoveAndRotate: (address: string) => void;
   onTogglePermission: (member: string, permType: string, has: boolean) => void;
+  /** Admin-only: opens the Add Member dialog. */
+  onAddMember?: () => void;
   /** Presence per member for the online dots. */
   onlineMembers?: Map<string, boolean>;
   photoFor?: (address: string) => string | null;
@@ -42,6 +45,7 @@ export function MemberList({
   onRemoveMember,
   onRemoveAndRotate,
   onTogglePermission,
+  onAddMember,
   onlineMembers,
   photoFor,
   labelFor,
@@ -51,7 +55,7 @@ export function MemberList({
   const [expandedMember, setExpandedMember] = useState<string | null>(null);
 
   return (
-    <section className="p-4">
+    <section className="border-b border-secondary-100 p-4 dark:border-secondary-700">
       <h4 className="font-chakra mb-2 text-sm font-medium capitalize tracking-wide text-secondary-500 dark:text-secondary-400">
         Members ({members.length})
       </h4>
@@ -66,8 +70,29 @@ export function MemberList({
         <p className="text-xs text-secondary-400 dark:text-secondary-500">No members found.</p>
       )}
 
-      {members.length > 0 && (
+      {!loading && (isAdmin || members.length > 0) && (
         <ul className="overflow-hidden rounded-xl border border-secondary-200 bg-secondary-100 dark:border-secondary-700 dark:bg-secondary-800">
+          {/* First clickable row: opens the Add Member dialog. */}
+          {isAdmin && onAddMember && (
+            <li className="border-b border-secondary-200 dark:border-secondary-700">
+              <button
+                type="button"
+                onClick={onAddMember}
+                className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs font-medium text-secondary-600 transition-colors hover:bg-secondary-200/80 hover:text-secondary-900 dark:text-secondary-300 dark:hover:bg-secondary-700 dark:hover:text-secondary-100"
+              >
+                {/* h-6 box matches the member row avatar so row heights line up. */}
+                <span className="flex h-6 w-6 shrink-0 items-center justify-center">
+                  <UserPlus className="h-4 w-4" aria-hidden />
+                </span>
+                <span className="min-w-0 flex-1 truncate">Add Member</span>
+                <ChevronRight
+                  className="h-4 w-4 shrink-0 text-secondary-400"
+                  aria-hidden
+                />
+              </button>
+            </li>
+          )}
+
           {members.map((m) => {
             const isSelf = m.address === accountAddress;
             const ring = ringFor?.(m.address);

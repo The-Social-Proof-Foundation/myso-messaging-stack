@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
-import { X } from 'lucide-react';
+import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
+import { Check, ChevronDown, X } from 'lucide-react';
 import {
   useGraphQLClient,
   useRequiredMessagingClient,
@@ -10,6 +11,7 @@ import {
 } from '../../lib/block-check';
 import {
   type RecipientPeer,
+  fetchFollowingProfiles,
   normalizeMysoWalletQuery,
   peerCapsuleLabel,
   searchProfiles,
@@ -35,8 +37,7 @@ interface AddMemberFormProps {
   /** Wallets already in the group (excluded from search results). */
   existingMemberAddresses?: readonly string[];
   onAddressChange: (address: string) => void;
-  onTogglePerm: (permValue: string) => void;
-  onSelectAllPerms: () => void;
+  onPermsChange: (permValues: string[]) => void;
   onSubmit: (e: React.SyntheticEvent) => void;
   /** When true, parent should refuse submit. */
   onBlockedChange?: (blocked: boolean) => void;
@@ -50,8 +51,7 @@ export function AddMemberForm({
   messagingPermTypes,
   existingMemberAddresses = [],
   onAddressChange,
-  onTogglePerm,
-  onSelectAllPerms,
+  onPermsChange,
   onSubmit,
   onBlockedChange,
 }: Readonly<AddMemberFormProps>) {
@@ -72,6 +72,28 @@ export function AddMemberForm({
   const [searching, setSearching] = useState(false);
   const [selectedPeer, setSelectedPeer] = useState<RecipientPeer | null>(null);
   const [addressBlocked, setAddressBlocked] = useState(false);
+  // People the user follows — shown as a browsable list before a search/selection.
+  const [suggestions, setSuggestions] = useState<RecipientPeer[]>([]);
+  const [loadingSuggestions, setLoadingSuggestions] = useState(true);
+
+  // Load recommended (following) peers once the picker mounts. Stays lazy on
+  // re-runs (loading already starts true) so a refetch never flashes the list.
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const peers = await fetchFollowingProfiles(selfWallet);
+      const filtered = peers.filter(
+        (p) => !excludeKeys.has(p.wallet.toLowerCase()),
+      );
+      const annotated = await annotatePeersBlocked(selfWallet, filtered);
+      if (cancelled) return;
+      setSuggestions(annotated);
+      setLoadingSuggestions(false);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [selfWallet, excludeKeys]);
 
   // Parent clears `newAddress` after a successful add — drop the tag too.
   useEffect(() => {
@@ -205,116 +227,190 @@ export function AddMemberForm({
 
   const showSearchPanel = Boolean(query.trim()) && (searching || searchResults.length > 0);
 
+  // Before a search or a pick, fill the dialog with people to choose from.
+  const showSuggestions = !query.trim() && !selectedPeer;
+
+  const permsDisabled = adding || addressBlocked;
+  const allPermValues = messagingPermTypes.map((p) => p.value);
+  const allPermsSelected =
+    messagingPermTypes.length > 0 &&
+    selectedPerms.length === messagingPermTypes.length;
+  const permsSummary =
+    selectedPerms.length === 0
+      ? 'No permissions selected'
+      : allPermsSelected
+        ? `All ${messagingPermTypes.length} permissions`
+        : `${selectedPerms.length} of ${messagingPermTypes.length} permissions`;
+
+  function togglePerm(permValue: string) {
+    onPermsChange(
+      selectedPerms.includes(permValue)
+        ? selectedPerms.filter((p) => p !== permValue)
+        : [...selectedPerms, permValue],
+    );
+  }
+
   return (
-    <section className="border-b border-secondary-100 p-4 dark:border-secondary-700">
-      <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-secondary-500 dark:text-secondary-400">
-        Add Member
-      </h4>
+    <form onSubmit={onSubmit} className="space-y-3">
+      <input
+        type="text"
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        placeholder="Search name, @username, or 0x…"
+        disabled={adding}
+        className="w-full rounded-lg border border-secondary-300 bg-white px-3 py-1.5 text-xs text-secondary-900 placeholder:text-secondary-400 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500/20 disabled:opacity-50 dark:border-secondary-600 dark:bg-secondary-700 dark:text-secondary-100"
+      />
 
-      <form onSubmit={onSubmit} className="space-y-3">
-        <input
-          type="text"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder="Search name, @username, or 0x…"
-          disabled={adding}
-          className="w-full rounded-lg border border-secondary-300 bg-white px-3 py-1.5 text-xs text-secondary-900 placeholder:text-secondary-400 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500/20 disabled:opacity-50 dark:border-secondary-600 dark:bg-secondary-700 dark:text-secondary-100"
-        />
-
-        {showSearchPanel && (
-          <div className="max-h-48 overflow-y-auto">
-            {searching && searchResults.length === 0 ? (
-              <p className="px-3 py-4 text-center text-xs text-secondary-500">
-                Searching…
+      {showSuggestions && (
+        // Fixed floor keeps the dialog a useful height with nothing selected.
+        <div className="min-h-[15rem]">
+          {loadingSuggestions ? (
+            <p className="px-3 py-16 text-center text-xs text-secondary-500">
+              Loading people…
+            </p>
+          ) : suggestions.length === 0 ? (
+            <p className="px-4 py-16 text-center text-xs text-secondary-600 dark:text-secondary-500">
+              Search for a username, name, or wallet address
+            </p>
+          ) : (
+            <>
+              <p className="mb-1.5 text-xs font-medium text-secondary-500 dark:text-secondary-400">
+                Recommended
               </p>
-            ) : searchResults.length === 0 ? (
-              <p className="px-3 py-4 text-center text-xs text-secondary-500">
-                No matches
-              </p>
-            ) : (
-              <RecipientPickerRows
-                peers={searchResults}
-                busy={adding}
-                onAdd={pickPeer}
-              />
-            )}
-          </div>
-        )}
-
-        {selectedPeer && (
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="inline-flex items-center gap-1.5 rounded-full bg-secondary-100 px-2.5 py-1 text-xs font-medium text-secondary-800 dark:bg-secondary-700 dark:text-secondary-100">
-              {selectedPeer.photoURL ? (
-                <img
-                  src={selectedPeer.photoURL}
-                  alt=""
-                  className="h-5 w-5 rounded-full object-cover"
+              <div className="max-h-72 overflow-y-auto">
+                <RecipientPickerRows
+                  peers={suggestions}
+                  busy={adding}
+                  onAdd={pickPeer}
                 />
-              ) : (
-                <span className="flex h-5 w-5 items-center justify-center rounded-full bg-secondary-300 text-[10px] dark:bg-secondary-600">
-                  {(peerCapsuleLabel(selectedPeer)[0] ?? '?').toUpperCase()}
-                </span>
-              )}
-              <span className="max-w-[160px] truncate">
-                {peerCapsuleLabel(selectedPeer)}
-              </span>
-              <button
-                type="button"
-                onClick={clearSelected}
-                disabled={adding}
-                aria-label={`Remove ${peerCapsuleLabel(selectedPeer)}`}
-                className="rounded-full p-0.5 text-secondary-500 hover:bg-secondary-200 hover:text-secondary-900 disabled:opacity-50 dark:hover:bg-secondary-600 dark:hover:text-white"
-              >
-                <X className="h-3 w-3" />
-              </button>
-            </span>
-            {addressBlocked && <BlockedPeerBadge />}
-          </div>
-        )}
-
-        <div className="space-y-1">
-          <label className="flex items-center gap-2 text-xs text-secondary-600 dark:text-secondary-400">
-            <input
-              type="checkbox"
-              checked={selectedPerms.length === messagingPermTypes.length}
-              onChange={onSelectAllPerms}
-              disabled={adding || addressBlocked}
-              className="rounded"
-            />
-            <span className="font-medium">Select All</span>
-          </label>
-          {messagingPermTypes.map((perm) => (
-            <label
-              key={perm.key}
-              className="flex items-center gap-2 text-xs text-secondary-600 dark:text-secondary-400"
-            >
-              <input
-                type="checkbox"
-                checked={selectedPerms.includes(perm.value)}
-                onChange={() => onTogglePerm(perm.value)}
-                disabled={adding || addressBlocked}
-                className="rounded"
-              />
-              {perm.key}
-            </label>
-          ))}
+              </div>
+            </>
+          )}
         </div>
+      )}
 
-        {addressBlocked && (
-          <p className="text-xs text-danger-500">
-            You cannot add this user (blocked).
-          </p>
-        )}
-        {addError && <p className="text-xs text-danger-500">{addError}</p>}
+      {showSearchPanel && (
+        <div className="max-h-48 overflow-y-auto">
+          {searching && searchResults.length === 0 ? (
+            <p className="px-3 py-4 text-center text-xs text-secondary-500">
+              Searching…
+            </p>
+          ) : searchResults.length === 0 ? (
+            <p className="px-3 py-4 text-center text-xs text-secondary-500">
+              No matches
+            </p>
+          ) : (
+            <RecipientPickerRows
+              peers={searchResults}
+              busy={adding}
+              onAdd={pickPeer}
+            />
+          )}
+        </div>
+      )}
 
-        <button
-          type="submit"
-          disabled={submitDisabled}
-          className="w-full rounded-lg bg-primary-500 py-1.5 text-xs font-medium text-white hover:bg-primary-600 disabled:opacity-50"
-        >
-          {adding ? 'Adding...' : 'Add Member'}
-        </button>
-      </form>
-    </section>
+      {selectedPeer && (
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="inline-flex items-center gap-1.5 rounded-full bg-secondary-100 px-2.5 py-1 text-xs font-medium text-secondary-800 dark:bg-secondary-700 dark:text-secondary-100">
+            {selectedPeer.photoURL ? (
+              <img
+                src={selectedPeer.photoURL}
+                alt=""
+                className="h-5 w-5 rounded-full object-cover"
+              />
+            ) : (
+              <span className="flex h-5 w-5 items-center justify-center rounded-full bg-secondary-300 text-[10px] dark:bg-secondary-600">
+                {(peerCapsuleLabel(selectedPeer)[0] ?? '?').toUpperCase()}
+              </span>
+            )}
+            <span className="max-w-[160px] truncate">
+              {peerCapsuleLabel(selectedPeer)}
+            </span>
+            <button
+              type="button"
+              onClick={clearSelected}
+              disabled={adding}
+              aria-label={`Remove ${peerCapsuleLabel(selectedPeer)}`}
+              className="rounded-full p-0.5 text-secondary-500 hover:bg-secondary-200 hover:text-secondary-900 disabled:opacity-50 dark:hover:bg-secondary-600 dark:hover:text-white"
+            >
+              <X className="h-3 w-3" />
+            </button>
+          </span>
+          {addressBlocked && <BlockedPeerBadge />}
+        </div>
+      )}
+
+      {selectedPeer && (
+        <DropdownMenu.Root>
+          <DropdownMenu.Trigger asChild disabled={permsDisabled}>
+            <button
+              type="button"
+              className="flex w-full items-center justify-between gap-2 rounded-lg border border-secondary-300 bg-white px-3 py-1.5 text-left text-xs text-secondary-900 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500/20 disabled:opacity-50 dark:border-secondary-600 dark:bg-secondary-700 dark:text-secondary-100"
+            >
+              <span className="truncate">{permsSummary}</span>
+              <ChevronDown className="h-3.5 w-3.5 shrink-0 text-secondary-400" />
+            </button>
+          </DropdownMenu.Trigger>
+
+          <DropdownMenu.Portal>
+            <DropdownMenu.Content
+              align="start"
+              sideOffset={4}
+              className="z-[60] max-h-64 w-[var(--radix-dropdown-menu-trigger-width)] overflow-y-auto rounded-lg border border-secondary-200 bg-white p-1 shadow-lg dark:border-secondary-700 dark:bg-secondary-900"
+            >
+              <DropdownMenu.CheckboxItem
+                checked={allPermsSelected}
+                onSelect={(e) => e.preventDefault()}
+                onCheckedChange={() =>
+                  onPermsChange(allPermsSelected ? [] : allPermValues)
+                }
+                className="flex cursor-pointer select-none items-center gap-2 rounded-md px-2 py-1.5 text-xs font-medium text-secondary-700 outline-none data-[highlighted]:bg-secondary-100 dark:text-secondary-200 dark:data-[highlighted]:bg-secondary-700"
+              >
+                <span className="flex h-3.5 w-3.5 shrink-0 items-center justify-center text-primary-600 dark:text-primary-400">
+                  <DropdownMenu.ItemIndicator>
+                    <Check className="h-3.5 w-3.5" />
+                  </DropdownMenu.ItemIndicator>
+                </span>
+                <span>Select all</span>
+              </DropdownMenu.CheckboxItem>
+
+              <DropdownMenu.Separator className="my-1 h-px bg-secondary-200 dark:bg-secondary-700" />
+
+              {messagingPermTypes.map((perm) => (
+                <DropdownMenu.CheckboxItem
+                  key={perm.key}
+                  checked={selectedPerms.includes(perm.value)}
+                  onSelect={(e) => e.preventDefault()}
+                  onCheckedChange={() => togglePerm(perm.value)}
+                  className="flex cursor-pointer select-none items-center gap-2 rounded-md px-2 py-1.5 text-xs text-secondary-600 outline-none data-[highlighted]:bg-secondary-100 dark:text-secondary-400 dark:data-[highlighted]:bg-secondary-700"
+                >
+                  <span className="flex h-3.5 w-3.5 shrink-0 items-center justify-center text-primary-600 dark:text-primary-400">
+                    <DropdownMenu.ItemIndicator>
+                      <Check className="h-3.5 w-3.5" />
+                    </DropdownMenu.ItemIndicator>
+                  </span>
+                  <span className="truncate">{perm.key}</span>
+                </DropdownMenu.CheckboxItem>
+              ))}
+            </DropdownMenu.Content>
+          </DropdownMenu.Portal>
+        </DropdownMenu.Root>
+      )}
+
+      {addressBlocked && (
+        <p className="text-xs text-danger-500">
+          You cannot add this user (blocked).
+        </p>
+      )}
+      {addError && <p className="text-xs text-danger-500">{addError}</p>}
+
+      <button
+        type="submit"
+        disabled={submitDisabled}
+        className="w-full rounded-lg bg-primary-500 py-1.5 text-xs font-medium text-white hover:bg-primary-600 disabled:opacity-50"
+      >
+        {adding ? 'Adding...' : 'Add Member'}
+      </button>
+    </form>
   );
 }

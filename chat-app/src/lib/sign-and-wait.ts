@@ -26,13 +26,15 @@ export type SignAndWaitOptions = {
  *
  * Pre-resolves user gas payment so builds do not trust stale listCoins entries
  * from the local indexer (ghost coins after regenesis).
+ *
+ * Resolves to the executed digest, or `null` when the gas pool returned none.
  */
 export async function signAndExecuteTransactionAndWait(
   client: ClientWithCoreApi,
   signer: Signer,
   transaction: Transaction,
   options: SignAndWaitOptions = {},
-): Promise<void> {
+): Promise<string | null> {
   const {
     gasBudget = 10_000_000,
     reserveDurationSecs = 420,
@@ -57,11 +59,10 @@ export async function signAndExecuteTransactionAndWait(
   }
 
   if (canAfford || !sponsoredAllowed) {
-    await executeUserPaid(client, signer, transaction);
-    return;
+    return executeUserPaid(client, signer, transaction);
   }
 
-  await executeSponsored(
+  return executeSponsored(
     client,
     signer,
     transaction,
@@ -76,7 +77,7 @@ async function executeUserPaid(
   client: ClientWithCoreApi,
   signer: Signer,
   transaction: Transaction,
-): Promise<void> {
+): Promise<string> {
   const sender = signer.toMySoAddress();
   const gas = await resolveGasPaymentForSigner(client, sender);
   if (gas.kind === 'coins') {
@@ -103,6 +104,7 @@ async function executeUserPaid(
   }
 
   await client.core.waitForTransaction({ result });
+  return tx.digest;
 }
 
 async function executeSponsored(
@@ -113,7 +115,7 @@ async function executeSponsored(
   gasBudget: number,
   reserveDurationSecs: number,
   logPrefix: string,
-): Promise<void> {
+): Promise<string | null> {
   const reservation = await reserveGas(gasBudget, reserveDurationSecs);
   const { sponsor_address, reservation_id, gas_coins } = reservation.result;
 
@@ -147,8 +149,9 @@ async function executeSponsored(
       `[${logPrefix}] Sponsored execute returned no digest; skipping waitForTransaction`,
       sponsoredResult,
     );
-    return;
+    return null;
   }
 
   await client.core.waitForTransaction({ digest });
+  return digest;
 }

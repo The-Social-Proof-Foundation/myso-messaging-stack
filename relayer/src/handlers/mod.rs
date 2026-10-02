@@ -7,6 +7,7 @@ pub mod messages;
 pub mod notification_push;
 pub mod presence;
 pub mod push_devices;
+pub mod reports;
 pub mod unread_counts;
 pub mod user_read_state;
 pub mod user_ws;

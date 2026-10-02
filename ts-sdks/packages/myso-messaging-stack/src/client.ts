@@ -353,7 +353,7 @@ export class MySoMessagingStackClient<TApproveContext = void> {
 
 		const kind = options.kind ?? 'text';
 		const sharedPostAddress =
-			kind === 'post' ? normalizeSharedPostAddress(options.sharedPostAddress) : undefined;
+			kind === 'post' ? (normalizeSharedPostAddress(options.sharedPostAddress) ?? undefined) : undefined;
 		if (kind === 'post') {
 			if (!sharedPostAddress) {
 				throw new Error('sharedPostAddress is required when kind is post');

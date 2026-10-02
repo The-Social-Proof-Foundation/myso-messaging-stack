@@ -7,9 +7,9 @@ use std::sync::RwLock;
 use uuid::Uuid;
 
 use crate::models::{
-    Attachment, ConversationPreferences, ConversationPreferencesPatch, EncryptedBlobRecord,
-    GroupActivity, Message, PaidEscrowRecord, PushTokenRecord, ReactionEntry, ReceiptStateResponse,
-    SyncStatus,
+    Attachment, ConversationPreferences, ConversationPreferencesPatch, ConversationReport,
+    EncryptedBlobRecord, GroupActivity, Message, PaidEscrowRecord, PushTokenRecord, ReactionEntry,
+    ReceiptStateResponse, SyncStatus,
 };
 
 use super::adapter::{PutUserReadStateResult, StorageAdapter, StorageError, StorageResult};
@@ -42,6 +42,8 @@ pub struct InMemoryStorage {
     paid_escrows: RwLock<HashMap<(String, i64), PaidEscrowRecord>>,
     /// Per-member conversation prefs keyed by `(group_id, wallet)`.
     conversation_preferences: RwLock<HashMap<(String, String), ConversationPreferences>>,
+    /// Metadata-only conversation reports. No message content.
+    conversation_reports: RwLock<Vec<ConversationReport>>,
 }
 
 impl InMemoryStorage {
@@ -59,6 +61,7 @@ impl InMemoryStorage {
             presence: RwLock::new(HashMap::new()),
             paid_escrows: RwLock::new(HashMap::new()),
             conversation_preferences: RwLock::new(HashMap::new()),
+            conversation_reports: RwLock::new(Vec::new()),
         }
     }
 
@@ -412,7 +415,10 @@ impl StorageAdapter for InMemoryStorage {
             .map_err(|e| StorageError::OperationFailed(format!("Lock poisoned: {}", e)))?;
         let key = (group_id.to_string(), chain_seq, emoji.to_string());
         let changed = if add {
-            reactions.entry(key.clone()).or_default().insert(member.to_string())
+            reactions
+                .entry(key.clone())
+                .or_default()
+                .insert(member.to_string())
         } else {
             match reactions.get_mut(&key) {
                 Some(set) => {
@@ -634,9 +640,7 @@ impl StorageAdapter for InMemoryStorage {
             .unwrap_or_else(ConversationPreferences::defaults);
         let had_row = map.contains_key(&key);
         let next = ConversationPreferences {
-            notification_mode: patch
-                .notification_mode
-                .unwrap_or(current.notification_mode),
+            notification_mode: patch.notification_mode.unwrap_or(current.notification_mode),
             receipt_mode: patch.receipt_mode.unwrap_or(current.receipt_mode),
             hide_online_presence: patch
                 .hide_online_presence
@@ -672,7 +676,10 @@ impl StorageAdapter for InMemoryStorage {
         Ok(out)
     }
 
-    async fn get_user_read_state(&self, wallet: &str) -> StorageResult<Option<EncryptedBlobRecord>> {
+    async fn get_user_read_state(
+        &self,
+        wallet: &str,
+    ) -> StorageResult<Option<EncryptedBlobRecord>> {
         let states = self
             .user_read_states
             .read()
@@ -721,10 +728,7 @@ impl StorageAdapter for InMemoryStorage {
             .push_tokens
             .write()
             .map_err(|e| StorageError::OperationFailed(format!("Lock poisoned: {}", e)))?;
-        tokens.insert(
-            (record.wallet.clone(), record.token.clone()),
-            record,
-        );
+        tokens.insert((record.wallet.clone(), record.token.clone()), record);
         Ok(())
     }
 
@@ -737,7 +741,10 @@ impl StorageAdapter for InMemoryStorage {
         Ok(())
     }
 
-    async fn list_push_tokens_for_wallet(&self, wallet: &str) -> StorageResult<Vec<PushTokenRecord>> {
+    async fn list_push_tokens_for_wallet(
+        &self,
+        wallet: &str,
+    ) -> StorageResult<Vec<PushTokenRecord>> {
         let tokens = self
             .push_tokens
             .read()
@@ -764,7 +771,9 @@ impl StorageAdapter for InMemoryStorage {
         let mut out: HashMap<String, Vec<PushTokenRecord>> = HashMap::new();
         for token in tokens.values() {
             if wallet_set.contains(token.wallet.as_str()) {
-                out.entry(token.wallet.clone()).or_default().push(token.clone());
+                out.entry(token.wallet.clone())
+                    .or_default()
+                    .push(token.clone());
             }
         }
         Ok(out)
@@ -816,6 +825,15 @@ impl StorageAdapter for InMemoryStorage {
             .filter(|(wallet, _)| wallet_set.contains(wallet.as_str()))
             .map(|(wallet, last_seen)| (wallet.clone(), *last_seen))
             .collect())
+    }
+
+    async fn insert_conversation_report(&self, report: ConversationReport) -> StorageResult<()> {
+        let mut reports = self
+            .conversation_reports
+            .write()
+            .map_err(|e| StorageError::OperationFailed(format!("Lock poisoned: {}", e)))?;
+        reports.push(report);
+        Ok(())
     }
 
     async fn notify_realtime_event(&self, _payload_json: &str) -> StorageResult<()> {
@@ -1212,10 +1230,16 @@ mod tests {
         );
         storage.create_message(msg).await.unwrap();
 
-        assert!(storage.has_message_from("group_1", "0xalice").await.unwrap());
+        assert!(storage
+            .has_message_from("group_1", "0xalice")
+            .await
+            .unwrap());
         // Same group, different sender — their first outbound message is still pending.
         assert!(!storage.has_message_from("group_1", "0xbob").await.unwrap());
-        assert!(!storage.has_message_from("group_2", "0xalice").await.unwrap());
+        assert!(!storage
+            .has_message_from("group_2", "0xalice")
+            .await
+            .unwrap());
     }
 
     #[tokio::test]

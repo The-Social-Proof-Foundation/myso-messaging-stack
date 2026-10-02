@@ -32,9 +32,8 @@ fn validate_push_token_body(body: &PostPushTokenBody) -> Result<(), ApiError> {
     }
 
     if platform == "ios" {
-        ApnsEnvironment::from_token_str(&body.environment).map_err(|err| {
-            ApiError::BadRequest(err)
-        })?;
+        ApnsEnvironment::from_token_str(&body.environment)
+            .map_err(|err| ApiError::BadRequest(err))?;
     }
 
     let token = body.token.trim();

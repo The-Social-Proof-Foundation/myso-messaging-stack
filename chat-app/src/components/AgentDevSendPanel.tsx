@@ -1,7 +1,10 @@
 import { useState } from 'react';
 import { createAgentMessagingClient } from '@socialproof/myso-messaging-stack';
 import type { Signer } from '@socialproof/myso/cryptography';
+import type { Ed25519Keypair } from '@socialproof/myso/keypairs/ed25519';
 
+import { findAgentKeypair } from '../lib/agents/agent-keys';
+import { readSelectedAgent } from '../lib/agents/selected-agent-store';
 import { useMessagingClient } from '../contexts/MessagingClientContext';
 
 const AGENT_DEV_ENABLED = import.meta.env.VITE_ENABLE_AGENT_DEV === 'true';
@@ -13,7 +16,7 @@ interface AgentDevSendPanelProps {
 
 /**
  * Dev-only panel for sending a test message with agent attribution fields.
- * Requires VITE_ENABLE_AGENT_DEV=true and manual env for agent credentials.
+ * Prefers the last selected derived agent from `/agents`; falls back to env credentials.
  */
 export function AgentDevSendPanel({
   humanSigner,
@@ -23,22 +26,26 @@ export function AgentDevSendPanel({
   const [text, setText] = useState('Hello from dev agent');
   const [status, setStatus] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
+  const selected = readSelectedAgent();
 
   if (!AGENT_DEV_ENABLED) {
     return null;
   }
 
-  const subAgentId = import.meta.env.VITE_AGENT_SUB_AGENT_ID;
-  const agentSecret = import.meta.env.VITE_AGENT_SECRET_KEY;
-  const platformId = import.meta.env.VITE_AGENT_PLATFORM_ID;
-  const memoryAccountId = import.meta.env.VITE_AGENT_MEMORY_ACCOUNT_ID;
+  const envSubAgentId = import.meta.env.VITE_AGENT_SUB_AGENT_ID;
+  const envAgentSecret = import.meta.env.VITE_AGENT_SECRET_KEY;
+  const platformId =
+    import.meta.env.VITE_AGENT_PLATFORM_ID || import.meta.env.VITE_PLATFORM_ID;
+  const envMemoryAccountId = import.meta.env.VITE_AGENT_MEMORY_ACCOUNT_ID;
+  const canUseSelected = Boolean(selected && platformId);
+  const canUseEnv = Boolean(envSubAgentId && envAgentSecret && platformId && envMemoryAccountId);
 
-  if (!subAgentId || !agentSecret || !platformId || !memoryAccountId) {
+  if (!canUseSelected && !canUseEnv) {
     return (
       <div className="border-t border-amber-200 bg-amber-50 px-4 py-2 text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-100">
-        Agent dev panel enabled — set VITE_AGENT_SUB_AGENT_ID, VITE_AGENT_SECRET_KEY,
-        VITE_AGENT_PLATFORM_ID, and VITE_AGENT_MEMORY_ACCOUNT_ID (principal human
-        MemoryAccount; sub-agents are registered on it and do not have their own).
+        Agent dev panel enabled — chat with an agent on /agents first, or set
+        VITE_AGENT_SUB_AGENT_ID, VITE_AGENT_SECRET_KEY, VITE_AGENT_PLATFORM_ID,
+        and VITE_AGENT_MEMORY_ACCOUNT_ID.
       </div>
     );
   }
@@ -49,23 +56,49 @@ export function AgentDevSendPanel({
     setStatus(null);
     try {
       const { Ed25519Keypair } = await import('@socialproof/myso/keypairs/ed25519');
-      const agentSigner = Ed25519Keypair.fromSecretKey(agentSecret);
+      let agentSigner: Ed25519Keypair;
+      let subAgentId: string;
+      let memoryAccountId: string;
+      let identityClass: 0 | 1 | 2 = 1;
+
+      if (selected) {
+        const derived = await findAgentKeypair(
+          humanSigner as Ed25519Keypair,
+          selected.derivedAddress,
+          selected.organizationId,
+          64,
+        );
+        if (!derived) {
+          throw new Error('Could not re-derive the selected agent key.');
+        }
+        agentSigner = derived.keypair;
+        subAgentId = selected.agentObjectId;
+        memoryAccountId = selected.memoryAccountId;
+      } else {
+        agentSigner = Ed25519Keypair.fromSecretKey(envAgentSecret!);
+        subAgentId = envSubAgentId!;
+        memoryAccountId = envMemoryAccountId!;
+        identityClass = 0;
+      }
+
       const agentClient = createAgentMessagingClient({
         messaging: client.messaging,
         agent: {
           agentSigner,
           subAgentId,
           principalOwner: humanSigner.toMySoAddress(),
-          identityClass: 0,
+          identityClass,
           memoryAccountId,
-          platformId,
+          platformId: platformId!,
         },
       });
       const result = await agentClient.sendMessage({
         groupRef: { uuid: groupUuid },
         text,
       });
-      setStatus(`Sent message ${result.messageId}`);
+      setStatus(
+        `Sent message ${result.messageId}${selected ? ` as ${selected.label}` : ''}`,
+      );
     } catch (err) {
       setStatus(err instanceof Error ? err.message : 'Agent send failed');
     } finally {
@@ -77,6 +110,7 @@ export function AgentDevSendPanel({
     <div className="border-t border-amber-200 bg-amber-50 px-4 py-3 dark:border-amber-800 dark:bg-amber-950/40">
       <p className="text-xs font-semibold text-amber-900 dark:text-amber-100">
         Agent dev send
+        {selected ? ` · ${selected.label}` : ''}
       </p>
       <textarea
         value={text}

@@ -12,6 +12,7 @@ function App() {
       {!hideAppHeader ? <AppHeader /> : null}
       <Routes>
         <Route path="/" element={<HomePage />} />
+        <Route path="/agents" element={<Navigate to="/?view=organizations" replace />} />
         <Route path="/settings" element={<SettingsPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

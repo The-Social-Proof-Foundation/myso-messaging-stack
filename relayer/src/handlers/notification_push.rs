@@ -43,13 +43,15 @@ pub async fn put_notification_key(
         ));
     }
 
-    state.notification_push.upsert_device_key(DeviceNotificationKeyRecord {
-        wallet: auth.sender_address.clone(),
-        device_id: body.device_id.trim().to_string(),
-        public_key: body.public_key.trim().to_string(),
-        platform: body.platform.to_ascii_lowercase(),
-        updated_at: Utc::now(),
-    });
+    state
+        .notification_push
+        .upsert_device_key(DeviceNotificationKeyRecord {
+            wallet: auth.sender_address.clone(),
+            device_id: body.device_id.trim().to_string(),
+            public_key: body.public_key.trim().to_string(),
+            platform: body.platform.to_ascii_lowercase(),
+            updated_at: Utc::now(),
+        });
 
     Ok(Json(serde_json::json!({ "ok": true })))
 }
@@ -77,9 +79,7 @@ pub async fn put_notification_prefs(
         ));
     }
     let mode = WalletNotificationMode::parse(&body.notification_mode).ok_or_else(|| {
-        ApiError::BadRequest(
-            "notification_mode must be all, badge_only, or none".to_string(),
-        )
+        ApiError::BadRequest("notification_mode must be all, badge_only, or none".to_string())
     })?;
     state
         .notification_push
@@ -92,9 +92,7 @@ pub async fn get_group_notification_keys(
     Extension(auth): Extension<AuthContext>,
     Path(group_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let members = state
-        .membership_store
-        .list_member_addresses(&group_id);
+    let members = state.membership_store.list_member_addresses(&group_id);
     let keys = state
         .notification_push
         .list_device_keys_for_wallets(&members)

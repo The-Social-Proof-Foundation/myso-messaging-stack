@@ -9,21 +9,49 @@ const MIGRATIONS: &[(i32, &str)] = &[
     (1, include_str!("../../migrations/001_initial.sql")),
     (2, include_str!("../../migrations/002_membership.sql")),
     (3, include_str!("../../migrations/003_group_features.sql")),
-    (4, include_str!("../../migrations/004_message_nonce_index.sql")),
-    (5, include_str!("../../migrations/005_message_attribution.sql")),
-    (6, include_str!("../../migrations/006_agent_messaging_groups.sql")),
-    (7, include_str!("../../migrations/007_message_reactions.sql")),
-    (8, include_str!("../../migrations/008_paid_message_escrows.sql")),
+    (
+        4,
+        include_str!("../../migrations/004_message_nonce_index.sql"),
+    ),
+    (
+        5,
+        include_str!("../../migrations/005_message_attribution.sql"),
+    ),
+    (
+        6,
+        include_str!("../../migrations/006_agent_messaging_groups.sql"),
+    ),
+    (
+        7,
+        include_str!("../../migrations/007_message_reactions.sql"),
+    ),
+    (
+        8,
+        include_str!("../../migrations/008_paid_message_escrows.sql"),
+    ),
     (9, include_str!("../../migrations/009_workflow_items.sql")),
-    (10, include_str!("../../migrations/010_archive_messages.sql")),
-    (11, include_str!("../../migrations/011_group_member_receipts.sql")),
+    (
+        10,
+        include_str!("../../migrations/010_archive_messages.sql"),
+    ),
+    (
+        11,
+        include_str!("../../migrations/011_group_member_receipts.sql"),
+    ),
     (12, include_str!("../../migrations/012_system_messages.sql")),
-    (13, include_str!("../../migrations/013_conversation_preferences.sql")),
-    (14, include_str!("../../migrations/014_message_is_edited.sql")),
+    (
+        13,
+        include_str!("../../migrations/013_conversation_preferences.sql"),
+    ),
+    (
+        14,
+        include_str!("../../migrations/014_message_is_edited.sql"),
+    ),
     (
         15,
         include_str!("../../migrations/015_conversation_prefs_hide_online.sql"),
     ),
+    (19, include_str!("../../migrations/019_reports.sql")),
 ];
 
 /// Strip line comments, then split into individual SQL statements.
@@ -59,13 +87,12 @@ pub async fn run_migrations(pool: &PgPool) -> StorageResult<()> {
     .map_err(|e| StorageError::OperationFailed(e.to_string()))?;
 
     for (version, sql) in MIGRATIONS {
-        let applied: Option<i32> = sqlx::query_scalar(
-            "SELECT version FROM schema_migrations WHERE version = $1",
-        )
-        .bind(version)
-        .fetch_optional(pool)
-        .await
-        .map_err(|e| StorageError::OperationFailed(e.to_string()))?;
+        let applied: Option<i32> =
+            sqlx::query_scalar("SELECT version FROM schema_migrations WHERE version = $1")
+                .bind(version)
+                .fetch_optional(pool)
+                .await
+                .map_err(|e| StorageError::OperationFailed(e.to_string()))?;
 
         if applied.is_some() {
             continue;

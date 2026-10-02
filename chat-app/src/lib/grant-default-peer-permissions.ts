@@ -182,6 +182,23 @@ async function grantWithRetry(
 }
 
 /**
+ * Grants send, edit, and delete when `member` is missing them.
+ *
+ * Already-held permissions are left out of the transaction. Re-granting one (reader, on an
+ * agent chat) aborts the whole batch, which is how agent chats ended up readable but not
+ * writable.
+ */
+export async function grantMemberMessagingPermissions(options: {
+  client: GrantClient;
+  signer: Signer;
+  groupId: string;
+  member: string;
+}): Promise<void> {
+  const {client, signer, groupId, member} = options;
+  await grantWithRetry(client, signer, groupId, member, corePeerPermissionTypes(client));
+}
+
+/**
  * Best-effort grant of collaborative messaging permissions after group create.
  * Creator already has full caps from `create_and_share_group`.
  *

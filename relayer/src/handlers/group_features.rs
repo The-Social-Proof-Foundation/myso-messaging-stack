@@ -128,13 +128,16 @@ pub async fn post_reaction(
     // Postgres storage fans out via pg_notify; inline publish covers in-memory.
     if let Some(entry) = &updated {
         if state.realtime_enabled && state.inline_realtime_publish {
-            state
-                .realtime_hub
-                .publish_reaction(&group_id, ReactionUpdatedEvent::new(group_id.clone(), entry));
+            state.realtime_hub.publish_reaction(
+                &group_id,
+                ReactionUpdatedEvent::new(group_id.clone(), entry),
+            );
         }
     }
 
-    Ok(Json(serde_json::json!({ "ok": true, "changed": updated.is_some() })))
+    Ok(Json(
+        serde_json::json!({ "ok": true, "changed": updated.is_some() }),
+    ))
 }
 
 pub async fn list_reactions(
@@ -175,7 +178,11 @@ pub async fn post_typing(
         return Ok(Json(serde_json::json!({ "ok": true, "broadcast": false })));
     }
 
-    if body.typing && !state.typing_rate.allow_start(&auth.sender_address, &group_id) {
+    if body.typing
+        && !state
+            .typing_rate
+            .allow_start(&auth.sender_address, &group_id)
+    {
         return Ok(Json(serde_json::json!({ "ok": true, "broadcast": false })));
     }
 

@@ -78,9 +78,8 @@ pub async fn put_read_state(
         ));
     }
 
-    let encrypted_blob = hex::decode(&body.encrypted_blob).map_err(|e| {
-        ApiError::BadRequest(format!("Invalid hex in encrypted_blob: {}", e))
-    })?;
+    let encrypted_blob = hex::decode(&body.encrypted_blob)
+        .map_err(|e| ApiError::BadRequest(format!("Invalid hex in encrypted_blob: {}", e)))?;
 
     let result = state
         .storage
@@ -99,8 +98,10 @@ pub async fn put_read_state(
                         blob_version,
                     });
             }
-            Ok(Json(serde_json::json!({ "ok": true, "blob_version": blob_version }))
-                .into_response())
+            Ok(
+                Json(serde_json::json!({ "ok": true, "blob_version": blob_version }))
+                    .into_response(),
+            )
         }
         PutUserReadStateResult::Conflict { current } => Ok((
             StatusCode::CONFLICT,

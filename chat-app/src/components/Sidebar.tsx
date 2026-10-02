@@ -6,6 +6,8 @@ import { useOwnWalletProfile } from '../hooks/useOwnWalletProfile';
 import { useSidebarGroupMembers } from '../hooks/useSidebarGroupMembers';
 import { useSidebarMessagePreviews } from '../hooks/useSidebarMessagePreviews';
 import { useWalletAvatarMap } from '../hooks/useWalletAvatarMap';
+import { useAgentNamesByAddress } from '../hooks/agents/useSubAgents';
+import { conversationPeerLabel } from '../lib/agents/agent-display-name';
 import {
   conversationDisplayTitle,
   dmPeerAddress,
@@ -13,6 +15,8 @@ import {
 } from '../lib/wallet-profile';
 import { ConversationAvatar } from './ConversationAvatar';
 import { SidebarPromo } from './SidebarPromo';
+import { AgentViewToggle } from './agents/AgentViewToggle';
+import { sidebarShellClass } from './SidebarShell';
 
 interface SidebarProps {
   groups: StoredGroup[];
@@ -23,6 +27,8 @@ interface SidebarProps {
   /** Groups whose unread messages are paid-DM requests (reply claims escrow). */
   paidDmGroupIds?: Set<string>;
   onSelectGroup: (uuid: string) => void;
+  /** Swaps the sidebar into the organizations-and-agents view. */
+  onOpenAgentView: () => void;
   loading?: boolean;
 }
 
@@ -33,6 +39,7 @@ export function Sidebar({
   latestOrders = {},
   paidDmGroupIds,
   onSelectGroup,
+  onOpenAgentView,
   loading = false,
 }: Readonly<SidebarProps>) {
   const address = useAuthenticatedAddress();
@@ -57,9 +64,12 @@ export function Sidebar({
     return [...addrs];
   }, [membersByGroup, address]);
   const profiles = useWalletAvatarMap(profileAddresses);
+  const agentNames = useAgentNamesByAddress();
 
   return (
-    <aside className="flex h-full min-h-0 w-full flex-1 flex-col border-r border-secondary-200/80 bg-white dark:border-secondary-700 dark:bg-secondary-900">
+    <aside className={sidebarShellClass}>
+      <AgentViewToggle onOpen={onOpenAgentView} />
+
       {/* Group list */}
       <div className="flex-1 overflow-y-auto">
         {groups.length === 0 ? (
@@ -89,7 +99,11 @@ export function Sidebar({
                 selfLabels,
                 memberAddresses: members,
                 selfAddress: address,
-                peerLabel: peer ? profiles.headerTitleFor(peer) : null,
+                peerLabel: conversationPeerLabel(
+                  peer,
+                  agentNames,
+                  peer ? profiles.headerTitleFor(peer) : null,
+                ),
               });
               const preview = previews.get(group.groupId) ?? '';
               return (

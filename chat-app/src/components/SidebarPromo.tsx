@@ -1,9 +1,9 @@
 import { useEffect, useState, type MouseEvent } from 'react';
+import { Link } from 'react-router-dom';
 import { X } from 'lucide-react';
 
 const DISMISS_KEY = 'chat-app-promo-sub-agentic-conversations-v1';
 const DISMISS_TTL_MS = 60 * 60 * 1000; // 1 hour
-const DOCS_URL = 'https://docs.mysocial.network/mysocial/mydata/ai-agents';
 
 function isDismissed(): boolean {
   try {
@@ -19,7 +19,7 @@ function isDismissed(): boolean {
 
 /**
  * Compact bottom-of-sidebar teaser card (dismissible for 1 hour).
- * Card opens AI Agents docs; close dismisses without navigating.
+ * Card opens the in-app Agents workspace.
  */
 export function SidebarPromo() {
   const [visible, setVisible] = useState(false);
@@ -43,10 +43,8 @@ export function SidebarPromo() {
 
   return (
     <div className="shrink-0 overflow-visible p-3">
-      <a
-        href={DOCS_URL}
-        target="_blank"
-        rel="noopener noreferrer"
+      <Link
+        to="/?view=organizations"
         className="block origin-center overflow-hidden rounded-2xl border border-secondary-200 bg-secondary-100 shadow-sm transition-transform duration-200 ease-out hover:scale-102 active:scale-100 dark:border-secondary-600 dark:bg-secondary-700"
       >
         <div className="relative">
@@ -67,15 +65,13 @@ export function SidebarPromo() {
         </div>
         <div className="space-y-1.5 px-3.5 py-3">
           <p className="font-chakra text-[15px] font-semibold tracking-tight text-secondary-900 dark:text-white">
-            Sub-Agentic Conversations
+            Agents & Organizations
           </p>
           <p className="text-xs leading-relaxed text-secondary-600 dark:text-secondary-300">
-            Organization workspaces, permissioned multi-agent workflows, and
-            shared inboxes that run alongside human chats.{' '}
-            <b className="font-chakra font-semibold">Coming soon.</b>
+            Create agents, fund AI credits, chat with memory.
           </p>
         </div>
-      </a>
+      </Link>
     </div>
   );
 }
