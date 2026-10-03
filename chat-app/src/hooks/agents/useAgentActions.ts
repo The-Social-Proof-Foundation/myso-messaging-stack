@@ -322,6 +322,8 @@ export function useAgentActions() {
       agentObjectId: string;
       organizationId?: string | null;
       capabilities: number;
+      /** Caps this agent may grant to children. Defaults to `capabilities`. */
+      delegatableCaps?: number;
       expiresAtMs?: number | null;
       label?: string;
     }) {
@@ -331,7 +333,7 @@ export function useAgentActions() {
         accountId: args.accountId,
         agentObjectId: args.agentObjectId,
         capabilities: args.capabilities,
-        delegatableCaps: args.capabilities,
+        delegatableCaps: args.delegatableCaps ?? args.capabilities,
         expiresAtMs: args.expiresAtMs ?? null,
       });
       if (args.label) {

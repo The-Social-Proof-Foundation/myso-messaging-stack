@@ -15,6 +15,7 @@ import {
   askAgent,
   createAgentMemoryClient,
   MemoryClientError,
+  rememberAgentFact,
 } from '../../lib/agents/memory-client';
 import {fetchSubAgentByObjectId, fetchSubAgents} from '../../lib/agents/social-api';
 import {useAgentChatPlatform} from './useAgentChatPlatform';
@@ -122,6 +123,14 @@ export function useAgentMemoryReply(groupId: string, groupUuid: string) {
           );
           return;
         }
+        if (!hasCapability(agent.capabilities, 'MYDATA_READ')) {
+          setError('This agent needs Read MyData before it can answer.');
+          return;
+        }
+        if (!hasCapability(agent.capabilities, 'MEMORY_WRITE')) {
+          setError('This agent needs write memory before it can remember this chat.');
+          return;
+        }
         const memoryAccountId = account.data?.account_id;
         if (!memoryAccountId) {
           setError('A memory account is required before this agent can answer.');
@@ -149,6 +158,7 @@ export function useAgentMemoryReply(groupId: string, groupUuid: string) {
         }
 
         const memory = createAgentMemoryClient(derived, memoryAccountId);
+        await rememberAgentFact(memory, text);
         const result = await askAgent(memory, {question: text});
         const answer = result.answer.trim() || "I don't have anything in memory for that.";
 

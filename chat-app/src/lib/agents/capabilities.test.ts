@@ -21,6 +21,7 @@ describe('capability bits', () => {
   it('match memory.move cap_* values', () => {
     expect(CAP.MEMORY_READ).toBe(1);
     expect(CAP.MEMORY_WRITE).toBe(2);
+    expect(CAP.MYDATA_READ).toBe(4);
     expect(CAP.MESSAGE_READ).toBe(32);
     expect(CAP.MESSAGE_SEND).toBe(64);
     expect(CAP.AGENT_REVOKE).toBe(2048);
@@ -32,22 +33,24 @@ describe('capability bits', () => {
 });
 
 describe('capability presets', () => {
-  it('chat assistant = memory read | memory write | AI spend', () => {
-    expect(preset('chat')).toBe(1 | 2 | 16384);
+  it('chat assistant = memory read | memory write | MyData read | AI spend', () => {
+    expect(preset('chat')).toBe(1 | 2 | 4 | 16384);
+    expect(hasCapability(preset('chat'), 'MYDATA_READ')).toBe(true);
   });
 
   it('messenger adds message read and send', () => {
-    expect(preset('messenger')).toBe(1 | 2 | 16384 | 32 | 64);
+    expect(preset('messenger')).toBe(1 | 2 | 4 | 16384 | 32 | 64);
   });
 
   it('manager adds agent register/update/revoke and budget manage', () => {
-    expect(preset('manager')).toBe(1 | 2 | 16384 | 32 | 64 | 8192 | 4096 | 2048 | 32768);
+    expect(preset('manager')).toBe(1 | 2 | 4 | 16384 | 32 | 64 | 8192 | 4096 | 2048 | 32768);
   });
 
   it('maps masks back to presets or custom', () => {
     expect(presetForMask(preset('messenger'))).toBe('messenger');
     expect(presetForMask(preset('chat') | CAP.REACT)).toBe('custom');
     expect(presetForMask(preset('messenger') | CAP.AGENT_REGISTER)).toBe('messenger');
+    expect(presetForMask(preset('messenger') & ~CAP.MYDATA_READ)).toBe('messenger');
   });
 });
 
@@ -79,6 +82,7 @@ describe('mask helpers', () => {
     expect(capabilityNames(mask)).toEqual([
       'MEMORY_READ',
       'MEMORY_WRITE',
+      'MYDATA_READ',
       'MESSAGE_SEND',
       'AI_SPEND',
     ]);

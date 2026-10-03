@@ -1,17 +1,37 @@
-import {useMemo, useState} from 'react';
-import {Check, ChevronLeft, Copy, MessageSquare, ScrollText, X} from 'lucide-react';
+import {useEffect, useMemo, useState, type ReactNode} from 'react';
+import {useQuery, useQueryClient} from '@tanstack/react-query';
+import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
+import {Check, ChevronDown, ChevronLeft, Copy, MessageSquare, ScrollText, X} from 'lucide-react';
 
 import {Avatar, AvatarFallback} from '@/components/ui/avatar';
 import {Badge} from '@/components/ui/badge';
 import {Button} from '@/components/ui/button';
 import {Separator} from '@/components/ui/separator';
+import {IosToggle} from '@/components/IosToggle';
 import {MysoAmount} from '@/components/agents/MysoAmount';
 import {AgentStatusDot} from '@/components/blocks/AgentStatusMark';
+import {useAgentActions, useMemoryAccount, useOrgAuditLogs, useOrgSpendBreakdown} from '@/hooks/agents';
+import {useDerivedAgentKey} from '@/hooks/agents/useDerivedAgentKey';
+import {useAllSubAgents} from '@/hooks/agents/useSubAgents';
 import type {AgentChartNode} from '@/lib/agents/agent-chart';
+import {
+  CAP,
+  CAPABILITY_LABELS,
+  CAPABILITY_NAMES,
+  hasCapability,
+  type CapabilityName,
+} from '@/lib/agents/capabilities';
 import {formatMistAmount} from '@/lib/agents/format';
 import {formatTimestamp, humanizeKey} from '@/lib/agents/org-display';
-import {SocialServerError} from '@/lib/agents/social-api';
-import {useOrgAuditLogs, useOrgSpendBreakdown} from '@/hooks/agents';
+import {
+  createAgentMemoryClient,
+  getAgentLlmModel,
+  listLlmModels,
+  setAgentLlmModel,
+  type AgentLlmModel,
+  type LlmModelOption,
+} from '@/lib/agents/memory-client';
+import {SocialServerError, type SubAgentRow} from '@/lib/agents/social-api';
 
 interface AgentProfileDrawerProps {
   agent: AgentChartNode;
@@ -38,6 +58,15 @@ export function AgentProfileDrawer({
   const [view, setView] = useState<'details' | 'audit'>('details');
   const spend = useOrgSpendBreakdown(organizationId);
   const audit = useOrgAuditLogs(organizationId);
+  const agents = useAllSubAgents();
+  const account = useMemoryAccount();
+  const actions = useAgentActions();
+  const row = useMemo(
+    () => agents.items.find((item) => sameId(item.agent_object_id, agent.id)) ?? null,
+    [agents.items, agent.id],
+  );
+  const accountId = account.data?.account_id ?? null;
+  const canPickModel = ownsAgent(accountId, row);
   const spendRow = useMemo(
     () => spend.items.find((row) => sameId(row.agent_object_id, agent.id)) ?? null,
     [spend.items, agent.id],
@@ -77,11 +106,14 @@ export function AgentProfileDrawer({
         </Button>
       </div>
 
-      <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-4">
+      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
         {view === 'audit' ? (
-          <AuditLogList audit={audit} rows={auditRows} />
+          <div className="p-4">
+            <AuditLogList audit={audit} rows={auditRows} />
+          </div>
         ) : (
           <>
+        <div className="flex flex-col gap-4 p-4">
         <div className="flex items-start gap-3">
           <div className="relative shrink-0">
             <Avatar className="size-12 border border-border">
@@ -130,10 +162,11 @@ export function AgentProfileDrawer({
             </Button>
           ) : null}
         </div>
+        </div>
 
         <Separator />
 
-        <div>
+        <div className="p-4">
           <p className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
             Stats
           </p>
@@ -163,21 +196,31 @@ export function AgentProfileDrawer({
 
         <Separator />
 
+        {canPickModel && row && accountId ? (
+          <>
+            <div className="p-4">
+              <ModelControls
+                row={row}
+                accountId={accountId}
+                maxIndex={Math.max(agents.totalCount ?? 0, 32)}
+              />
+            </div>
+            <Separator />
+          </>
+        ) : null}
+
+        <div className="flex flex-col gap-4 p-4">
         <div>
           <p className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
             Capabilities
           </p>
-          {agent.capabilities.length === 0 ? (
-            <p className="mt-2 text-xs text-muted-foreground">No capabilities.</p>
-          ) : (
-            <div className="mt-2 flex flex-wrap gap-1.5">
-              {agent.capabilities.map((capability) => (
-                <Badge key={capability} variant="secondary">
-                  {capability}
-                </Badge>
-              ))}
-            </div>
-          )}
+          <CapabilityControls
+            labels={agent.capabilities}
+            row={row}
+            accountId={account.data?.account_id ?? null}
+            organizationId={organizationId}
+            onSave={actions.updateAgent}
+          />
         </div>
 
         {agent.parentName ? (
@@ -189,10 +232,225 @@ export function AgentProfileDrawer({
             <p className="text-xs text-muted-foreground">{agent.parentRole}</p>
           </div>
         ) : null}
+        </div>
           </>
         )}
       </div>
     </aside>
+  );
+}
+
+const modelMenuItemClass =
+  'flex cursor-pointer items-center justify-between gap-2 rounded-sm px-2 py-1.5 text-sm text-foreground outline-none data-[highlighted]:bg-muted';
+
+function ModelControls({
+  row,
+  accountId,
+  maxIndex,
+}: Readonly<{
+  row: SubAgentRow;
+  accountId: string;
+  maxIndex: number;
+}>) {
+  const queryClient = useQueryClient();
+  const derived = useDerivedAgentKey(row, maxIndex);
+  const memory = useMemo(
+    () => (derived.data ? createAgentMemoryClient(derived.data, accountId) : null),
+    [accountId, derived.data],
+  );
+  const models = useQuery({
+    queryKey: ['agents', 'llm-models', row.agent_object_id],
+    enabled: Boolean(memory),
+    queryFn: () => listLlmModels(memory!),
+  });
+  const current = useQuery({
+    queryKey: ['agents', 'llm-model', row.agent_object_id],
+    enabled: Boolean(memory),
+    queryFn: () => getAgentLlmModel(memory!),
+  });
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const options = models.data?.models ?? [];
+  const selected = current.data?.model_id ?? '';
+  const selectedLabel =
+    options.find((option) => option.id === selected)?.display_name || selected || 'Model';
+
+  async function choose(option: LlmModelOption) {
+    if (!memory || saving || option.id === selected) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const saved = await setAgentLlmModel(memory, option.id);
+      queryClient.setQueryData<AgentLlmModel>(['agents', 'llm-model', row.agent_object_id], saved);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not update this model.');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  let body: ReactNode;
+  if (derived.isPending || derived.isLoading) {
+    body = <p className="mt-2 text-xs text-muted-foreground">Loading model…</p>;
+  } else if (!derived.data) {
+    body = <p className="mt-2 text-xs text-destructive">Could not re-derive this agent key.</p>;
+  } else if (models.isPending || current.isPending) {
+    body = <p className="mt-2 text-xs text-muted-foreground">Loading model…</p>;
+  } else if (models.isError || current.isError) {
+    body = <p className="mt-2 text-xs text-destructive">Could not load models.</p>;
+  } else if (options.length === 0) {
+    body = <p className="mt-2 text-xs text-muted-foreground">No models are available.</p>;
+  } else {
+    body = (
+      <DropdownMenu.Root>
+        <DropdownMenu.Trigger asChild disabled={saving}>
+          <button
+            type="button"
+            className="mt-2 flex w-full items-center justify-between gap-2 rounded-md border border-border bg-background px-2.5 py-1.5 text-left text-sm text-foreground disabled:opacity-60"
+            aria-label="Model"
+            disabled={saving}
+          >
+            <span className="truncate">
+              {selectedLabel}
+              {saving ? <span className="ml-1.5 text-xs text-muted-foreground">Saving…</span> : null}
+            </span>
+            <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" strokeWidth={2} aria-hidden />
+          </button>
+        </DropdownMenu.Trigger>
+        <DropdownMenu.Portal>
+          <DropdownMenu.Content
+            align="start"
+            sideOffset={6}
+            className="z-50 max-h-64 w-[var(--radix-dropdown-menu-trigger-width)] overflow-y-auto rounded-md border border-border bg-card p-1 shadow-md"
+          >
+            {options.map((option) => (
+              <DropdownMenu.Item
+                key={option.id}
+                className={modelMenuItemClass}
+                onSelect={() => void choose(option)}
+              >
+                <span className="truncate">{option.display_name}</span>
+                {option.id === selected ? (
+                  <Check className="size-3.5 shrink-0" strokeWidth={2} aria-hidden />
+                ) : null}
+              </DropdownMenu.Item>
+            ))}
+          </DropdownMenu.Content>
+        </DropdownMenu.Portal>
+      </DropdownMenu.Root>
+    );
+  }
+
+  return (
+    <div>
+      <p className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">Model</p>
+      {body}
+      {error ? <p className="mt-2 text-xs text-destructive">{error}</p> : null}
+    </div>
+  );
+}
+
+function ownsAgent(accountId: string | null, row: SubAgentRow | null): boolean {
+  if (!accountId || !row || !row.active || row.revoked_at_ms) return false;
+  return sameId(accountId, row.account_id);
+}
+
+function withBit(mask: number, bit: number, on: boolean): number {
+  return on ? mask | bit : mask & ~bit;
+}
+
+function CapabilityControls({
+  labels,
+  row,
+  accountId,
+  organizationId,
+  onSave,
+}: Readonly<{
+  labels: string[];
+  row: SubAgentRow | null;
+  accountId: string | null;
+  organizationId: string | null;
+  onSave: (args: {
+    accountId: string;
+    agentObjectId: string;
+    organizationId?: string | null;
+    capabilities: number;
+    delegatableCaps: number;
+    expiresAtMs?: number | null;
+  }) => Promise<void>;
+}>) {
+  const canEdit = ownsAgent(accountId, row);
+  const [pending, setPending] = useState<{name: CapabilityName; on: boolean} | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!pending || !row) return;
+    if (hasCapability(row.capabilities, pending.name) === pending.on) setPending(null);
+  }, [pending, row]);
+
+  if (!canEdit || !row || !accountId) {
+    if (labels.length === 0) {
+      return <p className="mt-2 text-xs text-muted-foreground">No capabilities.</p>;
+    }
+    return (
+      <div className="mt-2 flex flex-wrap gap-1.5">
+        {labels.map((capability) => (
+          <Badge key={capability} variant="secondary">
+            {capability}
+          </Badge>
+        ))}
+      </div>
+    );
+  }
+
+  async function change(name: CapabilityName, next: boolean) {
+    if (!row || !accountId || saving) return;
+    const bit = CAP[name];
+    setPending({name, on: next});
+    setSaving(true);
+    setError(null);
+    try {
+      await onSave({
+        accountId,
+        agentObjectId: row.agent_object_id,
+        organizationId: row.organization_id ?? organizationId,
+        capabilities: withBit(row.capabilities, bit, next),
+        delegatableCaps: withBit(row.delegatable_caps, bit, next),
+        expiresAtMs: row.expires_at_ms,
+      });
+    } catch (err) {
+      setPending(null);
+      setError(err instanceof Error ? err.message : 'Could not update this capability.');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="mt-3 flex flex-col gap-3">
+      {CAPABILITY_NAMES.map((name) => {
+        const checked = pending?.name === name ? pending.on : hasCapability(row.capabilities, name);
+        return (
+          <div key={name} className="flex items-center justify-between gap-3">
+            <span className="min-w-0 text-sm text-foreground">
+              {CAPABILITY_LABELS[name]}
+              {saving && pending?.name === name ? (
+                <span className="ml-1.5 text-xs text-muted-foreground">Saving…</span>
+              ) : null}
+            </span>
+            <IosToggle
+              checked={checked}
+              disabled={saving}
+              onChange={(next) => void change(name, next)}
+              aria-label={CAPABILITY_LABELS[name]}
+            />
+          </div>
+        );
+      })}
+      {error ? <p className="text-xs text-destructive">{error}</p> : null}
+    </div>
   );
 }
 

@@ -26,6 +26,18 @@ export interface AskResult {
   amount_mist: number | null;
 }
 
+export interface LlmModelOption {
+  id: string;
+  display_name: string;
+  input_mist_per_1m: number;
+  output_mist_per_1m: number;
+}
+
+export interface AgentLlmModel {
+  model_id: string;
+  source: 'saved' | 'default';
+}
+
 export type MemoryClientErrorKind =
   | 'insufficient_credits'
   | 'approval_required'
@@ -109,6 +121,49 @@ export async function askAgent(
   } catch (error) {
     throw classifyMemoryError(error);
   }
+}
+
+async function signedMemoryRequest<T>(
+  memory: Memory,
+  method: string,
+  path: string,
+  body: object,
+): Promise<T> {
+  try {
+    return await (memory as unknown as SignedRequestFn).signedRequest<T>(method, path, body);
+  } catch (error) {
+    throw classifyMemoryError(error);
+  }
+}
+
+export function listLlmModels(memory: Memory): Promise<{models: LlmModelOption[]}> {
+  return signedMemoryRequest(memory, 'GET', '/api/models', {});
+}
+
+export async function getAgentLlmModel(memory: Memory): Promise<AgentLlmModel> {
+  const body = await signedMemoryRequest<{model_id?: string; source?: string}>(
+    memory,
+    'GET',
+    '/api/agent/llm-model',
+    {},
+  );
+  return {
+    model_id: body.model_id ?? '',
+    source: body.source === 'saved' ? 'saved' : 'default',
+  };
+}
+
+export async function setAgentLlmModel(memory: Memory, modelId: string): Promise<AgentLlmModel> {
+  const body = await signedMemoryRequest<{model_id?: string; source?: string}>(
+    memory,
+    'PUT',
+    '/api/agent/llm-model',
+    {model_id: modelId},
+  );
+  return {
+    model_id: body.model_id ?? modelId,
+    source: body.source === 'default' ? 'default' : 'saved',
+  };
 }
 
 export async function rememberAgentFact(

@@ -43,7 +43,8 @@ export const CAPABILITY_NAMES = Object.keys(CAP) as CapabilityName[];
 
 export type CapabilityPresetId = 'chat' | 'messenger' | 'manager' | 'custom';
 
-const CHAT_ASSISTANT_MASK = CAP.MEMORY_READ | CAP.MEMORY_WRITE | CAP.AI_SPEND;
+const CHAT_ASSISTANT_MASK =
+  CAP.MEMORY_READ | CAP.MEMORY_WRITE | CAP.MYDATA_READ | CAP.AI_SPEND;
 const MESSENGER_MASK = CHAT_ASSISTANT_MASK | CAP.MESSAGE_READ | CAP.MESSAGE_SEND;
 const MANAGER_MASK =
   MESSENGER_MASK |
@@ -63,7 +64,7 @@ export const CAPABILITY_PRESETS: readonly CapabilityPreset[] = [
   {
     id: 'chat',
     label: 'Chat assistant',
-    description: 'Reads and writes its memory and spends AI credits to answer.',
+    description: 'Reads its MyData and memory, writes memory, and spends AI credits to answer.',
     mask: CHAT_ASSISTANT_MASK,
   },
   {
@@ -92,12 +93,19 @@ export function capabilityNames(mask: number): CapabilityName[] {
   return CAPABILITY_NAMES.filter((name) => hasCapability(mask, name));
 }
 
-/** Preset whose mask matches exactly, or `'custom'`. A root's extra register bit still matches. */
+/** Preset whose mask matches exactly, or `'custom'`. A root's extra register bit still matches. Agents created before MyData read was part of the preset still match. */
 export function presetForMask(mask: number): CapabilityPresetId {
-  const exact = CAPABILITY_PRESETS.find((preset) => preset.mask === mask);
-  if (exact) return exact.id;
-  const withoutRegister = mask & ~CAP.AGENT_REGISTER;
-  return CAPABILITY_PRESETS.find((preset) => preset.mask === withoutRegister)?.id ?? 'custom';
+  const candidates = [
+    mask,
+    mask & ~CAP.AGENT_REGISTER,
+    mask | CAP.MYDATA_READ,
+    (mask & ~CAP.AGENT_REGISTER) | CAP.MYDATA_READ,
+  ];
+  for (const candidate of candidates) {
+    const found = CAPABILITY_PRESETS.find((preset) => preset.mask === candidate);
+    if (found) return found.id;
+  }
+  return 'custom';
 }
 
 /** Root agents must be able to register the agents beneath them. */
