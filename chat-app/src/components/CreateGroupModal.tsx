@@ -16,7 +16,7 @@ import {
 import { signAndExecuteTransactionAndWait } from '../lib/sign-and-wait';
 import { addStoredGroup } from '../lib/group-store';
 import { formatCreateGroupError } from '../lib/format-create-group-error';
-import { grantDefaultPeerPermissions } from '../lib/grant-default-peer-permissions';
+import { grantDefaultPeerPermissions, grantMemberMessagingPermissions } from '../lib/grant-default-peer-permissions';
 import { waitForGroupReady } from '../lib/wait-for-relayer-membership';
 import {
   assertMemoryRegistryConfigured,
@@ -287,9 +287,7 @@ export function CreateGroupModal({
 
     try {
       const sender = signer.toMySoAddress();
-      const groupName = await resolveGroupName(
-        dedupeAddresses([...initialMembers, sender]),
-      );
+      const groupName = await resolveGroupName(dedupeAddresses(initialMembers));
       const uuid = crypto.randomUUID();
 
       const client = await createFreshMessagingClient({
@@ -377,6 +375,16 @@ export function CreateGroupModal({
           (addr) => addr.toLowerCase() !== sender.toLowerCase(),
         ),
       });
+      try {
+        await grantMemberMessagingPermissions({
+          client,
+          signer,
+          groupId,
+          member: sender,
+        });
+      } catch (err) {
+        console.warn('[chat-app] creator send permission grant failed (group still created):', err);
+      }
 
       addStoredGroup({
         uuid,
@@ -478,6 +486,16 @@ export function CreateGroupModal({
         groupId,
         peers: [pendingPaidDm.recipient],
       });
+      try {
+        await grantMemberMessagingPermissions({
+          client,
+          signer,
+          groupId,
+          member: sender,
+        });
+      } catch (err) {
+        console.warn('[chat-app] creator send permission grant failed (group still created):', err);
+      }
 
       addStoredGroup({
         uuid,

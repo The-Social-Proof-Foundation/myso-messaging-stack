@@ -50,7 +50,10 @@ import {
   shouldUseRedirectAuth,
 } from '../lib/auth-utils';
 import {
+  ZKLOGIN_PROOF_EXPIRED_EVENT,
   clearZkLoginSigner,
+  isZkLoginAccount,
+  restoreZkLoginSignerStatus,
   resumePendingZkLogin,
   sessionLooksLikeZkLogin,
   signInWithZkLogin,
@@ -63,6 +66,7 @@ import {
 
 const SESSION_EXPIRED_MESSAGE =
   'Session expired — please sign in again';
+const ZKLOGIN_EXPIRED_MESSAGE = 'Session expired. Sign in again.';
 
 function applyRefreshTokenGuard(
   s: Session | null,
@@ -152,6 +156,8 @@ export function MySocialAuthProvider({
 
   const hadSessionRef = useRef(false);
   const zkResumeStartedRef = useRef(false);
+  const zkExpiryHandledRef = useRef(false);
+  const logoutBecauseZkLoginExpiredRef = useRef<() => Promise<void>>(async () => {});
   const proactiveRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
     null,
   );
@@ -372,7 +378,9 @@ export function MySocialAuthProvider({
 
     const zkKeypair = zkLoginEphemeralKeypair();
     const expectedAddressEarly = session.user?.address;
-    if (sessionLooksLikeZkLogin() && zkKeypair && expectedAddressEarly && !zkLoginProofRunning()) {
+    const zkSession = sessionLooksLikeZkLogin() || isZkLoginAccount();
+
+    if (zkSession && zkKeypair && expectedAddressEarly && !zkLoginProofRunning() && !zkLoginPending()) {
       setKeypair(zkKeypair);
       setIsUsingDevMessengerSigner(false);
       setDeriveKeyError(null);
@@ -380,7 +388,7 @@ export function MySocialAuthProvider({
       return;
     }
 
-    if (isTrueWalletOnlySession(session)) {
+    if (isTrueWalletOnlySession(session) && !zkSession) {
       if (devUnblockEnabled()) {
         applyDevSigner(
           setKeypair,
@@ -421,6 +429,61 @@ export function MySocialAuthProvider({
         });
       }
       return;
+    }
+
+    if (zkSession) {
+      let cancelled = false;
+      setIsUsingDevMessengerSigner(false);
+      setDeriveKeyError(null);
+      setDerivingKeypair(true);
+      void (async () => {
+        const status = await restoreZkLoginSignerStatus();
+        if (cancelled) return;
+        if (status === 'clock-unavailable') {
+          window.setTimeout(() => {
+            if (!cancelled) setDeriveNonce((n) => n + 1);
+          }, 2000);
+          return;
+        }
+        if (status === 'ok') {
+          const kp = zkLoginEphemeralKeypair();
+          if (kp) {
+            zkExpiryHandledRef.current = false;
+            setKeypair(kp);
+            setDerivingKeypair(false);
+            return;
+          }
+        }
+        if (zkLoginPending() || zkLoginProofInFlight()) {
+          if (!zkLoginProofRunning() && zkLoginPending() && !zkResumeStartedRef.current) {
+            zkResumeStartedRef.current = true;
+            try {
+              await resumePendingZkLogin();
+              if (cancelled) return;
+              const kp = zkLoginEphemeralKeypair();
+              if (kp) {
+                zkExpiryHandledRef.current = false;
+                setKeypair(kp);
+                setDerivingKeypair(false);
+                return;
+              }
+            } catch (e: unknown) {
+              if (cancelled) return;
+              const message = e instanceof Error ? e.message : 'Sign in failed.';
+              finishLoginCelebration();
+              setSignInError(message);
+              setDeriveKeyError(message);
+              setDerivingKeypair(false);
+              return;
+            }
+          }
+          return;
+        }
+        await logoutBecauseZkLoginExpiredRef.current();
+      })();
+      return () => {
+        cancelled = true;
+      };
     }
 
     if (!expectedAddress) {
@@ -561,14 +624,14 @@ export function MySocialAuthProvider({
 
     if (shouldUseRedirectAuth()) {
       beginSigningIn();
-      void startZkLoginRedirect('google').catch((e: unknown) => {
+      void startZkLoginRedirect('none').catch((e: unknown) => {
         finishLoginCelebration();
         setSignInError(e instanceof Error ? e.message : 'Sign-in failed or was cancelled.');
       });
       return;
     }
     setDerivingKeypair(true);
-    void signInWithZkLogin('google', { onAuthWindowClosed: beginSigningIn })
+    void signInWithZkLogin('none', { onAuthWindowClosed: beginSigningIn })
       .then(async () => {
         const next = authRef.current;
         const stored = next ? await next.getSession() : null;
@@ -620,6 +683,52 @@ export function MySocialAuthProvider({
       setDeriveKeyError(null);
     }
   }, [clearProactiveRefreshTimer, finishLoginCelebration]);
+
+  const logoutBecauseZkLoginExpired = useCallback(async () => {
+    if (zkExpiryHandledRef.current) return;
+    zkExpiryHandledRef.current = true;
+    zkResumeStartedRef.current = false;
+    await logout();
+    setSignInError(ZKLOGIN_EXPIRED_MESSAGE);
+  }, [logout]);
+  logoutBecauseZkLoginExpiredRef.current = logoutBecauseZkLoginExpired;
+
+  useEffect(() => {
+    if (keypair) zkExpiryHandledRef.current = false;
+  }, [keypair]);
+
+  useEffect(() => {
+    const onExpired = () => {
+      void logoutBecauseZkLoginExpired();
+    };
+    window.addEventListener(ZKLOGIN_PROOF_EXPIRED_EVENT, onExpired);
+    return () => window.removeEventListener(ZKLOGIN_PROOF_EXPIRED_EVENT, onExpired);
+  }, [logoutBecauseZkLoginExpired]);
+
+  useEffect(() => {
+    const maybeExpire = () => {
+      if (zkLoginPending() || zkLoginProofInFlight()) return;
+      if (!sessionLooksLikeZkLogin() && !isZkLoginAccount()) return;
+      void restoreZkLoginSignerStatus().then((status) => {
+        if (status === 'expired' || status === 'invalid' || status === 'missing') {
+          void logoutBecauseZkLoginExpired();
+        }
+      });
+    };
+    const onFocus = () => maybeExpire();
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') maybeExpire();
+    };
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onVisibility);
+    const interval = window.setInterval(maybeExpire, 60_000);
+    maybeExpire();
+    return () => {
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.clearInterval(interval);
+    };
+  }, [logoutBecauseZkLoginExpired, session]);
 
   const configError = auth ? null : configErrorFromEnv;
 

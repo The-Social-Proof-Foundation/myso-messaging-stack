@@ -15,14 +15,16 @@ test('passkey enrollment, encrypted backup, and recovery after a page restart',a
     payloads.push(request.postData()??'');
     let result:any={};
     try {
-      if(path.endsWith('/config')) result={agentKeyBackups:true};
-      else if(path.endsWith('/owner/auth/challenge')) result={challenge_id:'fixture',message:`mysocial-key-backup-owner-v1|localhost|test-chain|${body.account_id}|unlock`};
+      if(path.endsWith('/config')) result={agentKeyBackups:true,agentKeyCustodyTiers:['passkey-prf-v1','zklogin-root-v1','recovery-code-v1']};
+      else if(path.endsWith('/owner/auth/challenge')) result={challenge_id:'fixture',message:`mysocial-key-backup-owner-v1|localhost|test-chain|${body.account_id}|unlock`,purpose:'unlock-agent-backups'};
       else if(path.endsWith('/owner/auth/verify')){
         const human=await import('@socialproof/myso/keypairs/ed25519');
         const owner=human.Ed25519Keypair.fromSecretKey(new Uint8Array(32).fill(1)).toMySoAddress();
         await keyBackupOperation('owner',{message:`mysocial-key-backup-owner-v1|localhost|test-chain|0x${'2'.padStart(64,'0')}|unlock`,signature:body.signature,owner});
         result={owner_token:'fixture',owner,chain:'test-chain',package_id:`0x${'1'.padStart(64,'0')}`};
       }
+      // The vault lists configured wraps to select a tier before unlocking.
+      else if(path.endsWith('/recovery-roots')) result=wrap?[{method:wrap.method??'passkey-prf-v1',subject:wrap.subject??wrap.credentialId,revision:1}]:[];
       else if(path.endsWith('/passkeys')) result=Array.from(credentials.values()).map(c=>({id:c.id,active:!!wrap,prfInput:c.prfInput}));
       else if(path.endsWith('/options')){
         const operation=path.includes('/registration/')?'registration':'authentication';

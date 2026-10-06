@@ -64,7 +64,7 @@ export function AgentDevSendPanel({
       let identityClass: 0 | 1 | 2 = 1;
 
       if (selected) {
-        if(!vault) throw new Error('Unlock agent backups with your passkey first.');
+        if(!vault) throw new Error('Unlock agent keys first.');
         const row=await fetchSubAgentByObjectId(selected.agentObjectId);
         if(!row) throw new Error('Agent unavailable');
         const derived=await vault.getAgent(row);

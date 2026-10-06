@@ -138,7 +138,7 @@ export function useAgentMemoryReply(groupId: string, groupUuid: string) {
           return;
         }
 
-        if (!vault || !owner) throw new Error('Unlock agent backups with your passkey first.');
+        if (!vault || !owner) throw new Error('Unlock agent keys first.');
         if (!hasCapability(agent.capabilities, 'MESSAGE_SEND')) throw new Error('This agent needs permission to send messages.');
         if (agent.account_id !== memoryAccountId || ref.creatorActor !== agent.derived_address) throw new Error('Chat agent binding mismatch');
         const epoch = vault.generation();

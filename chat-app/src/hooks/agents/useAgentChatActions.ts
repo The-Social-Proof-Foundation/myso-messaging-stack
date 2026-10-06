@@ -62,7 +62,6 @@ export function useRepairAgentChatSend(options: {
 }) {
   const client = useMessagingClient();
   const {keypair} = useMySocialAuth();
-  const address = useAuthenticatedAddress();
   const attempted = useRef<string | null>(null);
   const {groupId, canSend, permissionsLoading, refreshPermissions} = options;
 
@@ -72,7 +71,7 @@ export function useRepairAgentChatSend(options: {
     if (attempted.current === groupId) return;
     attempted.current = groupId;
 
-    const member = address ?? keypair.toMySoAddress();
+    const member = keypair.toMySoAddress();
     let cancelled = false;
     let finished = false;
 
@@ -117,13 +116,12 @@ export function useRepairAgentChatSend(options: {
       cancelled = true;
       if (!finished) attempted.current = null;
     };
-  }, [groupId, canSend, permissionsLoading, refreshPermissions, client, keypair, address]);
+  }, [groupId, canSend, permissionsLoading, refreshPermissions, client, keypair]);
 }
 
 export function useOpenAgentChat() {
   const client = useMessagingClient();
   const {keypair} = useMySocialAuth();
-  const address = useAuthenticatedAddress();
 
   return useCallback(
     async (ref: AgentChatRef): Promise<HydratedAgentChat> => {
@@ -144,14 +142,13 @@ export function useOpenAgentChat() {
 
       addStoredGroup({uuid: ref.uuid, name, groupId, createdAt: Date.now()});
 
-      const member = address ?? keypair?.toMySoAddress();
-      if (member && keypair && client) {
+      if (keypair) {
         try {
           await ensureAgentChatSendPermission({
             client: client as never,
             signer: keypair,
             groupId,
-            member,
+            member: keypair.toMySoAddress(),
           });
         } catch (error) {
           console.warn('[chat-app] could not grant send permission on agent chat:', error);
@@ -160,7 +157,7 @@ export function useOpenAgentChat() {
 
       return {groupId, uuid: ref.uuid, name};
     },
-    [client, keypair, address],
+    [client, keypair],
   );
 }
 
@@ -263,7 +260,7 @@ export function useCreateAgentChat(): CreateAgentChatState {
       const targetPlatform = await platform.ensureMembership();
 
       setStage('preparing');
-      if (!vault) throw new Error('Unlock agent backups with your passkey first.');
+      if (!vault) throw new Error('Unlock agent keys first.');
       const epoch = vault.generation();
       const derived = await vault.getAgent(agent);
       vault.assertCurrent(epoch);

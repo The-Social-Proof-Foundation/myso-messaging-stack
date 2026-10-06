@@ -375,11 +375,26 @@ Agent conversations live in the **home sidebar**:
   Organizations tab all open a modal form.
 - `/agents → Agents → Chat` hands the agent over to the home view via router state.
 
-Agent keys are derived in the browser
-(`sha256("mysocial-agent-v1" || human secret || org id || u32 index)`) and never stored on a
-server.
+Agent signing keys are random 32-byte Ed25519 seeds generated in the browser. Each seed is
+encrypted under a random per-account recovery root, and only encrypted wraps of that root ever
+reach a server. The root is unlocked through a **custody tier**: a WebAuthn PRF passkey
+(`passkey-prf-v1`), the salt-derived login key (`zklogin-root-v1`), the login key plus a
+user-held recovery code (`recovery-code-v1`), or a device-only key with no server-side wrap
+(`device-key-v1`). Passkeys are therefore an optional upgrade, not a requirement. See
+`docs/agent-custody-tiers-plan.md` and the memory-repo `docs/security/agent-key-backups.md`.
+
+Deterministic derivation (`sha256("mysocial-agent-v1" || human secret || org id || u32 index)`)
+is retired and retained only for explicit migration tooling — see
+`src/lib/agents/legacy-agent-keys.ts`.
 
 ### Agent chat lifecycle
+
+Before any of the on-chain steps below, the app must be able to **unlock agent keys**: creating,
+chatting as, and asking the memory of an agent all require the agent's signing seed, which is
+stored only as an encrypted envelope. The unlock is a custody tier (passkey, login key, or login
+key plus a recovery code) — a passkey is not required. When no root exists yet the app asks which
+tier to adopt. The seed is never persisted: the vault locks after 15 minutes idle, on logout, and
+on any 401 from the Memory server.
 
 Creating an agent chat requires three things, all enforced on chain:
 
@@ -454,6 +469,9 @@ patched and unpatched social servers rather than failing outright.
 | `VITE_MEMORY_SERVER_URL` | myso-memory server (default `http://127.0.0.1:8000`). Dev traffic goes through the Vite `/api/memory` proxy. |
 | `VITE_SOCIAL_SERVER_URL` | Social server for memory-account, AI-credit, org, sub-agent, and messaging-group reads. |
 | `VITE_PLATFORM_ID` | Optional. Overrides the auto-discovered Platform used for agent chats. |
+| `VITE_AGENT_KEY_BACKUPS_ENABLED` | `true` to enable agent-key custody (off by default). Also injects the vault CSP in production builds. |
+| `VITE_AGENT_CUSTODY_TIERS` | Optional comma list overriding the server's advertised tiers (`passkey-prf-v1`, `zklogin-root-v1`, `recovery-code-v1`). Leave unset to trust `GET /config`. |
+| `VITE_PASSKEY_CONNECT_ORIGINS` | Optional exact MYDATA key-server/websocket origins added to the production vault CSP. |
 
 ### Server prerequisites
 
@@ -466,6 +484,13 @@ port 8000). Set these on the memory server:
 | `AI_CREDIT_ENABLED` | `true`, so `/api/ask` reserves and captures AI credits for each reply. |
 | `AI_CREDIT_ORACLE_URL` | The AI credit oracle (localnet default `http://127.0.0.1:8095`), plus `AI_CREDIT_ORACLE_API_SECRET`. |
 | `SOCIAL_SERVER_URL` | The local social server (`http://127.0.0.1:9126`), used to resolve the signing agent. |
+| `ENABLE_AGENT_KEY_BACKUPS` | `true` to enable agent-key custody routes and the `agentKeyBackups` config flag. |
+| `AGENT_KEY_CUSTODY_TIERS` | Comma list of accepted custody methods. `AGENT_KEY_CUSTODY_TIERS=passkey-prf-v1` keeps the passkey-only posture. |
+| `AGENT_KEY_REQUIRE_TIER` | Optional minimum tier; a weaker unlock is refused with `custody_tier_required`. |
+| `AGENT_KEY_UNLOCK_PER_MINUTE` | Per-account custody unlock/challenge attempts per minute (default 10). |
+| `PASSKEY_RP_ID` / `PASSKEY_ALLOWED_ORIGINS` | Required only when the `passkey-prf-v1` tier is enabled; exact RP ID and exact HTTPS origins. |
+| `KEY_BACKUP_SERVICE_ORIGIN` | Exact origin bound into owner challenges; required when backups are enabled. |
+| `SIDECAR_AUTH_TOKEN` | Shared secret for the private verification sidecar. |
 
 ### Local run order
 

@@ -57,8 +57,14 @@ function concatBytes(parts: Uint8Array[]): Uint8Array {
 
 /**
  * Legacy derivation retained only for explicit migration tooling and historical vectors.
- * Never use this for new agents or automatic recovery: the signer may be ephemeral,
- * and OAuth subject/service-salt-derived roots can be reconstructed by the service.
+ * Never use this for new agents: deriving an agent seed from the login means the service can
+ * reconstruct the agent key, breaking the invariant that no signing seed is derivable from a
+ * credential.
+ *
+ * New agents use a random seed encrypted under a random per-account recovery root. The
+ * `zklogin-root-v1` custody tier deliberately derives the *root wrap secret* from the login key
+ * (so the salt service can reconstruct that wrap), but the root and every agent seed stay random,
+ * so no agent key is ever derivable. See `docs/agent-custody-tiers-plan.md`.
  */
 export async function deriveAgentKeypair(
   humanKeypair: Ed25519Keypair,

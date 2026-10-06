@@ -299,7 +299,7 @@ function ModelControls({
   if (derived.isPending || derived.isLoading) {
     body = <p className="mt-2 text-xs text-muted-foreground">Loading model…</p>;
   } else if (!derived.data) {
-    body = <><p className="mt-2 text-xs text-destructive">{derived.error?.message ?? 'Unlock agent backups with your passkey to access this agent.'}</p><LegacyAgentBackup agent={row}/></>;
+    body = <><p className="mt-2 text-xs text-destructive">{derived.error?.message ?? 'Unlock agent keys to access this agent.'}</p><LegacyAgentBackup agent={row}/></>;
   } else if (models.isPending || current.isPending) {
     body = <p className="mt-2 text-xs text-muted-foreground">Loading model…</p>;
   } else if (models.isError || current.isError) {

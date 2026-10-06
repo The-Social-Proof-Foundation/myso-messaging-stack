@@ -1,14 +1,16 @@
 import {useQueryClient} from '@tanstack/react-query';
-import {createContext, useContext, useEffect, useMemo, useSyncExternalStore, type ReactNode} from 'react';
+import {createContext, useContext, useEffect, useMemo, useRef, useSyncExternalStore, type ReactNode} from 'react';
 import {normalizeKeyAddress, type AgentKeyEnvelopeV1} from '@socialproof/memory';
 import {useAuthenticatedAddress, useMySocialAuth} from './MySocialAuthContext';
 import {useMemoryAccount} from '../hooks/agents/useMemoryAccount';
 import {getMessagingRpcUrl} from '../lib/messaging-client-factory';
 import {zkLoginPersonalMessageSignature, sessionLooksLikeZkLogin} from '../lib/zklogin-signin';
 import {memoryServerUrl} from '../lib/agents/memory-client';
-import {PasskeyVault} from '../lib/agents/passkey-vault';
+import {CustodyVault, type LoginSeedProvider} from '../lib/agents/custody-vault';
+import {getSaltFromSession} from '../lib/get-salt-from-session';
+import {resolveOAuthSubForKeypair} from '../lib/auth-utils';
 
-const Context = createContext<PasskeyVault | null>(null);
+const Context = createContext<CustodyVault | null>(null);
 export const AGENT_BACKUPS_ENABLED = import.meta.env.VITE_AGENT_KEY_BACKUPS_ENABLED === 'true';
 async function objectFields(id: string): Promise<{type: string; fields: Record<string, any>}> {
   const response = await fetch(getMessagingRpcUrl(), {method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({jsonrpc:'2.0',id:1,method:'myso_getObject',params:[id,{showContent:true}]}),cache:'no-store'});
@@ -47,17 +49,35 @@ export async function verifyAgentEnvelope(id: string, e: AgentKeyEnvelopeV1) {
 export function AgentKeyVaultProvider({children}: {children: ReactNode}) {
   const owner=useAuthenticatedAddress();
   const queryClient=useQueryClient();
-  const {keypair}=useMySocialAuth();
+  const {keypair, auth, session}=useMySocialAuth();
   const account=useMemoryAccount();
+  // The provider closure is stable; the latest session is read through a ref so a session refresh
+  // never rebuilds the vault (which would drop an unlock) and the login seed is derived on demand.
+  const sessionRef=useRef({auth, session});
+  sessionRef.current={auth, session};
   const vault=useMemo(() => {
     if(!AGENT_BACKUPS_ENABLED || !owner || !keypair || !account.data?.account_id) return null;
-    return new PasskeyVault(memoryServerUrl(), {accountId:account.data.account_id,owner}, async bytes => {
+    const instance=new CustodyVault(memoryServerUrl(), {accountId:account.data.account_id,owner}, async bytes => {
       if(sessionLooksLikeZkLogin()) {
         const sig=await zkLoginPersonalMessageSignature(bytes);
         if(!sig) throw new Error('Sign in again to verify ownership'); return sig;
       }
       return (await keypair.signPersonalMessage(bytes)).signature;
     }, verifyAgentEnvelope);
+    // `zklogin-root-v1` / `recovery-code-v1` custody: SHA256(sub + '_' + salt), the same
+    // deterministic login key the app already derives, computed here instead of reusing
+    // useMySocialAuth().keypair (which is the ephemeral zkLogin key in a zkLogin session).
+    instance.setLoginSeedProvider((async () => {
+      const {auth:current, session:currentSession}=sessionRef.current;
+      if(!current || !currentSession) throw new Error('Sign in with MySocial so the app can derive your signing key.');
+      const sub=resolveOAuthSubForKeypair(currentSession);
+      if(!sub) throw new Error('This session is missing the OAuth account id needed to derive your signing key.');
+      const saltUrl=import.meta.env.VITE_MYSOCIAL_SALT_URL || 'https://salt.testnet.mysocial.network/salt';
+      const salt=await getSaltFromSession(current, currentSession, saltUrl);
+      const digest=await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`${sub}_${salt}`));
+      return new Uint8Array(digest).slice(0, 32);
+    }) satisfies LoginSeedProvider);
+    return instance;
   },[owner,keypair,account.data?.account_id]);
   useEffect(()=>{
     // Retire any secret-bearing cache entries from the old deterministic-key hook.

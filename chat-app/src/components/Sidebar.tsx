@@ -2,6 +2,7 @@ import type { StoredGroup } from '../lib/group-store';
 import { useCallback, useMemo } from 'react';
 import { ChevronRight } from 'lucide-react';
 import { useAuthenticatedAddress } from '../contexts/MySocialAuthContext';
+import { useMessagingMemberAddress } from '../contexts/MessagingClientContext';
 import { useOwnWalletProfile } from '../hooks/useOwnWalletProfile';
 import { useSidebarGroupMembers } from '../hooks/useSidebarGroupMembers';
 import { useSidebarMessagePreviews } from '../hooks/useSidebarMessagePreviews';
@@ -11,7 +12,7 @@ import { conversationPeerLabel, isKnownAgentAddress, knownAgentAddressSet } from
 import {
   conversationDisplayTitle,
   dmPeerAddress,
-  selfGroupNameLabels,
+  selfGroupNameLabelsForIdentities,
 } from '../lib/wallet-profile';
 import { ConversationAvatar } from './ConversationAvatar';
 import { SidebarPromo } from './SidebarPromo';
@@ -46,10 +47,15 @@ export function Sidebar({
   agentCreatorActors = [],
 }: Readonly<SidebarProps>) {
   const address = useAuthenticatedAddress();
+  const messagingAddress = useMessagingMemberAddress();
+  const selfAddresses = useMemo(
+    () => [messagingAddress, address],
+    [messagingAddress, address],
+  );
   const { profile } = useOwnWalletProfile();
   const selfLabels = useMemo(
-    () => selfGroupNameLabels(address, profile),
-    [address, profile],
+    () => selfGroupNameLabelsForIdentities(selfAddresses, profile),
+    [selfAddresses, profile],
   );
 
   const groupIds = useMemo(() => groups.map((g) => g.groupId), [groups]);
@@ -60,12 +66,14 @@ export function Sidebar({
     const addrs = new Set<string>();
     for (const members of membersByGroup.values()) {
       for (const m of members) {
-        if (address && m.toLowerCase() === address.toLowerCase()) continue;
+        if (selfAddresses.some((self) => self && m.toLowerCase() === self.toLowerCase())) {
+          continue;
+        }
         addrs.add(m);
       }
     }
     return [...addrs];
-  }, [membersByGroup, address]);
+  }, [membersByGroup, selfAddresses]);
   const profiles = useWalletAvatarMap(profileAddresses);
   const agentNames = useAgentNamesByAddress();
   const knownAgents = useMemo(
@@ -103,13 +111,13 @@ export function Sidebar({
                   selectedUuid === group.groupId) &&
                 !!selectedUuid;
               const members = membersByGroup.get(group.groupId) ?? [];
-              const peer = dmPeerAddress(members, address);
+              const peer = dmPeerAddress(members, selfAddresses);
               const peerHandle = peer ? profiles.handleFor(peer) : null;
               const title = conversationDisplayTitle({
                 officialName: group.name,
                 selfLabels,
                 memberAddresses: members,
-                selfAddress: address,
+                selfAddress: selfAddresses,
                 peerLabel: conversationPeerLabel(
                   peer,
                   agentNames,

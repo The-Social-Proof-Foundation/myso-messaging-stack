@@ -7,7 +7,6 @@
  * - EncryptionKeyRotator, MetadataAdmin
  */
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { useAuthenticatedAddress } from '../contexts/MySocialAuthContext';
 import { useRequiredMessagingClient } from '../contexts/MessagingClientContext';
 
 export interface Permissions {
@@ -37,8 +36,10 @@ export interface UsePermissionsResult {
 }
 
 export function usePermissions(groupId: string): UsePermissionsResult {
-  const { client } = useRequiredMessagingClient();
-  const address = useAuthenticatedAddress();
+  const { client, signer } = useRequiredMessagingClient();
+  // Group caps are keyed to the messaging signer (ephemeral zkLogin key), not
+  // the zkLogin account address used elsewhere in the app.
+  const address = signer.toMySoAddress();
   const [permissions, setPermissions] = useState<Permissions>(DEFAULT_PERMISSIONS);
   const [loading, setLoading] = useState(true);
   const [refreshKey, setRefreshKey] = useState(0);

@@ -238,6 +238,17 @@ export function useMessagingClientInitError(): string | null {
   return ctx.clientInitError;
 }
 
+/** Address that holds group membership and send/read caps (the messaging signer). */
+export function useMessagingMemberAddress(): string | undefined {
+  const ctx = useContext(MessagingClientContext);
+  if (!ctx) {
+    throw new Error(
+      'useMessagingMemberAddress must be used within <MessagingClientProvider>',
+    );
+  }
+  return ctx.signer?.toMySoAddress();
+}
+
 export function useMessagingClientLoading(): boolean {
   const ctx = useContext(MessagingClientContext);
   if (!ctx) {

@@ -227,6 +227,25 @@ export function selfGroupNameLabels(
   });
 }
 
+/** Username plus truncated wallets for every local identity in a zkLogin session. */
+export function selfGroupNameLabelsForIdentities(
+  addresses: readonly (string | null | undefined)[],
+  profile: WalletProfile | null | undefined,
+): string[] {
+  const unique = dedupeAddresses(addresses.filter((a): a is string => Boolean(a)));
+  const labels: string[] = [];
+  const seen = new Set<string>();
+  for (const [index, address] of unique.entries()) {
+    for (const label of selfGroupNameLabels(address, index === 0 ? profile : null)) {
+      const key = normalizeGroupNameLabel(label);
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      labels.push(label);
+    }
+  }
+  return labels;
+}
+
 /**
  * UI title from the official on-chain name with the current user's segment(s)
  * removed so DMs show the other person, not yourself.
@@ -259,14 +278,33 @@ export function displayGroupTitle(
  * The single peer wallet in a 1:1 chat, or `null` when membership is unknown
  * or this is a multi-member group.
  */
+function selfAddressKeys(
+  selfAddress:
+    | string
+    | null
+    | undefined
+    | readonly (string | null | undefined)[],
+): Set<string> {
+  const list = Array.isArray(selfAddress) ? selfAddress : [selfAddress];
+  return new Set(
+    list
+      .filter((addr): addr is string => Boolean(addr))
+      .map((addr) => addr.toLowerCase()),
+  );
+}
+
 export function dmPeerAddress(
   memberAddresses: readonly string[],
-  selfAddress: string | null | undefined,
+  selfAddress:
+    | string
+    | null
+    | undefined
+    | readonly (string | null | undefined)[],
 ): string | null {
-  if (!selfAddress || memberAddresses.length === 0) return null;
-  const selfKey = selfAddress.toLowerCase();
+  const selfKeys = selfAddressKeys(selfAddress);
+  if (selfKeys.size === 0 || memberAddresses.length === 0) return null;
   const others = memberAddresses.filter(
-    (addr) => addr.toLowerCase() !== selfKey,
+    (addr) => !selfKeys.has(addr.toLowerCase()),
   );
   return others.length === 1 ? others[0]! : null;
 }
@@ -281,7 +319,11 @@ export function conversationDisplayTitle(options: {
   officialName: string;
   selfLabels: readonly string[];
   memberAddresses: readonly string[];
-  selfAddress: string | null | undefined;
+  selfAddress:
+    | string
+    | null
+    | undefined
+    | readonly (string | null | undefined)[];
   /** Preferred peer label (`@username` / display name / truncated wallet). */
   peerLabel?: string | null;
 }): string {
@@ -291,6 +333,22 @@ export function conversationDisplayTitle(options: {
     return label || truncateWalletAddress(peer);
   }
   return displayGroupTitle(options.officialName, options.selfLabels);
+}
+
+/**
+ * zkLogin sessions chat as the ephemeral messaging key, but GraphQL profiles
+ * live on the account address. Map the signer to the profile wallet for lookups.
+ */
+export function aliasMemberToProfileAddress(
+  memberAddress: string,
+  messagingAddress: string | null | undefined,
+  profileAddress: string | null | undefined,
+): string {
+  const member = memberAddress.trim().toLowerCase();
+  const messaging = messagingAddress?.trim().toLowerCase();
+  const profile = profileAddress?.trim().toLowerCase();
+  if (member && messaging && profile && member === messaging) return profile;
+  return member;
 }
 
 /** Deduplicate MySo addresses (case-insensitive), preserving order. */

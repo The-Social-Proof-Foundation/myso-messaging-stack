@@ -1,9 +1,10 @@
 import { useMemo } from 'react';
 import { useAuthenticatedAddress } from '../contexts/MySocialAuthContext';
+import { useMessagingMemberAddress } from '../contexts/MessagingClientContext';
 import {
   conversationDisplayTitle,
   dmPeerAddress,
-  selfGroupNameLabels,
+  selfGroupNameLabelsForIdentities,
 } from '../lib/wallet-profile';
 import { conversationPeerLabel } from '../lib/agents/agent-display-name';
 import { useAgentNamesByAddress } from './agents/useSubAgents';
@@ -20,27 +21,32 @@ export function useDisplayGroupTitle(
   memberAddresses: readonly string[] = [],
 ): string {
   const address = useAuthenticatedAddress();
+  const messagingAddress = useMessagingMemberAddress();
+  const selfAddresses = useMemo(
+    () => [messagingAddress, address],
+    [messagingAddress, address],
+  );
   const { profile } = useOwnWalletProfile();
   const peer = useMemo(
-    () => dmPeerAddress(memberAddresses, address),
-    [memberAddresses, address],
+    () => dmPeerAddress(memberAddresses, selfAddresses),
+    [memberAddresses, selfAddresses],
   );
   const peerAddrs = useMemo(() => (peer ? [peer] : []), [peer]);
   const profiles = useWalletAvatarMap(peerAddrs);
   const agentNames = useAgentNamesByAddress();
 
   return useMemo(() => {
-    const selfLabels = selfGroupNameLabels(address, profile);
+    const selfLabels = selfGroupNameLabelsForIdentities(selfAddresses, profile);
     return conversationDisplayTitle({
       officialName,
       selfLabels,
       memberAddresses,
-      selfAddress: address,
+      selfAddress: selfAddresses,
       peerLabel: conversationPeerLabel(
         peer,
         agentNames,
         peer ? profiles.labelFor(peer) : null,
       ),
     });
-  }, [officialName, address, profile, memberAddresses, peer, profiles, agentNames]);
+  }, [officialName, selfAddresses, profile, memberAddresses, peer, profiles, agentNames]);
 }

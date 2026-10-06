@@ -863,3 +863,46 @@ graph LR
 - For **testnet** and **mainnet**, the SDK auto-detects package IDs from the client's `network` property. The `VITE_*_PACKAGE_ID` variables are only needed for localnet/devnet deployments.
 - The `originalPackageId` never changes after initial deployment (used for type names, BCS, MyData namespace). The `latestPackageId` is updated after contract upgrades (used for `moveCall` targets).
 - The `namespaceId` and `versionId` are shared objects created during initial deployment and remain constant.
+
+### ADR-7: Tiered custody for agent signing keys
+
+**Context.** Agent signing keys are random 32-byte Ed25519 seeds. Each seed is encrypted in the
+browser under a random per-account 32-byte recovery root, and only encrypted wraps of that root
+reach the Memory server. Historically that root could only be wrapped under a WebAuthn PRF
+passkey, so no agent could be created, unlocked, or used without enrolling one. That gate is
+independent of how the human is authenticated: owner challenges are already verified against a
+zkLogin or native personal-message signature, so the passkey was the only mechanism that could
+produce a vault authorization token, not the mechanism that proves ownership.
+
+**Decision.** Custody is a tier, and the root wrap carries the tier:
+
+| Method | Wrap secret | Needs WebAuthn | Cross-device | Recoverable after logout |
+|---|---|---|---|---|
+| `passkey-prf-v1` | WebAuthn PRF output; never leaves the authenticator | yes | yes | until every passkey is lost |
+| `zklogin-root-v1` | `SHA256(sub + '_' + salt)` login key, domain-separated through HKDF | no | yes (OAuth re-login) | yes |
+| `recovery-code-v1` | login key **and** a user-held code (PBKDF2-SHA256, then HKDF over both) | no | yes | yes |
+| `device-key-v1` | random secret held only on the device; no server-side wrap | no | no | no |
+
+One random root per account, many wraps of that root, each bound to `(method, subject)` in a new
+`mysocial:agent-root-wrap:v2` AAD. Agent envelopes are unchanged: they are encrypted under the
+root, so adding or removing a custody method never re-encrypts an envelope and never changes an
+agent identity. Adding a passkey later re-wraps the same root.
+
+**Consequences.**
+
+- Passkeys become an optional upgrade rather than a prerequisite; the login-key tier works on any
+  platform that can complete OAuth, including clients with no WebAuthn PRF support.
+- The login-key tier's custody is exactly the wallet's: the salt service stores `user_identifier`
+  (`"{iss}:{sub}"`) and `salt` together, so it can recompute the wrap secret. This is a deliberate,
+  documented downgrade relative to the passkey tier, chosen because a lost passkey permanently
+  strands an agent: `memory::SubAgent` stores `public_key`/`derived_address` with no re-key entry
+  function, and `derived_object::claim` cannot be reused after `revoke_sub_agent`.
+- No tier makes an agent signing seed derivable: the root and every seed stay random, so the
+  Memory server still cannot decrypt a backup on its own.
+- Server-side tier availability is policy (`AGENT_KEY_CUSTODY_TIERS`, `AGENT_KEY_REQUIRE_TIER`,
+  per-account `custody_policies`); `passkey-prf-v1` alone reproduces the previous posture.
+- Because custody can move to the login credential, unlock attempts are throttled per account and
+  each custody event is audited.
+
+See `docs/agent-custody-tiers-plan.md` for the phased plan and the
+memory-repo `docs/security/agent-key-backups.md` for the cryptographic contract.

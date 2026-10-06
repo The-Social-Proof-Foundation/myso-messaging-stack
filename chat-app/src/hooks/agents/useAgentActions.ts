@@ -173,7 +173,7 @@ export function useAgentActions() {
   };
 
   async function finishAgentSetup(agentId:string) {
-    if(!vault)throw new Error('Unlock agent backups first.');
+    if(!vault)throw new Error('Unlock agent keys first.');
     const epoch=vault.generation();const {client:rpc,human}=requireClient();
     const setup=await vault.verifiedSetup(agentId);
     const ids=await resolveAgentChainIds();
@@ -240,7 +240,7 @@ export function useAgentActions() {
     }) {
       const {client: rpc, human} = requireClient();
       const ids = await resolveAgentChainIds();
-      if (!vault) throw new Error('Passkey agent backups are not enabled.');
+      if (!vault) throw new Error('Agent key custody is not enabled.');
       const epoch = vault.generation();
       const saved=args.draft?await vault.verifiedIntent(args.draft):null;
       if(saved){if(saved.parentAgentId!==null)throw new Error('Choose the saved child setup with its original parent.');args={...args,label:saved.label,capabilities:saved.capabilities,delegatableCaps:saved.delegatableCaps,expiresAtMs:saved.expiresAtMs,budget:intentBudget(saved)};}
@@ -299,7 +299,7 @@ export function useAgentActions() {
     }) {
       const {client: rpc, human} = requireClient();
       const ids = await resolveAgentChainIds();
-      if (!vault) throw new Error('Passkey agent backups are not enabled.');
+      if (!vault) throw new Error('Agent key custody is not enabled.');
       const epoch = vault.generation();
       const saved=args.draft?await vault.verifiedIntent(args.draft):null;
       if(saved){if(saved.parentAgentId!==args.parent.agent_object_id)throw new Error('Choose the original parent for this saved setup.');args={...args,label:saved.label,capabilities:saved.capabilities,delegatableCaps:saved.delegatableCaps,expiresAtMs:saved.expiresAtMs,budget:intentBudget(saved)};}

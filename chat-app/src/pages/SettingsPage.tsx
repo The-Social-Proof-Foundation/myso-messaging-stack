@@ -1,4 +1,5 @@
 import { Navigate } from 'react-router-dom';
+import { AgentSecurityPanel } from '../components/agents/PasskeyVaultPanel';
 import { PaidMessagingSettings } from '../components/PaidMessagingSettings';
 import { ThemeSwitcher } from '../components/kibo-ui/theme-switcher';
 import { useMySocialAuth } from '../contexts/MySocialAuthContext';
@@ -51,6 +52,8 @@ export function SettingsPage() {
         <div className="overflow-hidden rounded-xl border border-secondary-200 bg-white dark:border-secondary-700 dark:bg-secondary-900">
           <PaidMessagingSettings />
         </div>
+
+        <AgentSecurityPanel />
       </div>
     </main>
   );

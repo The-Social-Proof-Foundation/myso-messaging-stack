@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { ChevronRight, UserPlus } from 'lucide-react';
-import { useAuthenticatedAddress } from '../../contexts/MySocialAuthContext';
+import { useMessagingMemberAddress } from '../../contexts/MessagingClientContext';
 import type { WalletRingBits } from '../../hooks/useWalletAvatarMap';
 import { MemberItem } from './MemberItem';
 
@@ -53,7 +53,7 @@ export function MemberList({
   ringFor,
   isAgentAddress,
 }: Readonly<MemberListProps>) {
-  const accountAddress = useAuthenticatedAddress();
+  const accountAddress = useMessagingMemberAddress();
   const [expandedMember, setExpandedMember] = useState<string | null>(null);
 
   return (

@@ -111,7 +111,7 @@ export function CreateAgentDialog({
     setBusy(true);
     setError(null);
     try {
-      if (vault?.status !== 'ready') throw new Error('Unlock agent backups with your passkey first.');
+      if (vault?.status !== 'ready') throw new Error('Unlock agent keys first.');
       const draft = drafts.find(d=>d.keyId===draftId);
       if(draft && !sameId(draft.organizationId,selectedOrg)) throw new Error('Choose the original organization for this saved setup.');
       const delegatableCaps = allowDelegation ? mask : 0;
@@ -179,7 +179,14 @@ export function CreateAgentDialog({
           void submit();
         }}
       >
-        {vault?.status !== 'ready' ? <p role="status" className="text-sm">Unlock agent backups with your passkey before creating an agent.</p> : null}
+        {vault?.status !== 'ready' ? <div className="space-y-2 rounded border border-border p-2">
+          <p role="status" className="text-sm">Agent keys are locked. Unlock them to create an agent — a passkey is optional.</p>
+          <div className="flex flex-wrap gap-2">
+            <Button variant="secondary" size="sm" onClick={()=>void vault?.unlock().catch(e=>setError(e.message))}>Unlock</Button>
+            <Button variant="ghost" size="sm" onClick={()=>void vault?.unlock({method:'zklogin-root-v1'}).catch(e=>setError(e.message))}>Use my MySocial login</Button>
+            <Button variant="ghost" size="sm" onClick={()=>void vault?.adoptTier('passkey-prf-v1').catch(e=>setError(e.message))}>Use a passkey</Button>
+          </div>
+        </div> : null}
         <Button variant="secondary" size="sm" onClick={()=>void vault?.pending().then(setDrafts).catch(e=>setError(e.message))}>Load saved incomplete setups</Button>
         {drafts.length ? <label className="block text-sm">Saved setup<select className={dialogFieldClass} value={draftId} onChange={e=>setDraftId(e.target.value)}>
           <option value="">New agent</option>{drafts.filter(d=>sameId(d.organizationId,selectedOrg)).map(d=><option key={d.keyId} value={d.keyId}>{d.derivedAddress.slice(0,14)}…</option>)}

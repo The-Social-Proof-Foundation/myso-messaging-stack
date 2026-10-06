@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useGraphQLClient } from '../contexts/MessagingClientContext';
+import {
+  useGraphQLClient,
+  useMessagingMemberAddress,
+} from '../contexts/MessagingClientContext';
 import { useAuthenticatedAddress } from '../contexts/MySocialAuthContext';
 import {
   loadSidebarProfiles,
@@ -8,6 +11,7 @@ import {
 } from '../lib/sidebar-chrome-store';
 import {
   PROFILE_FULL_QUERY,
+  aliasMemberToProfileAddress,
   mapGraphqlProfile,
   profileHeaderTitle,
   profileSecondaryHandleLabel,
@@ -122,18 +126,25 @@ export function useWalletAvatarMap(
 ): WalletProfileBits {
   const graphqlClient = useGraphQLClient();
   const wallet = useAuthenticatedAddress();
+  const messagingAddress = useMessagingMemberAddress();
   const [version, setVersion] = useState(0);
+
+  const lookupAddress = useCallback(
+    (address: string) =>
+      aliasMemberToProfileAddress(address, messagingAddress, wallet),
+    [messagingAddress, wallet],
+  );
 
   const uniqueKey = useMemo(() => {
     const normalized = [
       ...new Set(
         addresses
-          .map((a) => a.trim().toLowerCase())
+          .map((a) => lookupAddress(a))
           .filter((a) => a.length > 0),
       ),
     ].sort();
     return normalized.join(',');
-  }, [addresses]);
+  }, [addresses, lookupAddress]);
 
   useEffect(() => {
     ensureHydrated(wallet);
@@ -176,14 +187,23 @@ export function useWalletAvatarMap(
             const raw = data?.profile ?? null;
             const mapped = mapGraphqlProfile(raw);
             const ring = ringBitsFromProfile(mapped, raw);
-            profileCache.set(address, {
+            const entry: CachedProfile = {
               photo: mapped?.profile_photo ?? null,
               label: labelFromProfile(address, mapped),
               headerTitle: profileHeaderTitle(address, mapped),
               handle: profileSecondaryHandleLabel(mapped),
               showRing: ring.showRing,
               ringPercent: ring.ringPercent,
-            });
+            };
+            profileCache.set(address, entry);
+            const messaging = messagingAddress?.trim().toLowerCase();
+            if (
+              messaging &&
+              wallet &&
+              address === wallet.trim().toLowerCase()
+            ) {
+              profileCache.set(messaging, entry);
+            }
           } catch {
             profileCache.set(address, {
               photo: null,
@@ -205,54 +225,48 @@ export function useWalletAvatarMap(
     return () => {
       cancelled = true;
     };
-  }, [uniqueKey, graphqlClient, wallet]);
+  }, [uniqueKey, graphqlClient, wallet, messagingAddress]);
 
-  const photoFor = useCallback(
-    (address: string) =>
-      profileCache.get(address.trim().toLowerCase())?.photo ?? null,
+  const cachedFor = useCallback(
+    (address: string) => {
+      const original = address.trim().toLowerCase();
+      return profileCache.get(lookupAddress(original)) ?? profileCache.get(original);
+    },
     // version bumps after cache fills so consumers re-render
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [version],
+    [lookupAddress, version],
+  );
+
+  const photoFor = useCallback(
+    (address: string) => cachedFor(address)?.photo ?? null,
+    [cachedFor],
   );
 
   const labelFor = useCallback(
     (address: string) =>
-      profileCache.get(address.trim().toLowerCase())?.label ??
-      truncateAddress(address),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [version],
+      cachedFor(address)?.label ?? truncateAddress(address),
+    [cachedFor],
   );
 
   const headerTitleFor = useCallback(
-    (address: string) =>
-      headerTitleFromCached(
-        address,
-        profileCache.get(address.trim().toLowerCase()),
-      ),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [version],
+    (address: string) => headerTitleFromCached(address, cachedFor(address)),
+    [cachedFor],
   );
 
   const handleFor = useCallback(
-    (address: string) =>
-      handleFromCached(
-        address,
-        profileCache.get(address.trim().toLowerCase()),
-      ),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [version],
+    (address: string) => handleFromCached(address, cachedFor(address)),
+    [cachedFor],
   );
 
   const ringFor = useCallback(
     (address: string): WalletRingBits => {
-      const cached = profileCache.get(address.trim().toLowerCase());
+      const cached = cachedFor(address);
       return {
         showRing: cached?.showRing ?? false,
         ringPercent: cached?.ringPercent ?? 0,
       };
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [version],
+    [cachedFor],
   );
 
   return { photoFor, labelFor, headerTitleFor, handleFor, ringFor };

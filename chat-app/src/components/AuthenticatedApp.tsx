@@ -2,7 +2,6 @@ import {useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import {useLocation, useNavigate} from 'react-router-dom';
 
 import {Sidebar} from './Sidebar';
-import {PasskeyVaultPanel} from './agents/PasskeyVaultPanel';
 import {ChatArea} from './ChatArea';
 import {CreateGroupModal} from './CreateGroupModal';
 import {AgentChatEmptyState} from './agents/AgentChatEmptyState';
@@ -259,7 +258,6 @@ export function AuthenticatedApp({
 
   return (
     <>
-      <PasskeyVaultPanel />
       {isUsingDevMessengerSigner && (
         <div className="border-b border-amber-200 bg-amber-50 px-4 py-2 text-center text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-100">
           Dev signer: using a local ephemeral keypair (not your MySocial wallet

@@ -16,7 +16,6 @@ import { ChevronLeft, Info } from 'lucide-react';
 import type { StoredGroup } from '../lib/group-store';
 import { removeStoredGroup } from '../lib/group-store';
 import { useRequiredMessagingClient } from '../contexts/MessagingClientContext';
-import { useAuthenticatedAddress } from '../contexts/MySocialAuthContext';
 import { signAndExecuteTransactionAndWait } from '../lib/sign-and-wait';
 import { useMessages } from '../hooks/useMessages';
 import { useAgentMemoryReply } from '../hooks/agents/useAgentMemoryReply';
@@ -340,8 +339,8 @@ function ChatView({
   devAgentPanel?: ReactNode;
   agentCreatorActors?: readonly (string | null | undefined)[];
 }>) {
-  const myAddress = useAuthenticatedAddress();
   const { client, signer } = useRequiredMessagingClient();
+  const myAddress = signer.toMySoAddress();
   const { permissions, loading: permissionsLoading, refresh: refreshPermissions } =
     usePermissions(group.groupId);
   useRepairAgentChatSend({
