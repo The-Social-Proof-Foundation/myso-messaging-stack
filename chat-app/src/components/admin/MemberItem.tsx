@@ -1,5 +1,6 @@
 import { ChevronRight } from 'lucide-react';
 import { ReservationNavAvatar } from '../ReservationNavAvatar';
+import { AgentOrb } from '../agents/AgentOrb';
 
 interface PermType {
   key: string;
@@ -26,6 +27,8 @@ interface MemberItemProps {
   label?: string;
   showRing?: boolean;
   ringPercent?: number;
+  /** Agent member: orb instead of the empty photo. */
+  showAgentOrb?: boolean;
 }
 
 function permissionLabel(permType: string): string {
@@ -110,6 +113,7 @@ export function MemberItem({
   label,
   showRing = false,
   ringPercent = 0,
+  showAgentOrb = false,
 }: Readonly<MemberItemProps>) {
   const displayLabel = label?.trim() || truncateAddress(address);
   const isWalletLabel = displayLabel === truncateAddress(address);
@@ -132,6 +136,15 @@ export function MemberItem({
         <ReservationNavAvatar
           address={address}
           imageSrc={avatarSrc}
+          face={
+            showAgentOrb ? (
+              <AgentOrb
+                agentKey={address}
+                size={MEMBER_AVATAR_SIZE}
+                label={displayLabel}
+              />
+            ) : undefined
+          }
           size={MEMBER_AVATAR_SIZE}
           showRing={showRing}
           ringPercent={ringPercent}

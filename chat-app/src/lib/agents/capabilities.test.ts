@@ -66,7 +66,7 @@ describe('root registration', () => {
     const messenger = preset('messenger');
     expect(registrationGrant({capabilities: messenger, delegatableCaps: messenger}, messenger)).toEqual({
       capabilities: messenger | CAP.AGENT_REGISTER,
-      delegatableCaps: messenger | CAP.AGENT_REGISTER,
+      delegatableCaps: messenger,
     });
     const ready = messenger | CAP.AGENT_REGISTER;
     expect(registrationGrant({capabilities: ready, delegatableCaps: ready}, messenger)).toBeNull();

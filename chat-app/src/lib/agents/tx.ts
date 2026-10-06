@@ -115,10 +115,16 @@ export function deactivateAgenticOrganizationTx(
 
 export interface AgentPolicyArgs {
   capabilities: number;
+  identityClass?: number;
+  roleTags?: string;
   /** Caps this agent may hand down to children it registers. */
   delegatableCaps?: number;
   /** Absolute expiry (ms since epoch), or null for none. */
   expiresAtMs?: number | null;
+  approvalRequiredCaps?: number;
+  maxActionSpend?: string | null;
+  platformScope?: string | null;
+  registerScope?: number;
 }
 
 export interface RegisterAgentArgs extends AgentPolicyArgs {
@@ -130,14 +136,14 @@ export interface RegisterAgentArgs extends AgentPolicyArgs {
 
 function pushAgentPolicy(tx: Transaction, args: AgentPolicyArgs) {
   return [
-    tx.pure.u8(IDENTITY_CLASS_DELEGATED_AI),
-    tx.pure.u64(0), // role_tags
+    tx.pure.u8(args.identityClass ?? IDENTITY_CLASS_DELEGATED_AI),
+    tx.pure.u64(args.roleTags ?? '0'),
     tx.pure.u64(args.capabilities),
     tx.pure.u64(args.delegatableCaps ?? 0),
-    tx.pure.u8(REGISTER_SCOPE_BOTH),
-    tx.pure.u64(0), // approval_required_caps (not enforced by the relayer in v1)
-    optionalU64(tx, null), // max_action_spend
-    tx.pure.option('address', null), // platform_scope
+    tx.pure.u8(args.registerScope ?? REGISTER_SCOPE_BOTH),
+    tx.pure.u64(args.approvalRequiredCaps ?? 0),
+    tx.pure.option('u64', args.maxActionSpend ?? null),
+    tx.pure.option('address', args.platformScope ?? null),
     optionalU64(tx, args.expiresAtMs),
   ];
 }

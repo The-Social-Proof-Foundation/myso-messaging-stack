@@ -27,8 +27,8 @@ importers:
         specifier: ^0.0.2
         version: 0.0.2
       '@socialproof/memory':
-        specifier: ^0.0.5
-        version: 0.0.5(@socialproof/mydata@0.0.4(@socialproof/myso@0.0.4(typescript@5.8.3)))(@socialproof/myso@0.0.4(typescript@5.8.3))(zod@3.25.76)
+        specifier: file:../../myso-memory/packages/sdk
+        version: file:../../myso-memory/packages/sdk(@socialproof/mydata@0.0.4(@socialproof/myso@0.0.4(typescript@5.8.3)))(@socialproof/myso@0.0.4(typescript@5.8.3))(zod@3.25.76)
       '@socialproof/mydata':
         specifier: ^0.0.4
         version: 0.0.4(@socialproof/myso@0.0.4(typescript@5.8.3))
@@ -62,6 +62,9 @@ importers:
       lucide-react:
         specifier: ^1.25.0
         version: 1.25.0(react@19.2.4)
+      orbloom:
+        specifier: ^0.1.0
+        version: 0.1.0
       radix-ui:
         specifier: ^1.6.7
         version: 1.6.7(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
@@ -84,6 +87,9 @@ importers:
         specifier: ^1.4.0
         version: 1.4.0
     devDependencies:
+      '@playwright/test':
+        specifier: 1.63.0
+        version: 1.63.0
       '@types/node':
         specifier: ^26.6.4
         version: 26.6.4
@@ -575,6 +581,11 @@ packages:
   '@nodelib/fs.walk@1.2.8':
     resolution: {integrity: sha512-oGB+UxlgWcgQkgwo8GcEGwemoTFt3FIO9ababBmaGwXIoBKZ+GTy0pP185beGg7Llih/NSHSV2XAs1lnznocSg==}
     engines: {node: '>= 8'}
+
+  '@playwright/test@1.63.0':
+    resolution: {integrity: sha512-oxMK4vllB9RK5NQ2l1pq1IfOf2AvnEuj/vYGDj0H2nMtmtZpKtCwt/l00GEO6xjGfpBNAvjovvYdCm50dRQkpQ==}
+    engines: {node: '>=20'}
+    hasBin: true
 
   '@protobuf-ts/grpcweb-transport@2.11.1':
     resolution: {integrity: sha512-1W4utDdvOB+RHMFQ0soL4JdnxjXV+ddeGIUg08DvZrA8Ms6k5NN6GBFU2oHZdTOcJVpPrDJ02RJlqtaoCMNBtw==}
@@ -1692,8 +1703,8 @@ packages:
   '@socialproof/bcs@0.0.2':
     resolution: {integrity: sha512-ahrcri+bKrOivsn6U1v5QT/3iEqi6Il0w9bQvgGJuo0eemBq/zRXXL7iOZBGwT+81bQhxwKKCORptZOxlh1oOA==}
 
-  '@socialproof/memory@0.0.5':
-    resolution: {integrity: sha512-VEVfpi6k3nrojTmglL37moLcZv/BFBhsColPiJedQu2foKTfcMVT7DOgs9gA3v0yJlyKrif3vFvGjpqV7YiCdA==}
+  '@socialproof/memory@file:../../myso-memory/packages/sdk':
+    resolution: {directory: ../../myso-memory/packages/sdk, type: directory}
     peerDependencies:
       '@socialproof/file-storage': '>=0.0.4'
       '@socialproof/mydata': 0.0.4
@@ -2808,6 +2819,10 @@ packages:
     resolution: {integrity: sha512-weP+BZ8MVNnlCm8c0Qdc1WSWq4Qn7I+9CJGm7Qali6g44e/PUzbjNqJX5NJ9ljlNMosfJvg1fKEGILklK9cwnw==}
     engines: {node: '>=18'}
 
+  orbloom@0.1.0:
+    resolution: {integrity: sha512-OAUyxkQxOuATw9LZtFbsQ5huMXFAdfsRz2ZaO5JoQwHVP7Ko1JLv7kDCDUczJajQ7bPeIlQoRo6C+gzu3ytMEQ==}
+    engines: {node: '>=22.12.0'}
+
   p-limit@2.3.0:
     resolution: {integrity: sha512-//88mFWSJx8lxCzwdAABTJL2MyWB12+eIY7MDL2SqLmAkeKU9qxRvWuSyTjm3FUmpBEMuFfckAIqEaVGUDxb6w==}
     engines: {node: '>=6'}
@@ -2879,6 +2894,16 @@ packages:
   pkg-up@3.1.0:
     resolution: {integrity: sha512-nDywThFk1i4BQK4twPQ6TA4RT8bDY96yeuCVBWL3ePARCiEKDRSrNGbFIgUJpLp+XeIR65v8ra7WuJOFUBtkMA==}
     engines: {node: '>=8'}
+
+  playwright-core@1.63.0:
+    resolution: {integrity: sha512-rYCsBF/M5HjUch52bbtVONEFjv6Xu8sm8h72dNlR5bzIE1fvC/bxgspzkjSfU+MweEMmPM8KJebG6nnyxo5mCg==}
+    engines: {node: '>=20'}
+    hasBin: true
+
+  playwright@1.63.0:
+    resolution: {integrity: sha512-+7ziBLidS4NaNCdt57SUDT+wYmmd5fmiQejUic/kb+YsYSCPyOOE9sebzMjNmQrsnNpDJqd4WHvV/8lfKfUDUg==}
+    engines: {node: '>=20'}
+    hasBin: true
 
   poseidon-lite@0.2.1:
     resolution: {integrity: sha512-xIr+G6HeYfOhCuswdqcFpSX47SPhm0EpisWJ6h7fHlWwaVIvH3dLnejpatrtw6Xc6HaLrpq05y7VRfvDmDGIog==}
@@ -3889,6 +3914,10 @@ snapshots:
     dependencies:
       '@nodelib/fs.scandir': 2.1.5
       fastq: 1.20.3
+
+  '@playwright/test@1.63.0':
+    dependencies:
+      playwright: 1.63.0
 
   '@protobuf-ts/grpcweb-transport@2.11.1':
     dependencies:
@@ -5017,10 +5046,11 @@ snapshots:
       '@scure/base': 2.0.0
       '@socialproof/utils': 0.0.2
 
-  '@socialproof/memory@0.0.5(@socialproof/mydata@0.0.4(@socialproof/myso@0.0.4(typescript@5.8.3)))(@socialproof/myso@0.0.4(typescript@5.8.3))(zod@3.25.76)':
+  '@socialproof/memory@file:../../myso-memory/packages/sdk(@socialproof/mydata@0.0.4(@socialproof/myso@0.0.4(typescript@5.8.3)))(@socialproof/myso@0.0.4(typescript@5.8.3))(zod@3.25.76)':
     dependencies:
       '@noble/ed25519': 2.3.0
       '@noble/hashes': 2.0.1
+      '@socialproof/bcs': 0.0.2
       '@socialproof/mydata': 0.0.4(@socialproof/myso@0.0.4(typescript@5.8.3))
       '@socialproof/myso': 0.0.4(typescript@5.8.3)
     optionalDependencies:
@@ -6054,6 +6084,8 @@ snapshots:
       string-width: 7.2.0
       strip-ansi: 7.2.0
 
+  orbloom@0.1.0: {}
+
   p-limit@2.3.0:
     dependencies:
       p-try: 2.2.0
@@ -6104,6 +6136,12 @@ snapshots:
   pkg-up@3.1.0:
     dependencies:
       find-up: 3.0.0
+
+  playwright-core@1.63.0: {}
+
+  playwright@1.63.0:
+    dependencies:
+      playwright-core: 1.63.0
 
   poseidon-lite@0.2.1: {}
 

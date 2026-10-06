@@ -6,7 +6,7 @@ import {
   agentDerivedAddress,
   deriveAgentKeypair,
   findAgentKeypair,
-} from './agent-keys';
+} from './legacy-agent-keys';
 
 const HUMAN = Ed25519Keypair.fromSecretKey(new Uint8Array(32).fill(7));
 const OTHER_HUMAN = Ed25519Keypair.fromSecretKey(new Uint8Array(32).fill(9));

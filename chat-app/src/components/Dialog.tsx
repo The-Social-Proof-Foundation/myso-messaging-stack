@@ -11,6 +11,14 @@ interface DialogProps {
   /** Blocks backdrop/escape dismissal while a transaction is in flight. */
   busy?: boolean;
   maxWidthClass?: string;
+  /** Overrides the default title classes. */
+  titleClassName?: string;
+  /** Sits on the left of the title, vertically centered with it. */
+  leading?: ReactNode;
+  /** Corner radius of the panel. Token rows stay independently rounded. */
+  panelRadiusClass?: string;
+  /** Drawn over the card only, not the page behind it. */
+  overlay?: ReactNode;
 }
 
 /**
@@ -25,6 +33,10 @@ export function Dialog({
   footer,
   busy = false,
   maxWidthClass = 'max-w-md',
+  titleClassName,
+  leading,
+  panelRadiusClass = 'rounded-xl',
+  overlay,
 }: Readonly<DialogProps>) {
   useEffect(() => {
     if (!open) return;
@@ -48,36 +60,46 @@ export function Dialog({
       role="presentation"
     >
       <div
-        className={`max-h-[90vh] w-full ${maxWidthClass} overflow-y-auto rounded-xl bg-white p-6 shadow-2xl dark:bg-secondary-800`}
+        className={`relative isolate flex max-h-[90vh] w-full ${maxWidthClass} ${panelRadiusClass} flex-col overflow-hidden bg-white shadow-2xl dark:bg-secondary-800`}
         onClick={(event) => event.stopPropagation()}
         onKeyDown={(event: KeyboardEvent<HTMLDivElement>) => event.stopPropagation()}
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
       >
-        <div className="relative mb-4 flex items-center justify-center">
-          <h2
-            id={titleId}
-            className="font-chakra text-lg font-semibold tracking-wide text-secondary-900 dark:text-secondary-100"
-          >
-            {title}
-          </h2>
-          <button
-            type="button"
-            onClick={onClose}
-            disabled={busy}
-            aria-label="Close"
-            className="absolute right-0 top-1/2 -translate-y-1/2 rounded-md p-1 text-secondary-500 hover:bg-secondary-100 hover:text-secondary-800 disabled:opacity-50 dark:text-secondary-400 dark:hover:bg-secondary-700 dark:hover:text-secondary-100"
-          >
-            <X className="h-5 w-5" />
-          </button>
+        <div className="min-h-0 overflow-y-auto p-6">
+          <div className="relative mb-4 flex items-center justify-center">
+            {leading ? (
+              <div className="absolute left-0 top-1/2 -translate-y-1/2">{leading}</div>
+            ) : null}
+            <h2
+              id={titleId}
+              className={
+                titleClassName ??
+                'font-chakra text-lg font-semibold tracking-wide text-secondary-900 dark:text-secondary-100'
+              }
+            >
+              {title}
+            </h2>
+            <button
+              type="button"
+              onClick={onClose}
+              disabled={busy}
+              aria-label="Close"
+              className="absolute right-0 top-1/2 -translate-y-1/2 rounded-md p-1 text-secondary-500 hover:bg-secondary-100 hover:text-secondary-800 disabled:opacity-50 dark:text-secondary-400 dark:hover:bg-secondary-700 dark:hover:text-secondary-100"
+            >
+              <X className="h-5 w-5" />
+            </button>
+          </div>
+
+          {children}
+
+          {footer ? (
+            <div className="mt-5 flex items-center justify-end gap-2">{footer}</div>
+          ) : null}
         </div>
 
-        {children}
-
-        {footer ? (
-          <div className="mt-5 flex items-center justify-end gap-2">{footer}</div>
-        ) : null}
+        {overlay}
       </div>
     </div>
   );

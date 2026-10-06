@@ -3,6 +3,7 @@ import {
   ReservationNavAvatar,
   reservationAvatarShellSize,
 } from './ReservationNavAvatar';
+import {AgentOrb} from './agents/AgentOrb';
 /** Outer cluster box; smaller = more face overlap (shell ≈ 30px with SPT ring). */
 const STACK_SIZE = 46;
 const FACE_SIZE = 26;
@@ -13,6 +14,8 @@ type ConversationAvatarProps = {
   memberAddresses: readonly string[];
   selfAddress: string | null | undefined;
   profiles: WalletProfileBits;
+  /** Agent derived addresses render an orb instead of the empty photo. */
+  isAgentAddress?: (address: string) => boolean;
 };
 
 function sameAddress(a?: string | null, b?: string | null): boolean {
@@ -23,15 +26,23 @@ function sameAddress(a?: string | null, b?: string | null): boolean {
 function StackedFace({
   address,
   profiles,
+  isAgentAddress,
 }: Readonly<{
   address: string;
   profiles: WalletProfileBits;
+  isAgentAddress?: (address: string) => boolean;
 }>) {
   const ring = profiles.ringFor(address);
+  const agent = isAgentAddress?.(address) ?? false;
   return (
     <ReservationNavAvatar
       address={address}
       imageSrc={profiles.photoFor(address)}
+      face={
+        agent ? (
+          <AgentOrb agentKey={address} size={FACE_SIZE} label="Agent" />
+        ) : undefined
+      }
       size={FACE_SIZE}
       showRing={ring.showRing}
       ringPercent={ring.ringPercent}
@@ -48,6 +59,7 @@ export function ConversationAvatar({
   memberAddresses,
   selfAddress,
   profiles,
+  isAgentAddress,
 }: Readonly<ConversationAvatarProps>) {
   const others = memberAddresses.filter(
     (a) => !sameAddress(a, selfAddress),
@@ -73,6 +85,15 @@ export function ConversationAvatar({
       <ReservationNavAvatar
         address={peer}
         imageSrc={profiles.photoFor(peer)}
+        face={
+          isAgentAddress?.(peer) ? (
+            <AgentOrb
+              agentKey={peer}
+              size={SINGLE_SIZE}
+              label="Agent"
+            />
+          ) : undefined
+        }
         size={SINGLE_SIZE}
         showRing={ring.showRing}
         ringPercent={ring.ringPercent}
@@ -93,10 +114,10 @@ export function ConversationAvatar({
         aria-hidden
       >
         <span className="absolute left-0 top-0 z-0">
-          <StackedFace address={others[0]!} profiles={profiles} />
+          <StackedFace address={others[0]!} profiles={profiles} isAgentAddress={isAgentAddress} />
         </span>
         <span className="absolute bottom-0 right-0 z-10">
-          <StackedFace address={others[1]!} profiles={profiles} />
+          <StackedFace address={others[1]!} profiles={profiles} isAgentAddress={isAgentAddress} />
         </span>
       </span>
     );
@@ -115,10 +136,10 @@ export function ConversationAvatar({
       aria-hidden
     >
       <span className="absolute left-1/2 top-0 z-0 -translate-x-1/2">
-        <StackedFace address={faceA} profiles={profiles} />
+        <StackedFace address={faceA} profiles={profiles} isAgentAddress={isAgentAddress} />
       </span>
       <span className="absolute bottom-0 left-0 z-10">
-        <StackedFace address={faceB} profiles={profiles} />
+        <StackedFace address={faceB} profiles={profiles} isAgentAddress={isAgentAddress} />
       </span>
       <span className="absolute bottom-0 right-0 z-20">
         {showOverflow ? (
@@ -129,7 +150,7 @@ export function ConversationAvatar({
             +{extra > 99 ? 99 : extra}
           </span>
         ) : (
-          <StackedFace address={others[2]!} profiles={profiles} />
+          <StackedFace address={others[2]!} profiles={profiles} isAgentAddress={isAgentAddress} />
         )}
       </span>
     </span>

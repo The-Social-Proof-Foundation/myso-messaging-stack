@@ -4,7 +4,7 @@ import type {Ed25519Keypair} from '@socialproof/myso/keypairs/ed25519';
 import {useQueryClient} from '@tanstack/react-query';
 
 import {isAgentChatMetadata, type AgentChatRef} from '../../lib/agents/agent-chats';
-import {findAgentKeypair} from '../../lib/agents/agent-keys';
+import {useAgentVault} from '../../contexts/AgentKeyVaultContext';
 import {CAP, hasCapability} from '../../lib/agents/capabilities';
 import {executeAsAgent} from '../../lib/agents/execute';
 import {ensureAgentChatSendPermission} from '../../lib/agents/agent-chat-permissions';
@@ -195,6 +195,7 @@ export function useCreateAgentChat(): CreateAgentChatState {
   const address = useAuthenticatedAddress();
   const account = useMemoryAccount();
   const agents = useSubAgents(false);
+  const vault = useAgentVault();
   const actions = useAgentActions();
   const platform = useAgentChatPlatform();
   const openChat = useOpenAgentChat();
@@ -262,39 +263,25 @@ export function useCreateAgentChat(): CreateAgentChatState {
       const targetPlatform = await platform.ensureMembership();
 
       setStage('preparing');
-      // The derivation bound must come from the all-rows count: deactivating siblings lowers
-      // the active-only count and would otherwise make an agent at a high index un-derivable.
-      const bound = Math.max(agents.totalCount ?? 0, 32);
-      const derived = await findAgentKeypair(
-        keypair as Ed25519Keypair,
-        agent.derived_address,
-        agent.organization_id,
-        bound,
-      );
-      if (!derived) {
-        throw new Error('Could not re-derive this agent key from the current login.');
-      }
-
+      if (!vault) throw new Error('Unlock agent backups with your passkey first.');
+      const epoch = vault.generation();
+      const derived = await vault.getAgent(agent);
+      vault.assertCurrent(epoch);
       const uuid = crypto.randomUUID();
       const name = `${agent.label.trim() || 'Agent'} chat`;
-      const tx = client.messaging.tx.createAgentAndShareGroup({
-        uuid,
-        name,
-        platformId: targetPlatform.platformId,
-        creatorMemoryAccountId: memoryAccount.account_id,
-        crossPrincipalPeerMemoryAccountId: memoryAccount.account_id,
-        initialMembers: [],
-      });
-
+      const tx = client.messaging.tx.createAgentAndShareGroup({uuid, name,
+        platformId: targetPlatform.platformId, creatorMemoryAccountId: memoryAccount.account_id,
+        crossPrincipalPeerMemoryAccountId: memoryAccount.account_id, initialMembers: []});
       const groupId = client.messaging.derive.groupId({uuid});
-
       setStage('signing');
       await executeAsAgent(
         client as ClientWithCoreApi,
         derived.keypair,
         keypair as Ed25519Keypair,
         tx,
+        derived.signal,
       );
+      vault.assertCurrent(epoch);
 
       setStage('syncing');
       const principal = address ?? keypair.toMySoAddress();
@@ -342,7 +329,7 @@ export function useCreateAgentChat(): CreateAgentChatState {
       await queryClient.invalidateQueries({queryKey: ['agents']});
       return hydrated;
     },
-    [client, keypair, address, canChat, agents.totalCount, platform, openChat, queryClient],
+    [client, keypair, address, vault, canChat, agents.totalCount, platform, openChat, queryClient],
   );
 
   const createChat = useCallback(

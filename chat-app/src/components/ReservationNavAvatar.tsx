@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef } from 'react';
+import { useEffect, useId, useRef, type ReactNode } from 'react';
 import defaultAvatar from '../assets/default-avatar.png';
 import { useRingGradientFromImage } from '../hooks/useRingGradientFromImage';
 
@@ -48,6 +48,8 @@ export function reservationAvatarShellSize(
 type ReservationNavAvatarProps = {
   address?: string;
   imageSrc?: string | null;
+  /** Replaces the photo. Used for agent orbs; humans keep the image. */
+  face?: ReactNode;
   size?: keyof typeof PRESETS | number;
   showRing?: boolean;
   ringPercent?: number;
@@ -66,6 +68,7 @@ type ReservationNavAvatarProps = {
  */
 export function ReservationNavAvatar({
   imageSrc,
+  face,
   size = 'md',
   showRing = false,
   ringPercent = 0,
@@ -82,7 +85,7 @@ export function ReservationNavAvatar({
   const imageInset = padding + strokeWidth / 2;
 
   const resolvedSrc = imageSrc?.trim() || null;
-  const imageKeyForHook = showRing && resolvedSrc ? resolvedSrc : null;
+  const imageKeyForHook = !face && showRing && resolvedSrc ? resolvedSrc : null;
   const {
     ringGradient,
     imageGradientPending,
@@ -106,7 +109,7 @@ export function ReservationNavAvatar({
   const revealProgressArc =
     clamped > 0 && !(imageGradientPending && !ringGradient);
 
-  const media = (
+  const media = face ?? (
     <img
       key={`${src}:${showRing ? 'ring' : 'plain'}`}
       src={src}

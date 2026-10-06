@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import {
   useMessagingClient,
   useMessagingClientInitError,
@@ -5,6 +6,8 @@ import {
 } from '../contexts/MessagingClientContext';
 import { useMySocialAuth } from '../contexts/MySocialAuthContext';
 import { AuthenticatedApp } from '../components/AuthenticatedApp';
+import { TxStatusOverlay } from '../components/TxStatusOverlay';
+import { clearLoginCelebration } from '../lib/mysocial-auth-storage';
 
 export function HomePage() {
   const {
@@ -17,14 +20,25 @@ export function HomePage() {
     deriveKeyError,
     derivingKeypair,
     signInError,
+    loginCelebration,
+    finishLoginCelebration,
+    logout,
   } = useMySocialAuth();
 
   const messagingClient = useMessagingClient();
   const messagingClientInitError = useMessagingClientInitError();
   const messagingClientLoading = useMessagingClientLoading();
 
-  const connected = Boolean(session && keypair);
+  const connected = Boolean(session?.user?.address && keypair);
   const messagingReady = Boolean(messagingClient && !messagingClientLoading);
+  const celebrateLogin = loginCelebration && !signInError && !messagingClientInitError;
+
+  useEffect(() => {
+    if (!celebrateLogin || !connected || !messagingReady) return;
+    clearLoginCelebration();
+    const timer = window.setTimeout(() => finishLoginCelebration(), 1100);
+    return () => window.clearTimeout(timer);
+  }, [celebrateLogin, connected, messagingReady, finishLoginCelebration]);
 
   if (configError) {
     return (
@@ -33,6 +47,15 @@ export function HomePage() {
           {configError}
         </div>
       </main>
+    );
+  }
+
+  if (celebrateLogin) {
+    return (
+      <TxStatusOverlay
+        phase={connected && messagingReady ? 'success' : 'processing'}
+        processingText="Signing in"
+      />
     );
   }
 
@@ -67,15 +90,8 @@ export function HomePage() {
     );
   }
 
-  if (auth && session && !walletOnlyBlocked && derivingKeypair) {
-    return (
-      <main className="flex flex-1 flex-col items-center justify-center gap-2">
-        <span className="inline-block h-6 w-6 animate-spin rounded-full border-2 border-primary-500 border-t-transparent" />
-        <p className="text-sm text-secondary-500 dark:text-secondary-400">
-          Preparing signing key…
-        </p>
-      </main>
-    );
+  if (auth && session && !walletOnlyBlocked && derivingKeypair && !keypair) {
+    return <TxStatusOverlay phase="processing" processingText="Signing in" />;
   }
 
   if (
@@ -88,8 +104,15 @@ export function HomePage() {
   ) {
     return (
       <main className="flex flex-1 items-center justify-center px-8">
-        <div className="max-w-md text-center text-sm text-danger-500 dark:text-danger-400">
-          {deriveKeyError}
+        <div className="flex max-w-md items-center justify-center gap-3 text-center text-sm text-danger-500 dark:text-danger-400">
+          <span>{deriveKeyError}</span>
+          <button
+            type="button"
+            onClick={() => void logout()}
+            className="shrink-0 text-sm text-secondary-400 underline-offset-2 hover:text-secondary-200 hover:underline"
+          >
+            Sign out
+          </button>
         </div>
       </main>
     );

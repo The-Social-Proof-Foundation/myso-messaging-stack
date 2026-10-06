@@ -125,8 +125,8 @@ export function registrationGrant(
   const canDelegate = (childCapabilities & parent.delegatableCaps) === childCapabilities;
   if (canRegister && canDelegate) return null;
   return {
-    capabilities: parent.capabilities | CAP.AGENT_REGISTER,
+    capabilities: parent.capabilities | childCapabilities | CAP.AGENT_REGISTER,
     delegatableCaps:
-      parent.delegatableCaps | parent.capabilities | childCapabilities | CAP.AGENT_REGISTER,
+      parent.delegatableCaps | childCapabilities,
   };
 }

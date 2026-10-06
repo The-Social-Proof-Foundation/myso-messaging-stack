@@ -19,7 +19,7 @@ import {agentKeys} from './query-keys';
  *
  * `totalCount` is the endpoint's `total_count` for **all** matching rows, not just the
  * loaded ones, which is what key derivation depends on: the next free derivation index is
- * the owner's total registered agent count, and `findAgentKeypair` scans up to that bound.
+ * the owner's total registered agent count. Encrypted key recovery uses object IDs.
  * Always take the bound from the all-rows list (`activeOnly = false`).
  */
 export function useSubAgents(activeOnly = false, options: ListOptions = {}) {

@@ -1,5 +1,5 @@
 import type { StoredGroup } from '../lib/group-store';
-import { useMemo } from 'react';
+import { useCallback, useMemo } from 'react';
 import { ChevronRight } from 'lucide-react';
 import { useAuthenticatedAddress } from '../contexts/MySocialAuthContext';
 import { useOwnWalletProfile } from '../hooks/useOwnWalletProfile';
@@ -7,7 +7,7 @@ import { useSidebarGroupMembers } from '../hooks/useSidebarGroupMembers';
 import { useSidebarMessagePreviews } from '../hooks/useSidebarMessagePreviews';
 import { useWalletAvatarMap } from '../hooks/useWalletAvatarMap';
 import { useAgentNamesByAddress } from '../hooks/agents/useSubAgents';
-import { conversationPeerLabel } from '../lib/agents/agent-display-name';
+import { conversationPeerLabel, isKnownAgentAddress, knownAgentAddressSet } from '../lib/agents/agent-display-name';
 import {
   conversationDisplayTitle,
   dmPeerAddress,
@@ -30,6 +30,8 @@ interface SidebarProps {
   /** Swaps the sidebar into the organizations-and-agents view. */
   onOpenAgentView: () => void;
   loading?: boolean;
+  /** Agent-chat creator addresses, so foreign agents still get an orb. */
+  agentCreatorActors?: readonly (string | null | undefined)[];
 }
 
 export function Sidebar({
@@ -41,6 +43,7 @@ export function Sidebar({
   onSelectGroup,
   onOpenAgentView,
   loading = false,
+  agentCreatorActors = [],
 }: Readonly<SidebarProps>) {
   const address = useAuthenticatedAddress();
   const { profile } = useOwnWalletProfile();
@@ -65,6 +68,14 @@ export function Sidebar({
   }, [membersByGroup, address]);
   const profiles = useWalletAvatarMap(profileAddresses);
   const agentNames = useAgentNamesByAddress();
+  const knownAgents = useMemo(
+    () => knownAgentAddressSet([...agentNames.keys()], agentCreatorActors),
+    [agentNames, agentCreatorActors],
+  );
+  const isAgentAddress = useCallback(
+    (address: string) => isKnownAgentAddress(address, knownAgents),
+    [knownAgents],
+  );
 
   return (
     <aside className={sidebarShellClass}>
@@ -125,6 +136,7 @@ export function Sidebar({
                         memberAddresses={members}
                         selfAddress={address}
                         profiles={profiles}
+                        isAgentAddress={isAgentAddress}
                       />
                       <div className="min-w-0 flex-1 pt-px">
                         <div className="flex min-w-0 items-baseline gap-1.5">

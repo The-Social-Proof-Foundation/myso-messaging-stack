@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { TxStatusOverlay } from '../components/TxStatusOverlay';
 import type { AuthResultMessage } from '../lib/auth-session-build';
 import {
   buildSessionFromAuthResult,
@@ -7,7 +8,8 @@ import {
   sessionLacksRefreshToken,
 } from '../lib/auth-session-build';
 import { getMySocialAuth } from '../lib/mysocial-auth-client';
-import { removeAuthSession } from '../lib/mysocial-auth-storage';
+import { clearLoginCelebration, removeAuthSession } from '../lib/mysocial-auth-storage';
+import { completeZkLoginRedirect, zkLoginRedirectPending } from '../lib/zklogin-signin';
 
 async function handlePopupFallback(): Promise<boolean> {
   if (typeof BroadcastChannel === 'undefined') return false;
@@ -113,8 +115,26 @@ export default function AuthCallback() {
     const run = async () => {
       if (await handlePopupFallback()) return;
 
+      if (zkLoginRedirectPending()) {
+        try {
+          const finished = await completeZkLoginRedirect();
+          if (finished) {
+            if (cancelled) return;
+            window.location.replace('/');
+            return;
+          }
+        } catch (err) {
+          clearLoginCelebration();
+          if (!cancelled) {
+            setError(err instanceof Error ? err.message : 'Authentication callback failed.');
+          }
+          return;
+        }
+      }
+
       const auth = getMySocialAuth();
       if (!auth) {
+        clearLoginCelebration();
         if (!cancelled) setError('MySocial auth is not configured.');
         return;
       }
@@ -127,6 +147,7 @@ export default function AuthCallback() {
           );
           await rejectNonRefreshableSession(session);
           removeAuthSession();
+          clearLoginCelebration();
           if (!cancelled) {
             setError(SESSION_CANNOT_REFRESH_MESSAGE);
           }
@@ -136,6 +157,7 @@ export default function AuthCallback() {
         if (cancelled) return;
         window.location.replace('/');
       } catch (err) {
+        clearLoginCelebration();
         if (!cancelled) {
           setError(err instanceof Error ? err.message : 'Authentication callback failed.');
         }
@@ -156,11 +178,7 @@ export default function AuthCallback() {
     );
   }
 
-  return (
-    <div className="flex min-h-screen items-center justify-center p-4">
-      <p className="text-sm text-secondary-500 dark:text-secondary-400">Completing sign-in…</p>
-    </div>
-  );
+  return <TxStatusOverlay phase="processing" processingText="Signing in" />;
 }
 
 export { SESSION_KEY as SESSION_STORAGE_KEY } from '../lib/mysocial-auth-storage';

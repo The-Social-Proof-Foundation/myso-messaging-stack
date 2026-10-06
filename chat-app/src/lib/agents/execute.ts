@@ -6,6 +6,7 @@ import { canAffordGas } from '../gas-pool';
 import { isSponsoredGasAllowed } from '../network-utils';
 import { resolveGasPaymentForSigner } from '../resolve-gas-payment';
 import { signAndExecuteTransactionAndWait } from '../sign-and-wait';
+import { sessionLooksLikeZkLogin, zkLoginChainAddress, zkLoginChainSignature } from '../zklogin-signin';
 
 /** Human-signed agent/credit transaction through the app's smart-gas path. */
 export function executeAsHuman(
@@ -13,8 +14,27 @@ export function executeAsHuman(
   humanSigner: Signer,
   transaction: Transaction,
 ): Promise<string | null> {
+  const zkAddress = zkLoginChainAddress();
+  if (sessionLooksLikeZkLogin() && !zkAddress) {
+    return Promise.reject(
+      new Error('Sign in again so this zkLogin account can sign the transaction.'),
+    );
+  }
   return signAndExecuteTransactionAndWait(client, humanSigner, transaction, {
     logPrefix: 'Agents',
+    ...(zkAddress
+      ? {
+          senderAddress: zkAddress,
+          signTransactionBytes: (txBytes) => {
+            return zkLoginChainSignature(txBytes).then((signature) => {
+              if (!signature) {
+                throw new Error('Sign in again so this zkLogin account can sign the transaction.');
+              }
+              return signature;
+            });
+          },
+        }
+      : {}),
   });
 }
 
@@ -28,14 +48,16 @@ export async function executeAsAgent(
   agentSigner: Signer,
   humanSigner: Signer,
   transaction: Transaction,
+  signal?: AbortSignal,
 ): Promise<string> {
+  signal?.throwIfAborted();
   const agentAddress = agentSigner.toMySoAddress();
   if (isSponsoredGasAllowed() || (await canAffordGas(client, agentAddress))) {
     const digest = await signAndExecuteTransactionAndWait(
       client,
       agentSigner,
       transaction,
-      { logPrefix: 'Agents' },
+      { logPrefix: 'Agents', signal },
     );
     if (!digest) {
       throw new Error('Agent transaction executed without a digest.');
@@ -43,20 +65,34 @@ export async function executeAsAgent(
     return digest;
   }
 
-  const humanAddress = humanSigner.toMySoAddress();
+  const zkAddress = zkLoginChainAddress();
+  if (sessionLooksLikeZkLogin() && !zkAddress) {
+    throw new Error('Sign in again so this zkLogin account can sign the transaction.');
+  }
+  const gasPayer = zkAddress ?? humanSigner.toMySoAddress();
+  if (!(await canAffordGas(client, gasPayer))) {
+    throw new Error(
+      'Insufficient MySo balance to pay for gas. Sponsored transactions are not available on localnet. Please ensure you have sufficient MySo balance.',
+    );
+  }
   transaction.setSender(agentAddress);
-  transaction.setGasOwner(humanAddress);
-  const gas = await resolveGasPaymentForSigner(client, humanAddress);
+  transaction.setGasOwner(gasPayer);
+  const gas = await resolveGasPaymentForSigner(client, gasPayer);
   transaction.setGasPayment(gas.kind === 'coins' ? gas.refs : []);
 
   const bytes = await transaction.build({ client });
-  const [agentSig, humanSig] = await Promise.all([
-    agentSigner.signTransaction(bytes),
-    humanSigner.signTransaction(bytes),
-  ]);
+  signal?.throwIfAborted();
+  const agentSig = await agentSigner.signTransaction(bytes);
+  const gasSig = zkAddress
+    ? await zkLoginChainSignature(bytes)
+    : (await humanSigner.signTransaction(bytes)).signature;
+  if (!gasSig) {
+    throw new Error('Sign in again so this zkLogin account can sign the transaction.');
+  }
+  signal?.throwIfAborted();
   const result = await client.core.executeTransaction({
     transaction: bytes,
-    signatures: [agentSig.signature, humanSig.signature],
+    signatures: [agentSig.signature, gasSig],
   });
   const tx = result.Transaction ?? result.FailedTransaction;
   if (!tx) {

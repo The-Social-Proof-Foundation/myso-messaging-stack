@@ -1,0 +1,114 @@
+import {useQueryClient} from '@tanstack/react-query';
+import {createContext, useContext, useEffect, useMemo, useSyncExternalStore, type ReactNode} from 'react';
+import {normalizeKeyAddress, type AgentKeyEnvelopeV1} from '@socialproof/memory';
+import {useAuthenticatedAddress, useMySocialAuth} from './MySocialAuthContext';
+import {useMemoryAccount} from '../hooks/agents/useMemoryAccount';
+import {getMessagingRpcUrl} from '../lib/messaging-client-factory';
+import {zkLoginPersonalMessageSignature, sessionLooksLikeZkLogin} from '../lib/zklogin-signin';
+import {memoryServerUrl} from '../lib/agents/memory-client';
+import {PasskeyVault} from '../lib/agents/passkey-vault';
+
+const Context = createContext<PasskeyVault | null>(null);
+export const AGENT_BACKUPS_ENABLED = import.meta.env.VITE_AGENT_KEY_BACKUPS_ENABLED === 'true';
+async function objectFields(id: string): Promise<{type: string; fields: Record<string, any>}> {
+  const response = await fetch(getMessagingRpcUrl(), {method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({jsonrpc:'2.0',id:1,method:'myso_getObject',params:[id,{showContent:true}]}),cache:'no-store'});
+  if (!response.ok) throw new Error('Chain verification unavailable');
+  const content = (await response.json()).result?.data?.content;
+  if (!content?.fields || !content.type) throw new Error('Chain object unavailable'); return content;
+}
+export async function verifyAgentEnvelope(id: string, e: AgentKeyEnvelopeV1) {
+  const {type,fields:f} = await objectFields(id);
+  const [pkg,mod,name] = type.split('::');
+  if (normalizeKeyAddress(pkg)!==e.packageId || mod!=='memory' || name!=='SubAgent' || type.split('::').length!==3) throw new Error('Unexpected agent object');
+  for (const [field,value] of [['memory_account_id',e.accountId],['organization_id',e.organizationId],['principal_owner',e.owner],['derived_address',e.derivedAddress]]) {
+    if (normalizeKeyAddress(f[field])!==value) throw new Error('Agent ownership mismatch');
+  }
+  const pk = Array.isArray(f.public_key) ? f.public_key.map((n: number) => Number(n).toString(16).padStart(2,'0')).join('') : '';
+  const expiry=optionalValue(f.expires_at);
+  if (pk!==e.publicKey || f.active!==true || (expiry!=null && Number(expiry)<Date.now())) throw new Error('Agent key is revoked, expired, or mismatched');
+  let parent=optionalValue(f.parent_object_id);
+  const visited=new Set<string>();
+  while(parent){
+    const id=normalizeKeyAddress(parent);
+    if(visited.has(id)||visited.size>=8)throw new Error('Invalid agent ancestor chain');
+    visited.add(id);
+    const ancestor=await objectFields(id);
+    const [ancestorPackage,ancestorModule,ancestorType]=ancestor.type.split('::');
+    const a=ancestor.fields,expiry=optionalValue(a.expires_at);
+    if(normalizeKeyAddress(ancestorPackage)!==e.packageId||ancestorModule!=='memory'||ancestorType!=='SubAgent'||a.active!==true
+      ||normalizeKeyAddress(a.memory_account_id)!==e.accountId||normalizeKeyAddress(a.organization_id)!==e.organizationId||normalizeKeyAddress(a.principal_owner)!==e.owner
+      ||(expiry!=null&&Number(expiry)<Date.now()))throw new Error('Agent ancestor is revoked, expired, or mismatched');
+    parent=optionalValue(a.parent_object_id);
+  }
+  const account=await objectFields(e.accountId);
+  if(account.fields.active!==true || normalizeKeyAddress(account.fields.owner)!==e.owner) throw new Error('Account inactive or ownership changed');
+  return {platformScope:optionalValue(f.platform_scope) as string|null};
+}
+export function AgentKeyVaultProvider({children}: {children: ReactNode}) {
+  const owner=useAuthenticatedAddress();
+  const queryClient=useQueryClient();
+  const {keypair}=useMySocialAuth();
+  const account=useMemoryAccount();
+  const vault=useMemo(() => {
+    if(!AGENT_BACKUPS_ENABLED || !owner || !keypair || !account.data?.account_id) return null;
+    return new PasskeyVault(memoryServerUrl(), {accountId:account.data.account_id,owner}, async bytes => {
+      if(sessionLooksLikeZkLogin()) {
+        const sig=await zkLoginPersonalMessageSignature(bytes);
+        if(!sig) throw new Error('Sign in again to verify ownership'); return sig;
+      }
+      return (await keypair.signPersonalMessage(bytes)).signature;
+    }, verifyAgentEnvelope);
+  },[owner,keypair,account.data?.account_id]);
+  useEffect(()=>{
+    // Retire any secret-bearing cache entries from the old deterministic-key hook.
+    queryClient.removeQueries({predicate:q=>q.queryKey[0]==='agents'&&q.queryKey[1]==='derived-key'});
+  },[queryClient,owner,vault]);
+  useEffect(() => {
+    if(!vault) return;
+    let timer: ReturnType<typeof setTimeout>;
+    const schedule=()=>{clearTimeout(timer);timer=setTimeout(()=>vault.lock(),15*60*1000);};
+    const events=['pointerdown','keydown','touchstart'];
+    events.forEach(e=>window.addEventListener(e,schedule,{passive:true})); schedule();
+    return()=>{clearTimeout(timer);events.forEach(e=>window.removeEventListener(e,schedule));vault.lock();};
+  },[vault]);
+  return <Context.Provider value={vault}>{children}</Context.Provider>;
+}
+export function useAgentVault() {
+  const vault=useContext(Context);
+  useSyncExternalStore(vault?.subscribe ?? (()=>()=>{}),vault?.getSnapshot ?? (()=>0));
+  return vault;
+}
+
+/** Check the canonical registry before retrying an interrupted registration. */
+export async function findRegisteredDraft(e: AgentKeyEnvelopeV1): Promise<string | null> {
+  const account=await objectFields(e.accountId);
+  const table=account.fields.agents?.fields?.id?.id;
+  if(!table) throw new Error('Agent registry unavailable; registration was not retried.');
+  const response=await fetch(getMessagingRpcUrl(),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({jsonrpc:'2.0',id:1,method:'myso_getDynamicFieldObject',params:[table,{type:'address',value:e.derivedAddress}]}),cache:'no-store'});
+  if(!response.ok) throw new Error('Agent registry lookup unavailable; retry later.');
+  const result=(await response.json()).result;
+  if(result?.error?.code==='dynamicFieldNotFound') return null;
+  const value=result?.data?.content?.fields?.value;
+  const id=value?.fields?.agent_object_id ?? value?.agent_object_id;
+  if(id) return normalizeKeyAddress(id);
+  throw new Error('Agent registry response unavailable; registration was not retried.');
+}
+
+function optionalValue(v:any):any {
+  if(v==null) return null;
+  if(typeof v==='string'||typeof v==='number') return v;
+  const vec=v.vec??v.fields?.vec;
+  if(!Array.isArray(vec)||vec.length>1)throw new Error('Canonical policy option unavailable');
+  return vec[0]??null;
+}
+export async function readAgentPolicy(id:string) {
+  const {fields:f}=await objectFields(id);
+  const c=f.constraints?.fields??f.constraints;
+  if(!c || c.approval_required_caps==null || f.capabilities==null || f.delegatable_caps==null || f.register_scope==null)throw new Error('Canonical agent policy unavailable');
+  const expiry=optionalValue(f.expires_at),expiresAt=expiry==null?null:Number(expiry);
+  if(expiresAt!==null&&!Number.isSafeInteger(expiresAt))throw new Error('Agent expiry outside supported range');
+  const spend=optionalValue(c.max_action_spend);
+  return {capabilities:Number(f.capabilities),delegatableCaps:Number(f.delegatable_caps),registerScope:Number(f.register_scope),identityClass:Number(f.identity_class),roleTags:String(f.role_tags),
+    approvalRequiredCaps:Number(c.approval_required_caps),maxActionSpend:spend==null?null:String(spend),
+    platformScope:optionalValue(f.platform_scope) as string|null,expiresAt};
+}

@@ -1,6 +1,6 @@
 import {useEffect, useMemo, useState} from 'react';
 
-import {CAPABILITY_PRESETS, presetForMask} from '../../lib/agents/capabilities';
+import {CAP, CAPABILITY_PRESETS, presetForMask, registrationGrant, capabilityNames} from '../../lib/agents/capabilities';
 import {parseMysoToMist, truncateAddress} from '../../lib/agents/format';
 import type {SubAgentRow} from '../../lib/agents/social-api';
 import {
@@ -11,6 +11,8 @@ import {
 } from '../../hooks/agents';
 import {useAllSubAgents} from '../../hooks/agents/useSubAgents';
 import {Button} from '../Button';
+import {useAgentVault} from '../../contexts/AgentKeyVaultContext';
+import type {AgentKeyEnvelopeV1} from '@socialproof/memory';
 import {Dialog, dialogFieldClass} from '../Dialog';
 import {ListError} from './ListStates';
 
@@ -39,6 +41,11 @@ export function CreateAgentDialog({
   const agents = useAllSubAgents({enabled: open});
   const credit = useAiCreditBalance();
   const actions = useAgentActions();
+  const vault = useAgentVault();
+  const [approveGrant,setApproveGrant] = useState(false);
+  const [allowDelegation,setAllowDelegation] = useState(false);
+  const [drafts,setDrafts] = useState<AgentKeyEnvelopeV1[]>([]);
+  const [draftId,setDraftId] = useState('');
 
   const [organizationId, setOrganizationId] = useState(defaultOrganizationId ?? '');
   const [parentId, setParentId] = useState('');
@@ -69,6 +76,8 @@ export function CreateAgentDialog({
     if (!open || kind !== 'child' || parents.length !== 1) return;
     setParentId(parents[0]?.agent_object_id ?? '');
   }, [open, kind, parents]);
+
+  useEffect(()=>setApproveGrant(false),[mask,parentId]);
 
   function close() {
     if (busy) return;
@@ -102,16 +111,20 @@ export function CreateAgentDialog({
     setBusy(true);
     setError(null);
     try {
-      const nextIndex = agents.totalCount ?? agents.items.length;
+      if (vault?.status !== 'ready') throw new Error('Unlock agent backups with your passkey first.');
+      const draft = drafts.find(d=>d.keyId===draftId);
+      if(draft && !sameId(draft.organizationId,selectedOrg)) throw new Error('Choose the original organization for this saved setup.');
+      const delegatableCaps = allowDelegation ? mask : 0;
+      const effectiveMask=allowDelegation?mask|CAP.AGENT_REGISTER:mask;
       if (kind === 'root') {
         if (!selectedOrg) throw new Error('Choose an organization.');
         const created = await actions.registerRootAgent({
           accountId: account.data.account_id,
           organizationId: selectedOrg,
           label: label.trim() || 'Agent',
-          capabilities: mask,
+          capabilities: effectiveMask,
           expiresAtMs: expiresAtMs(),
-          nextIndex,
+          draft, delegatableCaps,
           budget: budgetArgs(),
         });
         onCreated?.(created.agentObjectId);
@@ -125,10 +138,10 @@ export function CreateAgentDialog({
           organizationId: parent.organization_id,
           parent,
           label: label.trim() || 'Child agent',
-          capabilities: mask,
+          capabilities: effectiveMask,
           expiresAtMs: expiresAtMs(),
-          nextIndex,
-          maxScanIndex: nextIndex,
+          draft, delegatableCaps,
+          approveParentGrant: approveGrant,
           budget: budgetArgs(),
         });
         onCreated?.(created.agentObjectId);
@@ -153,7 +166,7 @@ export function CreateAgentDialog({
           <Button variant="secondary" onClick={close} disabled={busy}>
             Cancel
           </Button>
-          <Button onClick={() => void submit()} disabled={busy || !account.data}>
+          <Button onClick={() => void submit()} disabled={busy || !account.data || vault?.status !== 'ready'}>
             {busy ? 'Registering…' : 'Create agent'}
           </Button>
         </>
@@ -166,6 +179,14 @@ export function CreateAgentDialog({
           void submit();
         }}
       >
+        {vault?.status !== 'ready' ? <p role="status" className="text-sm">Unlock agent backups with your passkey before creating an agent.</p> : null}
+        <Button variant="secondary" size="sm" onClick={()=>void vault?.pending().then(setDrafts).catch(e=>setError(e.message))}>Load saved incomplete setups</Button>
+        {drafts.length ? <label className="block text-sm">Saved setup<select className={dialogFieldClass} value={draftId} onChange={e=>setDraftId(e.target.value)}>
+          <option value="">New agent</option>{drafts.filter(d=>sameId(d.organizationId,selectedOrg)).map(d=><option key={d.keyId} value={d.keyId}>{d.derivedAddress.slice(0,14)}…</option>)}
+        </select></label> : null}
+        <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={allowDelegation} onChange={e=>setAllowDelegation(e.target.checked)}/>Allow creating children and delegating the selected capabilities</label>
+        {kind==='child' && parents.find(p=>p.agent_object_id===parentId) && registrationGrant({capabilities:parents.find(p=>p.agent_object_id===parentId)!.capabilities,delegatableCaps:parents.find(p=>p.agent_object_id===parentId)!.delegatable_caps},mask) ?
+          <label className="block text-sm"><input type="checkbox" checked={approveGrant} onChange={e=>setApproveGrant(e.target.checked)}/> Approve parent registration authority and delegation of: {capabilityNames(mask).join(', ')}</label> : null}
         {agents.isLoading ? (
           <p className="text-sm text-secondary-500">Loading agents…</p>
         ) : kind === 'root' ? (

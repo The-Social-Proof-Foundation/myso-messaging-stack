@@ -1,15 +1,14 @@
 import {useCallback, useState} from 'react';
 import {createAgentMessagingClient} from '@socialproof/myso-messaging-stack';
-import type {Ed25519Keypair} from '@socialproof/myso/keypairs/ed25519';
 import {useQuery} from '@tanstack/react-query';
 
 import {useMessagingClient} from '../../contexts/MessagingClientContext';
-import {useMySocialAuth} from '../../contexts/MySocialAuthContext';
+import {useMySocialAuth, useAuthenticatedAddress} from '../../contexts/MySocialAuthContext';
 import {
   agentChatFromMetadata,
   type GroupMetadataLike,
 } from '../../lib/agents/agent-chats';
-import {findAgentKeypair} from '../../lib/agents/agent-keys';
+import {useAgentVault} from '../../contexts/AgentKeyVaultContext';
 import {hasCapability} from '../../lib/agents/capabilities';
 import {
   askAgent,
@@ -17,7 +16,7 @@ import {
   MemoryClientError,
   rememberAgentFact,
 } from '../../lib/agents/memory-client';
-import {fetchSubAgentByObjectId, fetchSubAgents} from '../../lib/agents/social-api';
+import {fetchSubAgentByObjectId} from '../../lib/agents/social-api';
 import {useAgentChatPlatform} from './useAgentChatPlatform';
 import {useMemoryAccount} from './useMemoryAccount';
 import {useSubAgents} from './useSubAgents';
@@ -62,6 +61,8 @@ function replyError(error: unknown): string {
 export function useAgentMemoryReply(groupId: string, groupUuid: string) {
   const client = useMessagingClient();
   const {keypair} = useMySocialAuth();
+  const owner = useAuthenticatedAddress();
+  const vault = useAgentVault();
   const account = useMemoryAccount();
   const [replying, setReplying] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -137,38 +138,30 @@ export function useAgentMemoryReply(groupId: string, groupUuid: string) {
           return;
         }
 
-        let bound = agents.totalCount;
-        if (bound == null) {
-          const page = await fetchSubAgents(keypair.toMySoAddress(), {
-            activeOnly: false,
-            limit: 1,
-            offset: 0,
-          });
-          bound = page.totalCount;
-        }
-        const derived = await findAgentKeypair(
-          keypair as Ed25519Keypair,
-          agent.derived_address,
-          agent.organization_id,
-          Math.max(bound ?? 0, 32),
-        );
-        if (!derived) {
-          setError('Could not re-derive this agent key from the current login.');
-          return;
-        }
-
+        if (!vault || !owner) throw new Error('Unlock agent backups with your passkey first.');
+        if (!hasCapability(agent.capabilities, 'MESSAGE_SEND')) throw new Error('This agent needs permission to send messages.');
+        if (agent.account_id !== memoryAccountId || ref.creatorActor !== agent.derived_address) throw new Error('Chat agent binding mismatch');
+        const epoch = vault.generation();
+        const derived = await vault.getAgent(agent);
         const memory = createAgentMemoryClient(derived, memoryAccountId);
-        await rememberAgentFact(memory, text);
-        const result = await askAgent(memory, {question: text});
+        let result;
+        try {
+          vault.assertCurrent(epoch);
+          await rememberAgentFact(memory, text);
+          vault.assertCurrent(epoch);
+          result = await askAgent(memory, {question: text});
+          vault.assertCurrent(epoch);
+        } finally {memory.destroy();}
         const answer = result.answer.trim() || "I don't have anything in memory for that.";
 
+        vault.assertCurrent(epoch);
         const joined = platform.active ?? (await platform.ensureMembership());
         const agentClient = createAgentMessagingClient({
           messaging: client.messaging,
           agent: {
             agentSigner: derived.keypair,
             subAgentId: agent.agent_object_id,
-            principalOwner: keypair.toMySoAddress(),
+            principalOwner: owner,
             identityClass: 1,
             memoryAccountId,
             platformId: joined.platformId,
@@ -185,6 +178,7 @@ export function useAgentMemoryReply(groupId: string, groupUuid: string) {
       }
     },
     [
+      vault, owner,
       account.data?.account_id,
       agents.totalCount,
       client,

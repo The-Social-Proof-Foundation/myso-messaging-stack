@@ -4,6 +4,7 @@ import {
   type MouseEvent,
   type ReactNode,
   type TouchEvent,
+  type TransitionEvent,
 } from 'react';
 import { LogOut } from 'lucide-react';
 
@@ -32,54 +33,40 @@ export function HoldSignOutButton({
   progressBarClassName = 'bg-[var(--destructive-foreground)]',
 }: Readonly<HoldSignOutButtonProps>) {
   const [isHolding, setIsHolding] = useState(false);
-  const [progress, setProgress] = useState(0);
   const actionFiredRef = useRef(false);
-  const startTimeRef = useRef(0);
-  const rafRef = useRef(0);
+  const holdingRef = useRef(false);
   const buttonRef = useRef<HTMLButtonElement>(null);
 
-  const clearHold = () => {
-    cancelAnimationFrame(rafRef.current);
+  const cancelHold = () => {
+    holdingRef.current = false;
     setIsHolding(false);
-    setProgress(0);
-    startTimeRef.current = 0;
-  };
-
-  const tick = () => {
-    const elapsed = performance.now() - startTimeRef.current;
-    const next = Math.min(100, (elapsed / holdDuration) * 100);
-    setProgress(next);
-    if (next >= 100) {
-      if (!actionFiredRef.current) {
-        actionFiredRef.current = true;
-        clearHold();
-        onConfirm();
-      }
-      return;
-    }
-    rafRef.current = requestAnimationFrame(tick);
   };
 
   const handleHoldStart = (
     e: MouseEvent<HTMLButtonElement> | TouchEvent<HTMLButtonElement>,
   ) => {
-    e.preventDefault();
     e.stopPropagation();
     actionFiredRef.current = false;
+    holdingRef.current = true;
     setIsHolding(true);
-    setProgress(0);
-    startTimeRef.current = performance.now();
-    rafRef.current = requestAnimationFrame(tick);
   };
 
   const handleHoldEnd = (
     e: MouseEvent<HTMLButtonElement> | TouchEvent<HTMLButtonElement>,
   ) => {
     e.stopPropagation();
-    if (isHolding && !actionFiredRef.current) {
-      clearHold();
+    if (holdingRef.current && !actionFiredRef.current) {
+      cancelHold();
     }
     buttonRef.current?.blur();
+  };
+
+  const handleFillComplete = (event: TransitionEvent<HTMLSpanElement>) => {
+    if (event.propertyName !== 'width') return;
+    if (!holdingRef.current || actionFiredRef.current) return;
+    actionFiredRef.current = true;
+    cancelHold();
+    onConfirm();
   };
 
   return (
@@ -87,6 +74,7 @@ export function HoldSignOutButton({
       ref={buttonRef}
       type="button"
       className={`relative w-full touch-none overflow-hidden ${className}`}
+      style={isHolding ? { backgroundColor: 'var(--accent)' } : undefined}
       onMouseDown={handleHoldStart}
       onMouseUp={handleHoldEnd}
       onMouseLeave={handleHoldEnd}
@@ -96,8 +84,14 @@ export function HoldSignOutButton({
     >
       <span
         aria-hidden
-        className={`absolute top-0 left-0 z-0 h-full transition-[width] duration-75 ${progressBarClassName}`}
-        style={{ width: `${progress}%` }}
+        onTransitionEnd={handleFillComplete}
+        className={`pointer-events-none absolute top-0 left-0 z-0 h-full ${progressBarClassName}`}
+        style={{
+          width: isHolding ? '100%' : '0%',
+          transitionProperty: 'width',
+          transitionTimingFunction: 'linear',
+          transitionDuration: isHolding ? `${holdDuration}ms` : '100ms',
+        }}
       />
       <span className="relative z-10 flex w-full select-none items-center gap-2">
         {icon}

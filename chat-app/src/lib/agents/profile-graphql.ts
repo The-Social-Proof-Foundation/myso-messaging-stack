@@ -77,6 +77,35 @@ export interface ProfileOverview {
   organizations: ProfileOrganization[];
 }
 
+export function mistBigint(value: string | number | bigint | null | undefined): bigint {
+  if (value == null || value === '') return 0n;
+  try {
+    if (typeof value === 'bigint') return value;
+    if (typeof value === 'number') return BigInt(Math.trunc(value));
+    return BigInt(value);
+  } catch {
+    return 0n;
+  }
+}
+
+/** Credit balance the header can show before the indexer records the deposit or withdrawal. */
+export function withCreditBalanceDelta(
+  current: ProfileOverview | undefined,
+  deltaMist: bigint,
+): ProfileOverview {
+  const balance = current?.aiCreditBalance;
+  const nextMist = mistBigint(balance?.balanceMist) + deltaMist;
+  return {
+    aiCreditBalance: {
+      credits: balance?.credits ?? null,
+      balanceMist: (nextMist < 0n ? 0n : nextMist).toString(),
+      spentTotalMist: balance?.spentTotalMist ?? null,
+      active: balance?.active ?? true,
+    },
+    organizations: current?.organizations ?? [],
+  };
+}
+
 export function graphqlNumber(value: string | number | null | undefined): number | null {
   if (value == null || value === '') return null;
   const parsed = typeof value === 'number' ? value : Number(value);

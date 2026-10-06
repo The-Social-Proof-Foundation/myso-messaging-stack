@@ -56,6 +56,7 @@ interface AdminPanelProps {
   photoFor?: (address: string) => string | null;
   labelFor?: (address: string) => string;
   ringFor?: (address: string) => WalletRingBits;
+  isAgentAddress?: (address: string) => boolean;
   /** Fired after a successful prefs PUT so the open thread can sync receiptMode. */
   onPrefsChanged?: (prefs: {
     notificationsEnabled: boolean;
@@ -80,6 +81,7 @@ export function AdminPanel({
   photoFor,
   labelFor,
   ringFor,
+  isAgentAddress,
   onPrefsChanged,
 }: Readonly<AdminPanelProps>) {
   const { client, signer } = useRequiredMessagingClient();
@@ -582,6 +584,7 @@ export function AdminPanel({
           photoFor={photoFor}
           labelFor={labelFor}
           ringFor={ringFor}
+          isAgentAddress={isAgentAddress}
         />
 
         <AddMemberDialog

@@ -14,6 +14,7 @@ import { MobileChatNavProvider } from './contexts/MobileChatNavContext';
 import { ThemeProvider } from './contexts/ThemeContext';
 import AuthCallback from './pages/AuthCallback';
 import App from './App';
+import {AgentKeyVaultProvider} from './contexts/AgentKeyVaultContext';
 import './index.css';
 
 function AppErrorBoundary({ children }: Readonly<{ children: ReactNode }>) {
@@ -41,9 +42,11 @@ function Root() {
       <MySocialAuthProvider>
         <MySocialAuthBroadcastListener />
         <MessagingClientProvider>
+          <AgentKeyVaultProvider>
           <AppErrorBoundary>
             <App />
           </AppErrorBoundary>
+          </AgentKeyVaultProvider>
         </MessagingClientProvider>
       </MySocialAuthProvider>
     </QueryClientProvider>

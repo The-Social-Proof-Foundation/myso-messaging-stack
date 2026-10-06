@@ -3,27 +3,44 @@
     "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.app.tsBuildInfo",
     "target": "ES2022",
     "useDefineForClassFields": true,
-    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "lib": [
+      "ES2022",
+      "DOM",
+      "DOM.Iterable"
+    ],
     "module": "ESNext",
     "skipLibCheck": true,
-
     "moduleResolution": "bundler",
     "allowImportingTsExtensions": true,
     "verbatimModuleSyntax": true,
     "moduleDetection": "force",
     "noEmit": true,
     "jsx": "react-jsx",
-
     "strict": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true,
     "noUncheckedSideEffectImports": true,
-
     "baseUrl": ".",
     "paths": {
-      "@/*": ["./src/*"]
+      "@/*": [
+        "./src/*"
+      ],
+      "@socialproof/memory": [
+        "../../myso-memory/packages/sdk/src/index.ts"
+      ],
+      "@socialproof/memory/account": [
+        "../../myso-memory/packages/sdk/src/account-entry.ts"
+      ],
+      "@socialproof/memory/manual": [
+        "../../myso-memory/packages/sdk/src/manual-entry.ts"
+      ],
+      "@socialproof/memory/ai": [
+        "../../myso-memory/packages/sdk/src/ai/index.ts"
+      ]
     }
   },
-  "include": ["src"]
+  "include": [
+    "src"
+  ]
 }

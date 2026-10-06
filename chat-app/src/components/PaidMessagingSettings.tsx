@@ -17,6 +17,11 @@ import {
 import { IosToggle } from './IosToggle';
 import { formatPaidPolicyError } from '../lib/format-paid-policy-error';
 import { mistToMyso, mysoToMist } from '../lib/mys-coin';
+import {
+  sessionLooksLikeZkLogin,
+  zkLoginChainAddress,
+  zkLoginTransactionSigner,
+} from '../lib/zklogin-signin';
 
 function parseMysoAmount(raw: string): number | null {
   try {
@@ -89,7 +94,7 @@ export function PaidMessagingSettings() {
     setLoading(true);
     setError(null);
     try {
-      const wallet = signer.toMySoAddress();
+      const wallet = zkLoginChainAddress() ?? signer.toMySoAddress();
       const paid = socialServerUrl
         ? createPaidMessagingClientWithGating({
             messaging: client.messaging,
@@ -138,13 +143,17 @@ export function PaidMessagingSettings() {
 
   const handleSave = async () => {
     if (!client || !signer || !isDirty) return;
+    if (sessionLooksLikeZkLogin() && !zkLoginChainAddress()) {
+      setError('Sign in again so this zkLogin account can sign the transaction.');
+      return;
+    }
     setLoading(true);
     setError(null);
     setSaved(false);
     try {
       const paid = createPaidMessagingClient({ messaging: client.messaging });
       await paid.setPolicy({
-        signer,
+        signer: zkLoginTransactionSigner(signer),
         enabled,
         minCost: enabled ? mysoToMist(minCost.trim() || '0') : null,
       });
@@ -201,7 +210,7 @@ export function PaidMessagingSettings() {
           aria-label="Accept paid stranger DMs"
         />
       </div>
-      <div className="mt-2 flex items-end gap-2">
+      <div className={`flex items-end gap-2 ${enabled ? 'mt-2' : ''}`}>
         <div
           className={`grid min-w-0 flex-1 transition-[grid-template-rows,opacity] duration-150 ease-out ${
             enabled
@@ -236,14 +245,16 @@ export function PaidMessagingSettings() {
             </label>
           </div>
         </div>
-        <button
-          type="button"
-          disabled={!canSave}
-          onClick={() => void handleSave()}
-          className="shrink-0 rounded bg-primary-500 px-3 py-1 text-xs font-medium text-white hover:bg-primary-600 disabled:cursor-not-allowed disabled:opacity-40"
-        >
-          {loading ? 'Saving…' : 'Save policy'}
-        </button>
+        {enabled ? (
+          <button
+            type="button"
+            disabled={!canSave}
+            onClick={() => void handleSave()}
+            className="shrink-0 rounded bg-primary-500 px-3 py-1 text-xs font-medium text-white hover:bg-primary-600 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            {loading ? 'Saving…' : 'Save policy'}
+          </button>
+        ) : null}
       </div>
       {error && (
         <p className="mt-2 text-right text-xs text-danger-500 dark:text-danger-400">

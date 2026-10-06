@@ -28,9 +28,17 @@ import {
   getMySocialAuthConfigError,
   resetMySocialAuthInstance,
 } from '../lib/mysocial-auth-client';
+import {
+  consumeAuthSessionRevoked,
+  readStoredAuthSession,
+  refreshAuthSessionIfNeeded,
+} from '../lib/mysocial-session-refresh';
 import { teardownMessagingPresence } from '../lib/messaging-presence-teardown';
 import {
+  clearLoginCelebration,
   getAuthSessionRaw,
+  markLoginCelebration,
+  peekLoginCelebration,
   removeAuthSession,
   SESSION_KEY,
   setAuthSessionRaw,
@@ -41,6 +49,17 @@ import {
   resolveOAuthSubForKeypair,
   shouldUseRedirectAuth,
 } from '../lib/auth-utils';
+import {
+  clearZkLoginSigner,
+  resumePendingZkLogin,
+  sessionLooksLikeZkLogin,
+  signInWithZkLogin,
+  startZkLoginRedirect,
+  zkLoginEphemeralKeypair,
+  zkLoginPending,
+  zkLoginProofInFlight,
+  zkLoginProofRunning,
+} from '../lib/zklogin-signin';
 
 const SESSION_EXPIRED_MESSAGE =
   'Session expired — please sign in again';
@@ -92,6 +111,9 @@ interface MySocialAuthContextValue {
   derivingKeypair: boolean;
   configError: string | null;
   signInError: string | null;
+  /** True only after Sign In in this tab, not when a saved session is restored. */
+  loginCelebration: boolean;
+  finishLoginCelebration: () => void;
   login: () => void;
   logout: () => Promise<void>;
   connectedAddress: string | undefined;
@@ -117,15 +139,23 @@ export function MySocialAuthProvider({
   const [deriveKeyError, setDeriveKeyError] = useState<string | null>(null);
   const [derivingKeypair, setDerivingKeypair] = useState(false);
   const [signInError, setSignInError] = useState<string | null>(null);
+  const [loginCelebration, setLoginCelebration] = useState(peekLoginCelebration);
   const [deriveNonce, setDeriveNonce] = useState(0);
+
+  const finishLoginCelebration = useCallback(() => {
+    clearLoginCelebration();
+    setLoginCelebration(false);
+  }, []);
 
   const authRef = useRef(auth);
   authRef.current = auth;
 
   const hadSessionRef = useRef(false);
+  const zkResumeStartedRef = useRef(false);
   const proactiveRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
     null,
   );
+  const refreshBackoffUntilRef = useRef(0);
 
   const clearProactiveRefreshTimer = useCallback(() => {
     if (proactiveRefreshTimerRef.current != null) {
@@ -149,12 +179,22 @@ export function MySocialAuthProvider({
 
     const applySession = (s: Session | null) => {
       if (cancelled) return;
-      if (s && !sessionLacksRefreshToken(s)) {
+      const revoked = consumeAuthSessionRevoked();
+      let next = s;
+      if (!next && !revoked) {
+        const stored = readStoredAuthSession();
+        if (stored && zkLoginEphemeralKeypair()) next = stored;
+      }
+      if (!next && revoked) {
+        clearZkLoginSigner();
+        setKeypair(null);
+        setSignInError(SESSION_EXPIRED_MESSAGE);
+      } else if (next && !sessionLacksRefreshToken(next)) {
         setSignInError(null);
       }
-      applyRefreshTokenGuard(s, setSignInError);
-      hadSessionRef.current = Boolean(s);
-      setSession(s);
+      applyRefreshTokenGuard(next, setSignInError);
+      hadSessionRef.current = Boolean(next);
+      setSession(next);
       setDeriveNonce((n) => n + 1);
     };
 
@@ -200,7 +240,9 @@ export function MySocialAuthProvider({
 
     const unsub = auth.onAuthStateChange((s) => {
       if (!s && hadSessionRef.current) {
+        if (getAuthSessionRaw() && zkLoginEphemeralKeypair()) return;
         setSignInError(SESSION_EXPIRED_MESSAGE);
+        clearZkLoginSigner();
         setKeypair(null);
         setIsUsingDevMessengerSigner(false);
         setDeriveKeyError(null);
@@ -272,11 +314,24 @@ export function MySocialAuthProvider({
     clearProactiveRefreshTimer();
     if (!auth || !session?.refresh_token?.trim()) return;
 
-    const delay = msUntilProactiveRefresh(session);
+    const delay = Math.max(
+      msUntilProactiveRefresh(session),
+      refreshBackoffUntilRef.current - Date.now(),
+    );
     proactiveRefreshTimerRef.current = setTimeout(() => {
       proactiveRefreshTimerRef.current = null;
-      const current = getMySocialAuth() ?? auth;
-      void current.getSession().then((s) => {
+      void refreshAuthSessionIfNeeded().then((result) => {
+        if (result.status === 'transient') {
+          refreshBackoffUntilRef.current = Date.now() + result.retryAfterMs;
+        } else if (result.status === 'revoked') {
+          refreshBackoffUntilRef.current = 0;
+          clearZkLoginSigner();
+          setKeypair(null);
+          setSignInError(SESSION_EXPIRED_MESSAGE);
+        } else {
+          refreshBackoffUntilRef.current = 0;
+        }
+        const s = readStoredAuthSession();
         if (s && !sessionLacksRefreshToken(s)) {
           setSignInError(null);
         }
@@ -307,7 +362,18 @@ export function MySocialAuthProvider({
     }
 
     if (!session) {
+      if (getAuthSessionRaw() && zkLoginEphemeralKeypair()) return;
       setKeypair(null);
+      setIsUsingDevMessengerSigner(false);
+      setDeriveKeyError(null);
+      setDerivingKeypair(false);
+      return;
+    }
+
+    const zkKeypair = zkLoginEphemeralKeypair();
+    const expectedAddressEarly = session.user?.address;
+    if (sessionLooksLikeZkLogin() && zkKeypair && expectedAddressEarly && !zkLoginProofRunning()) {
+      setKeypair(zkKeypair);
       setIsUsingDevMessengerSigner(false);
       setDeriveKeyError(null);
       setDerivingKeypair(false);
@@ -334,7 +400,37 @@ export function MySocialAuthProvider({
     }
 
     const expectedAddress = session.user?.address;
+    const zkStillSigningIn =
+      !expectedAddress &&
+      sessionLooksLikeZkLogin() &&
+      !signInError &&
+      (zkLoginProofInFlight() || zkLoginPending());
+    if (zkStillSigningIn) {
+      setKeypair(null);
+      setIsUsingDevMessengerSigner(false);
+      setDeriveKeyError(null);
+      setDerivingKeypair(true);
+      if (!zkLoginProofRunning() && zkLoginPending() && !zkResumeStartedRef.current) {
+        zkResumeStartedRef.current = true;
+        void resumePendingZkLogin().catch((e: unknown) => {
+          const message = e instanceof Error ? e.message : 'Sign in failed.';
+          finishLoginCelebration();
+          setSignInError(message);
+          setDeriveKeyError(message);
+          setDerivingKeypair(false);
+        });
+      }
+      return;
+    }
+
     if (!expectedAddress) {
+      if (signInError) {
+        setKeypair(null);
+        setIsUsingDevMessengerSigner(false);
+        setDeriveKeyError(signInError);
+        setDerivingKeypair(false);
+        return;
+      }
       if (devUnblockEnabled()) {
         applyDevSigner(
           setKeypair,
@@ -448,7 +544,7 @@ export function MySocialAuthProvider({
     return () => {
       cancelled = true;
     };
-  }, [auth, session, saltUrl, deriveNonce]);
+  }, [auth, session, saltUrl, deriveNonce, signInError, finishLoginCelebration]);
 
   const login = useCallback(() => {
     setSignInError(null);
@@ -458,53 +554,53 @@ export function MySocialAuthProvider({
       return;
     }
 
-    const mode = shouldUseRedirectAuth() ? 'redirect' : 'popup';
-    void a
-      .signIn({ mode, provider: 'google' })
-      .then(async (s) => {
-        if (mode !== 'popup' || !s) return;
-        if (await rejectNonRefreshableSession(s)) {
-          setSignInError(SESSION_CANNOT_REFRESH_MESSAGE);
-          hadSessionRef.current = false;
-          setSession(null);
-          setKeypair(null);
-          return;
+    const beginSigningIn = () => {
+      markLoginCelebration();
+      setLoginCelebration(true);
+    };
+
+    if (shouldUseRedirectAuth()) {
+      beginSigningIn();
+      void startZkLoginRedirect('google').catch((e: unknown) => {
+        finishLoginCelebration();
+        setSignInError(e instanceof Error ? e.message : 'Sign-in failed or was cancelled.');
+      });
+      return;
+    }
+    setDerivingKeypair(true);
+    void signInWithZkLogin('google', { onAuthWindowClosed: beginSigningIn })
+      .then(async () => {
+        const next = authRef.current;
+        const stored = next ? await next.getSession() : null;
+        if (stored) {
+          setSession(stored);
+          hadSessionRef.current = true;
         }
-        applyRefreshTokenGuard(s, setSignInError);
+        const zkKeypair = zkLoginEphemeralKeypair();
+        if (zkKeypair) {
+          setKeypair(zkKeypair);
+          setDeriveKeyError(null);
+          setIsUsingDevMessengerSigner(false);
+        }
+        setDeriveNonce((n) => n + 1);
       })
       .catch((e: unknown) => {
-        if (mode === 'popup') {
-          void a.getSession().then(async (s) => {
-            if (s?.user?.address) {
-              if (await rejectNonRefreshableSession(s)) {
-                setSignInError(SESSION_CANNOT_REFRESH_MESSAGE);
-                hadSessionRef.current = false;
-                setSession(null);
-                setKeypair(null);
-                return;
-              }
-              applyRefreshTokenGuard(s, setSignInError);
-              setSession(s);
-              hadSessionRef.current = true;
-              setDeriveNonce((n) => n + 1);
-              return;
-            }
-            setSignInError(
-              e instanceof Error ? e.message : 'Sign-in failed or was cancelled.',
-            );
-          });
-          return;
-        }
-        setSignInError(
-          e instanceof Error ? e.message : 'Sign-in failed or was cancelled.',
-        );
+        const message = e instanceof Error ? e.message : 'Sign-in failed or was cancelled.';
+        finishLoginCelebration();
+        setSignInError(message);
+        setDeriveKeyError(message);
+        setDerivingKeypair(false);
+      })
+      .finally(() => {
+        setDerivingKeypair(false);
       });
-  }, []);
+  }, [finishLoginCelebration]);
 
   const logout = useCallback(async () => {
     // Clear before signOut so onAuthStateChange(null) does not show "session expired"
     hadSessionRef.current = false;
     setSignInError(null);
+    finishLoginCelebration();
     clearProactiveRefreshTimer();
     // Close relayer WS (group + user feed) so peers see offline even if we
     // stay on the sign-in page after logout.
@@ -517,12 +613,13 @@ export function MySocialAuthProvider({
     } finally {
       // Ensure shared localStorage is cleared so other tabs observe logout.
       removeAuthSession();
+      clearZkLoginSigner();
       setSession(null);
       setKeypair(null);
       setIsUsingDevMessengerSigner(false);
       setDeriveKeyError(null);
     }
-  }, [clearProactiveRefreshTimer]);
+  }, [clearProactiveRefreshTimer, finishLoginCelebration]);
 
   const configError = auth ? null : configErrorFromEnv;
 
@@ -537,6 +634,8 @@ export function MySocialAuthProvider({
       derivingKeypair,
       configError,
       signInError,
+      loginCelebration,
+      finishLoginCelebration,
       login,
       logout,
       connectedAddress,
@@ -552,6 +651,8 @@ export function MySocialAuthProvider({
       derivingKeypair,
       configError,
       signInError,
+      loginCelebration,
+      finishLoginCelebration,
       login,
       logout,
       connectedAddress,
@@ -574,9 +675,10 @@ export function useMySocialAuth(): MySocialAuthContextValue {
   return ctx;
 }
 
-/** On-chain identity: session address until derived keypair is ready. */
+/** On-chain identity: zkLogin session address when present, otherwise the signer. */
 export function useAuthenticatedAddress(): string | undefined {
   const { keypair, connectedAddress, derivingKeypair } = useMySocialAuth();
+  if (sessionLooksLikeZkLogin() && connectedAddress) return connectedAddress;
   if (keypair && !derivingKeypair) {
     return keypair.toMySoAddress();
   }

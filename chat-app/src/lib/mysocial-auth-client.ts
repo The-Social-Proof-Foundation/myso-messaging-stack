@@ -3,6 +3,11 @@ import {
   type MySocialAuth,
 } from '@socialproof/mysocial-auth';
 import { readMySocialAuthConfig } from './mysocial-auth-config';
+import {
+  readStoredAuthSession,
+  refreshAuthSessionIfNeeded,
+  refreshAuthSessionNow,
+} from './mysocial-session-refresh';
 
 let authInstance: MySocialAuth | null = null;
 let initAttempted = false;
@@ -24,7 +29,19 @@ export function getMySocialAuth(): MySocialAuth | null {
     return null;
   }
 
-  authInstance = createMySocialAuth(config);
+  const created = createMySocialAuth(config);
+  // The SDK refresh deletes the stored session on any failure. Keepalive posts
+  // to the salt service and leaves the session in place unless the token is rejected.
+  created.getSession = async () => {
+    await refreshAuthSessionIfNeeded();
+    return readStoredAuthSession();
+  };
+  created.refresh = async () => {
+    const result = await refreshAuthSessionNow();
+    if (result.status === 'revoked' || result.status === 'none') return null;
+    return readStoredAuthSession();
+  };
+  authInstance = created;
   return authInstance;
 }
 

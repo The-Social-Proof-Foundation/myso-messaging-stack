@@ -2,7 +2,7 @@ import {useState} from 'react';
 import {Check, ChevronDown, ChevronRight, Copy, Users} from 'lucide-react';
 
 import {cn} from '@/lib/utils';
-import {Avatar, AvatarFallback} from '@/components/ui/avatar';
+import {AgentOrb} from '@/components/agents/AgentOrb';
 import {Button} from '@/components/ui/button';
 import {AgentStatusDot} from '@/components/blocks/AgentStatusMark';
 import {type AgentChartNode} from '@/lib/agents/agent-chart';
@@ -76,10 +76,13 @@ export function AgentChartNodeCard({
 
       <div className="flex flex-col gap-3 p-4">
         <div className="flex min-w-0 items-center gap-2.5">
-          <div className="relative shrink-0">
-            <Avatar className="size-10 border border-border">
-              <AvatarFallback>{node.initials}</AvatarFallback>
-            </Avatar>
+          <div className="relative size-10 shrink-0">
+            <AgentOrb
+              agentKey={node.fullAddress}
+              size={40}
+              label={node.name}
+              className="border border-border"
+            />
             <AgentStatusDot status={node.status} className="ring-muted dark:ring-secondary-800" />
           </div>
           <div className="min-w-0">

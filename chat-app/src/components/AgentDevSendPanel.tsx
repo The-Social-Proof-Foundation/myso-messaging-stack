@@ -3,7 +3,8 @@ import { createAgentMessagingClient } from '@socialproof/myso-messaging-stack';
 import type { Signer } from '@socialproof/myso/cryptography';
 import type { Ed25519Keypair } from '@socialproof/myso/keypairs/ed25519';
 
-import { findAgentKeypair } from '../lib/agents/agent-keys';
+import {useAgentVault} from '../contexts/AgentKeyVaultContext';
+import {fetchSubAgentByObjectId} from '../lib/agents/social-api';
 import { readSelectedAgent } from '../lib/agents/selected-agent-store';
 import { useMessagingClient } from '../contexts/MessagingClientContext';
 
@@ -23,6 +24,7 @@ export function AgentDevSendPanel({
   groupUuid,
 }: Readonly<AgentDevSendPanelProps>) {
   const client = useMessagingClient();
+  const vault=useAgentVault();
   const [text, setText] = useState('Hello from dev agent');
   const [status, setStatus] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
@@ -62,15 +64,10 @@ export function AgentDevSendPanel({
       let identityClass: 0 | 1 | 2 = 1;
 
       if (selected) {
-        const derived = await findAgentKeypair(
-          humanSigner as Ed25519Keypair,
-          selected.derivedAddress,
-          selected.organizationId,
-          64,
-        );
-        if (!derived) {
-          throw new Error('Could not re-derive the selected agent key.');
-        }
+        if(!vault) throw new Error('Unlock agent backups with your passkey first.');
+        const row=await fetchSubAgentByObjectId(selected.agentObjectId);
+        if(!row) throw new Error('Agent unavailable');
+        const derived=await vault.getAgent(row);
         agentSigner = derived.keypair;
         subAgentId = selected.agentObjectId;
         memoryAccountId = selected.memoryAccountId;

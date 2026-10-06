@@ -3,7 +3,7 @@ import {Transaction} from '@socialproof/myso/transactions';
 import {Ed25519Keypair} from '@socialproof/myso/keypairs/ed25519';
 import type {ClientWithCoreApi} from '@socialproof/myso/client';
 
-import {deriveAgentKeypair} from '../lib/agents/agent-keys';
+import {deriveAgentKeypair} from '../lib/agents/legacy-agent-keys';
 import {resolveAgentChainIds} from '../lib/agents/chain-ids';
 import {executeAsHuman, requireCreatedObjectId} from '../lib/agents/execute';
 import {CAPABILITY_PRESETS} from '../lib/agents/capabilities';

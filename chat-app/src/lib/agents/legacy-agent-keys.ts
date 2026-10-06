@@ -56,9 +56,9 @@ function concatBytes(parts: Uint8Array[]): Uint8Array {
 }
 
 /**
- * Deterministically derives an agent keypair from the signed-in human key:
- * `sha256("mysocial-agent-v1" || human secret key || organizationId || u32be(index))`.
- * Nothing is persisted; the same login re-creates the same agent keys on any device.
+ * Legacy derivation retained only for explicit migration tooling and historical vectors.
+ * Never use this for new agents or automatic recovery: the signer may be ephemeral,
+ * and OAuth subject/service-salt-derived roots can be reconstructed by the service.
  */
 export async function deriveAgentKeypair(
   humanKeypair: Ed25519Keypair,

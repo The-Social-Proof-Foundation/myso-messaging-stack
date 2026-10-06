@@ -32,6 +32,7 @@ interface MemberListProps {
   photoFor?: (address: string) => string | null;
   labelFor?: (address: string) => string;
   ringFor?: (address: string) => WalletRingBits;
+  isAgentAddress?: (address: string) => boolean;
 }
 
 export function MemberList({
@@ -50,6 +51,7 @@ export function MemberList({
   photoFor,
   labelFor,
   ringFor,
+  isAgentAddress,
 }: Readonly<MemberListProps>) {
   const accountAddress = useAuthenticatedAddress();
   const [expandedMember, setExpandedMember] = useState<string | null>(null);
@@ -124,6 +126,7 @@ export function MemberList({
                 label={labelFor?.(m.address)}
                 showRing={ring?.showRing ?? false}
                 ringPercent={ring?.ringPercent ?? 0}
+                showAgentOrb={isAgentAddress?.(m.address) ?? false}
               />
             );
           })}

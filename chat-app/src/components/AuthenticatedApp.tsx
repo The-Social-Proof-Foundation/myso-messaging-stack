@@ -2,6 +2,7 @@ import {useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import {useLocation, useNavigate} from 'react-router-dom';
 
 import {Sidebar} from './Sidebar';
+import {PasskeyVaultPanel} from './agents/PasskeyVaultPanel';
 import {ChatArea} from './ChatArea';
 import {CreateGroupModal} from './CreateGroupModal';
 import {AgentChatEmptyState} from './agents/AgentChatEmptyState';
@@ -85,6 +86,11 @@ export function AuthenticatedApp({
   const [showNewOrganization, setShowNewOrganization] = useState(false);
   const [selectedAgentObjectId, setSelectedAgentObjectId] = useState<string | null>(null);
   const [showNewAgent, setShowNewAgent] = useState(false);
+  useEffect(()=>{
+    const replace=()=>{setSelectedOrganizationId(null);setShowNewAgent(true);};
+    window.addEventListener('agent:create-replacement',replace);
+    return()=>window.removeEventListener('agent:create-replacement',replace);
+  },[]);
 
   const agentsEnabled = Boolean(selectedAgentObjectId);
   const agentList = useSubAgents(false, { enabled: agentsEnabled });
@@ -100,6 +106,10 @@ export function AuthenticatedApp({
   const create = useCreateAgentChat();
   const openChat = useOpenAgentChat();
   const chatIndex = useAgentChatIndex(groups);
+  const agentCreatorActors = useMemo(
+    () => chatIndex.refs.map((ref) => ref.creatorActor),
+    [chatIndex.refs],
+  );
   const memoryAccount = useMemoryAccount();
 
   const selectGroup = useCallback(
@@ -249,6 +259,7 @@ export function AuthenticatedApp({
 
   return (
     <>
+      <PasskeyVaultPanel />
       {isUsingDevMessengerSigner && (
         <div className="border-b border-amber-200 bg-amber-50 px-4 py-2 text-center text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-100">
           Dev signer: using a local ephemeral keypair (not your MySocial wallet
@@ -294,6 +305,7 @@ export function AuthenticatedApp({
                 onSelectGroup={selectGroup}
                 onOpenAgentView={() => setListView('agents')}
                 loading={discoveryLoading}
+                agentCreatorActors={agentCreatorActors}
               />
             )}
           </div>
@@ -336,6 +348,7 @@ export function AuthenticatedApp({
               onMobileBack={
                 isMobileNav ? () => selectGroup(null) : undefined
               }
+              agentCreatorActors={agentCreatorActors}
               devAgentPanel={
                 keypair && selectedGroup ? (
                   <AgentDevSendPanel

@@ -1,32 +1,17 @@
-import {useQuery} from '@tanstack/react-query';
-import type {Ed25519Keypair} from '@socialproof/myso/keypairs/ed25519';
-
-import {findAgentKeypair} from '../../lib/agents/agent-keys';
+import {useEffect, useState} from 'react';
 import type {SubAgentRow} from '../../lib/agents/social-api';
-import {useMySocialAuth} from '../../contexts/MySocialAuthContext';
-
-export function useDerivedAgentKey(
-  agent: SubAgentRow | null,
-  maxIndex: number,
-) {
-  const {keypair} = useMySocialAuth();
-  return useQuery({
-    queryKey: [
-      'agents',
-      'derived-key',
-      agent?.agent_object_id ?? '',
-      agent?.derived_address ?? '',
-      agent?.organization_id ?? '',
-      maxIndex,
-    ],
-    queryFn: () =>
-      findAgentKeypair(
-        keypair as Ed25519Keypair,
-        agent!.derived_address,
-        agent!.organization_id,
-        Math.max(maxIndex, 32),
-      ),
-    enabled: Boolean(keypair && agent),
-    staleTime: Infinity,
-  });
+import type {AgentSigningKey} from '../../lib/agents/passkey-vault';
+import {useAgentVault} from '../../contexts/AgentKeyVaultContext';
+/** Compatibility hook name; secrets are component state, never React Query data. */
+export function useDerivedAgentKey(agent: SubAgentRow | null, _maxIndex?: number) {
+  const vault=useAgentVault();
+  const [state,setState]=useState<{data:AgentSigningKey|null;isPending:boolean;isLoading:boolean;error:Error|null}>({data:null,isPending:false,isLoading:false,error:null});
+  const revision=vault?.getSnapshot();
+  useEffect(()=>{
+    let canceled=false;
+    setState({data:null,isPending:!!agent&&vault?.status==='ready',isLoading:!!agent&&vault?.status==='ready',error:null});
+    if(agent&&vault?.status==='ready') void vault.getAgent(agent).then(data=>{if(!canceled)setState({data,isPending:false,isLoading:false,error:null});}).catch(error=>{if(!canceled)setState({data:null,isPending:false,isLoading:false,error});});
+    return()=>{canceled=true;};
+  },[vault,revision,agent?.agent_object_id,agent?.derived_address]);
+  return vault?.status==='ready'?state:{data:null,isPending:false,isLoading:false,error:state.error};
 }

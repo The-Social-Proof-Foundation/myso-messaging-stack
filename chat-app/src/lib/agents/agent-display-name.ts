@@ -1,10 +1,12 @@
-/** Agent label keyed by derived address, for inbox and chat-header titles. */
+import {normalizeMetadataHex} from './agent-chats';
+
+/** Agent label keyed by canonical derived address, for inbox and chat titles. */
 export function agentNamesByDerivedAddress(
   agents: readonly {derived_address: string; label: string}[],
 ): Map<string, string> {
   const names = new Map<string, string>();
   for (const agent of agents) {
-    const address = agent.derived_address.trim().toLowerCase();
+    const address = normalizeMetadataHex(agent.derived_address);
     const label = agent.label.trim();
     if (!address || !label) continue;
     names.set(address, label);
@@ -22,5 +24,32 @@ export function conversationPeerLabel(
   profileLabel: string | null,
 ): string | null {
   if (!peer) return profileLabel;
-  return agentNames.get(peer.trim().toLowerCase()) ?? profileLabel;
+  const address = normalizeMetadataHex(peer);
+  if (!address) return profileLabel;
+  return agentNames.get(address) ?? profileLabel;
+}
+
+/** Addresses that should render an agent orb: our agents, plus agent-chat creators. */
+export function knownAgentAddressSet(
+  derivedAddresses: readonly string[],
+  creatorActors: readonly (string | null | undefined)[],
+): ReadonlySet<string> {
+  const known = new Set<string>();
+  for (const address of derivedAddresses) {
+    const key = normalizeMetadataHex(address);
+    if (key) known.add(key);
+  }
+  for (const actor of creatorActors) {
+    const key = normalizeMetadataHex(actor);
+    if (key) known.add(key);
+  }
+  return known;
+}
+
+export function isKnownAgentAddress(
+  address: string | null | undefined,
+  known: ReadonlySet<string>,
+): boolean {
+  const key = normalizeMetadataHex(address);
+  return Boolean(key && known.has(key));
 }

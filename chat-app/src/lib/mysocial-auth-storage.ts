@@ -113,3 +113,34 @@ export function removeAuthSession(): void {
 export function hasAuthSession(): boolean {
   return !!getAuthSessionRaw();
 }
+
+/** Set when Sign In starts. Survives the OAuth redirect, then the next page consumes it. */
+const LOGIN_CELEBRATION_KEY = 'myso-login-celebration';
+
+export function markLoginCelebration(): void {
+  if (!canUseSessionStorage()) return;
+  try {
+    sessionStorage.setItem(LOGIN_CELEBRATION_KEY, '1');
+  } catch {
+    // ignore quota / private mode
+  }
+}
+
+export function clearLoginCelebration(): void {
+  if (!canUseSessionStorage()) return;
+  try {
+    sessionStorage.removeItem(LOGIN_CELEBRATION_KEY);
+  } catch {
+    // ignore
+  }
+}
+
+/** True when Sign In has started and this document has not finished the ceremony. */
+export function peekLoginCelebration(): boolean {
+  if (!canUseSessionStorage()) return false;
+  try {
+    return sessionStorage.getItem(LOGIN_CELEBRATION_KEY) === '1';
+  } catch {
+    return false;
+  }
+}

@@ -26,6 +26,7 @@ import {
   ReservationNavAvatar,
   reservationAvatarShellSize,
 } from './ReservationNavAvatar';
+import {AgentOrb} from './agents/AgentOrb';
 import { formatMessageTime } from '../lib/message-time';
 
 /** Quick reaction palette shown in the reaction tray. */
@@ -64,6 +65,8 @@ interface MessageBubbleProps {
   tickStatus?: MessageTickStatus;
   /** Profile photo URL for the sender; falls back to default avatar. */
   avatarSrc?: string | null;
+  /** Agent sender: render the deterministic orb instead of the empty photo. */
+  showAgentOrb?: boolean;
   /** Resolve a display label (username / name / truncated address) for a wallet. */
   labelForAddress?: (address: string) => string;
   /** SPT reservation ring for the sender avatar (when GraphQL indicates SPT/pool). */
@@ -674,6 +677,7 @@ export function MessageBubble({
   isLastInGroup = true,
   tickStatus = 'none',
   avatarSrc = null,
+  showAgentOrb = false,
   labelForAddress,
   avatarShowRing = false,
   avatarRingPercent = 0,
@@ -988,6 +992,15 @@ export function MessageBubble({
           <ReservationNavAvatar
             address={message.senderAddress}
             imageSrc={avatarSrc}
+            face={
+              showAgentOrb && message.senderAddress ? (
+                <AgentOrb
+                  agentKey={message.senderAddress}
+                  size={AVATAR_SIZE}
+                  label={senderLabel ?? 'Agent'}
+                />
+              ) : undefined
+            }
             size={AVATAR_SIZE}
             showRing={avatarShowRing}
             ringPercent={avatarRingPercent}

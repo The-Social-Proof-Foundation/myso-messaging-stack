@@ -22,7 +22,8 @@ import { useMessages } from '../hooks/useMessages';
 import { useAgentMemoryReply } from '../hooks/agents/useAgentMemoryReply';
 import { useRepairAgentChatSend } from '../hooks/agents/useAgentChatActions';
 import { useAgentNamesByAddress } from '../hooks/agents/useSubAgents';
-import { conversationPeerLabel } from '../lib/agents/agent-display-name';
+import { conversationPeerLabel, isKnownAgentAddress, knownAgentAddressSet } from '../lib/agents/agent-display-name';
+import { normalizeMetadataHex } from '../lib/agents/agent-chats';
 import { usePaidDmGate } from '../hooks/usePaidDmGate';
 import { usePermissions } from '../hooks/usePermissions';
 import { useWalletAvatarMap } from '../hooks/useWalletAvatarMap';
@@ -76,6 +77,8 @@ interface ChatAreaProps {
   /** Phone stack: return to the conversation list (clears selection). */
   onMobileBack?: () => void;
   devAgentPanel?: ReactNode;
+  /** Agent-chat creator addresses, so foreign agents still get an orb. */
+  agentCreatorActors?: readonly (string | null | undefined)[];
 }
 
 /** Case-insensitive MySo address compare (0x-prefixed hex). */
@@ -133,6 +136,7 @@ export function ChatArea({
   receiptApplyRef,
   onMobileBack,
   devAgentPanel,
+  agentCreatorActors,
 }: Readonly<ChatAreaProps>) {
   if (!selectedGroup) {
     return (
@@ -188,6 +192,7 @@ export function ChatArea({
       receiptApplyRef={receiptApplyRef}
       onMobileBack={onMobileBack}
       devAgentPanel={devAgentPanel}
+      agentCreatorActors={agentCreatorActors}
     />
   );
 }
@@ -322,6 +327,7 @@ function ChatView({
   receiptApplyRef,
   onMobileBack,
   devAgentPanel,
+  agentCreatorActors = [],
 }: Readonly<{
   group: StoredGroup;
   onLeaveGroup?: () => void;
@@ -332,6 +338,7 @@ function ChatView({
   >;
   onMobileBack?: () => void;
   devAgentPanel?: ReactNode;
+  agentCreatorActors?: readonly (string | null | undefined)[];
 }>) {
   const myAddress = useAuthenticatedAddress();
   const { client, signer } = useRequiredMessagingClient();
@@ -576,6 +583,21 @@ function ChatView({
     ringFor,
   } = useWalletAvatarMap(profileAddresses);
   const agentNames = useAgentNamesByAddress();
+  const knownAgents = useMemo(() => {
+    const known = new Set(
+      knownAgentAddressSet([...agentNames.keys()], agentCreatorActors),
+    );
+    for (const message of messages) {
+      if (!message.isAgentMessage) continue;
+      const key = normalizeMetadataHex(message.senderAddress);
+      if (key) known.add(key);
+    }
+    return known;
+  }, [agentNames, agentCreatorActors, messages]);
+  const agentAddress = useCallback(
+    (address: string) => isKnownAgentAddress(address, knownAgents),
+    [knownAgents],
+  );
   const displayLabelFor = useCallback(
     (addr: string) =>
       conversationPeerLabel(
@@ -618,10 +640,11 @@ function ChatView({
     const ring = ringFor(address);
     return {
       address,
-      label: profileLabelFor(address) || labelFor(address),
+      label: memberLabelFor(address),
       avatarSrc: photoFor(address),
       showRing: ring.showRing,
       ringPercent: ring.ringPercent,
+      orb: agentAddress(address),
     };
   });
 
@@ -1100,7 +1123,13 @@ function ChatView({
                         ? photoFor(msg.senderAddress)
                         : null
                     }
-                    labelForAddress={profileLabelFor}
+                    showAgentOrb={
+                      Boolean(msg.isAgentMessage) ||
+                      (msg.senderAddress
+                        ? agentAddress(msg.senderAddress)
+                        : false)
+                    }
+                    labelForAddress={memberLabelFor}
                     avatarShowRing={
                       msg.senderAddress
                         ? ringFor(msg.senderAddress).showRing
@@ -1234,6 +1263,7 @@ function ChatView({
         photoFor={photoFor}
         labelFor={memberLabelFor}
         ringFor={ringFor}
+        isAgentAddress={agentAddress}
         onPrefsChanged={({ receiptMode: next }) => {
           setReceiptModeOverride(next);
         }}

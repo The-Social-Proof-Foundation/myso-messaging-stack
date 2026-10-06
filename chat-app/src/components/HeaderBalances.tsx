@@ -22,7 +22,7 @@ function formatCreditUsd(mysoAmount: number | null, priceUsd: number | null): st
   return formatApproxMysoUsd(mysoAmount, priceUsd).replace(/^~/, '');
 }
 
-/** AI credit balance, shown beside Create New. */
+/** AI credit balance, shown beside New. */
 export function HeaderBalances() {
   const wallet = useMysoWalletBalance();
   const {priceUsd} = useMysoUsdPrice();

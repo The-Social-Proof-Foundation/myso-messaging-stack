@@ -9,7 +9,7 @@ import {AI_CREDIT_APPROVAL_REQUIRED_CODE} from '@socialproof/memory/account';
 
 const AI_CREDIT_DEPLETED_CODE = 'insufficient_ai_credits';
 
-import type {DerivedAgentKey} from './agent-keys';
+import type {AgentSigningKey} from './passkey-vault';
 
 export const CHAT_NAMESPACE = 'chat-app';
 
@@ -58,15 +58,6 @@ export class MemoryClientError extends Error {
   }
 }
 
-type SignedRequestFn = {
-  signedRequest<T>(
-    method: string,
-    path: string,
-    body: object,
-    options?: {acceptedStatuses?: number[]},
-  ): Promise<T>;
-};
-
 /** Dev uses the Vite `/api/memory` proxy; production calls the server origin directly. */
 export function memoryServerUrl(): string {
   if (import.meta.env.DEV) return '/api/memory';
@@ -75,11 +66,13 @@ export function memoryServerUrl(): string {
 }
 
 export function createAgentMemoryClient(
-  key: DerivedAgentKey,
+  key: AgentSigningKey,
   accountId: string,
 ): Memory {
   return Memory.create({
-    key: key.seed,
+    key: new Uint8Array(key.seed),
+    signal: key.signal,
+    platformId: key.platformId,
     accountId,
     serverUrl: memoryServerUrl(),
     namespace: CHAT_NAMESPACE,
@@ -96,7 +89,7 @@ export async function askAgent(
   args: {question: string; scope?: RecallScope; limit?: number},
 ): Promise<AskResult> {
   try {
-    const body = await (memory as unknown as SignedRequestFn).signedRequest<{
+    const body = await memory.request<{
       answer?: string;
       memories_used?: number;
       memories?: AskMemory[] | RecallMemory[];
@@ -130,7 +123,7 @@ async function signedMemoryRequest<T>(
   body: object,
 ): Promise<T> {
   try {
-    return await (memory as unknown as SignedRequestFn).signedRequest<T>(method, path, body);
+    return await memory.request<T>(method, path, body);
   } catch (error) {
     throw classifyMemoryError(error);
   }

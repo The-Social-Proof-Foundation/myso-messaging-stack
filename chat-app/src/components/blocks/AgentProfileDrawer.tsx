@@ -3,13 +3,14 @@ import {useQuery, useQueryClient} from '@tanstack/react-query';
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
 import {Check, ChevronDown, ChevronLeft, Copy, MessageSquare, ScrollText, X} from 'lucide-react';
 
-import {Avatar, AvatarFallback} from '@/components/ui/avatar';
 import {Badge} from '@/components/ui/badge';
+import {LegacyAgentBackup} from '@/components/agents/LegacyAgentBackup';
 import {Button} from '@/components/ui/button';
 import {Separator} from '@/components/ui/separator';
 import {IosToggle} from '@/components/IosToggle';
 import {MysoAmount} from '@/components/agents/MysoAmount';
 import {AgentStatusDot} from '@/components/blocks/AgentStatusMark';
+import {AgentOrb} from '@/components/agents/AgentOrb';
 import {useAgentActions, useMemoryAccount, useOrgAuditLogs, useOrgSpendBreakdown} from '@/hooks/agents';
 import {useDerivedAgentKey} from '@/hooks/agents/useDerivedAgentKey';
 import {useAllSubAgents} from '@/hooks/agents/useSubAgents';
@@ -116,9 +117,12 @@ export function AgentProfileDrawer({
         <div className="flex flex-col gap-4 p-4">
         <div className="flex items-start gap-3">
           <div className="relative shrink-0">
-            <Avatar className="size-12 border border-border">
-              <AvatarFallback>{agent.initials}</AvatarFallback>
-            </Avatar>
+            <AgentOrb
+              agentKey={agent.fullAddress}
+              size={48}
+              label={agent.name}
+              className="border border-border"
+            />
             <AgentStatusDot status={agent.status} />
           </div>
           <div className="min-w-0">
@@ -258,6 +262,7 @@ function ModelControls({
     () => (derived.data ? createAgentMemoryClient(derived.data, accountId) : null),
     [accountId, derived.data],
   );
+  useEffect(()=>()=>memory?.destroy(),[memory]);
   const models = useQuery({
     queryKey: ['agents', 'llm-models', row.agent_object_id],
     enabled: Boolean(memory),
@@ -294,7 +299,7 @@ function ModelControls({
   if (derived.isPending || derived.isLoading) {
     body = <p className="mt-2 text-xs text-muted-foreground">Loading model…</p>;
   } else if (!derived.data) {
-    body = <p className="mt-2 text-xs text-destructive">Could not re-derive this agent key.</p>;
+    body = <><p className="mt-2 text-xs text-destructive">{derived.error?.message ?? 'Unlock agent backups with your passkey to access this agent.'}</p><LegacyAgentBackup agent={row}/></>;
   } else if (models.isPending || current.isPending) {
     body = <p className="mt-2 text-xs text-muted-foreground">Loading model…</p>;
   } else if (models.isError || current.isError) {

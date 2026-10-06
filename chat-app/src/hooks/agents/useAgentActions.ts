@@ -1,9 +1,10 @@
+import {useQueryClient} from '@tanstack/react-query';
 import type {ClientWithCoreApi} from '@socialproof/myso/client';
-import type {Ed25519Keypair} from '@socialproof/myso/keypairs/ed25519';
 import {Transaction} from '@socialproof/myso/transactions';
 
-import {deriveAgentKeypair, findAgentKeypair} from '../../lib/agents/agent-keys';
-import {registrationGrant, withRootRegistration} from '../../lib/agents/capabilities';
+import {useAgentVault, findRegisteredDraft, readAgentPolicy} from '../../contexts/AgentKeyVaultContext';
+import type {AgentKeyEnvelopeV1, AgentRegistrationIntent} from '@socialproof/memory';
+import {registrationGrant} from '../../lib/agents/capabilities';
 import {resolveAgentChainIds} from '../../lib/agents/chain-ids';
 import {executeAsAgent, executeAsHuman, requireCreatedObjectId} from '../../lib/agents/execute';
 import {
@@ -37,8 +38,15 @@ import {
 import type {SubAgentRow} from '../../lib/agents/social-api';
 import {fetchOrganization, fetchSubAgentByObjectId} from '../../lib/agents/social-api';
 import {ORG_OWNER_MASK} from '../../lib/agents/org-permissions';
+import {
+  fetchProfileOverview,
+  mistBigint,
+  withCreditBalanceDelta,
+  type ProfileOverview,
+} from '../../lib/agents/profile-graphql';
 import {useMessagingClient} from '../../contexts/MessagingClientContext';
-import {useMySocialAuth} from '../../contexts/MySocialAuthContext';
+import {useAuthenticatedAddress, useMySocialAuth} from '../../contexts/MySocialAuthContext';
+import {agentKeys} from './query-keys';
 import {useInvalidateAgents, useSeedCreatedSubAgent} from './useInvalidateAgents';
 
 /** The org's derived memory group id, once the indexer has caught up. */
@@ -96,11 +104,50 @@ function createdSubAgentRow(args: {
   };
 }
 
+function registrationIntent(args: {label:string;capabilities:number;delegatableCaps?:number;expiresAtMs?:number|null;budget?:Omit<AgentBudgetArgs,'agentObjectId'>}, parentAgentId:string|null): AgentRegistrationIntent {
+  const budget=args.budget;
+  const decimal=(v:bigint|null)=>v==null?null:v.toString();
+  return {label:args.label,capabilities:args.capabilities,delegatableCaps:args.delegatableCaps??0,expiresAtMs:args.expiresAtMs??null,parentAgentId,
+    budget:budget?{balanceId:budget.balanceId,budgetMist:decimal(budget.budgetMist),dailyCapMist:decimal(budget.dailyCapMist),monthlyCapMist:decimal(budget.monthlyCapMist),requireApprovalAboveMist:decimal(budget.requireApprovalAboveMist)}:null};
+}
+function intentBudget(intent:AgentRegistrationIntent):Omit<AgentBudgetArgs,'agentObjectId'>|undefined {
+  const b=intent.budget;if(!b)return undefined;
+  const mist=(v:string|null)=>v==null?null:BigInt(v);
+  return {balanceId:b.balanceId,budgetMist:mist(b.budgetMist),dailyCapMist:mist(b.dailyCapMist),monthlyCapMist:mist(b.monthlyCapMist),requireApprovalAboveMist:mist(b.requireApprovalAboveMist)};
+}
+
 export function useAgentActions() {
   const client = useMessagingClient();
   const {keypair} = useMySocialAuth();
+  const address = useAuthenticatedAddress();
+  const vault = useAgentVault();
+  const queryClient = useQueryClient();
   const invalidate = useInvalidateAgents();
   const seedCreatedSubAgent = useSeedCreatedSubAgent();
+
+  function publishCreditBalance(deltaMist: bigint) {
+    if (!address) return;
+    const key = agentKeys.profileOverview(address);
+    queryClient.setQueryData<ProfileOverview>(key, (current) =>
+      withCreditBalanceDelta(current, deltaMist),
+    );
+    const target = mistBigint(
+      queryClient.getQueryData<ProfileOverview>(key)?.aiCreditBalance?.balanceMist,
+    );
+    void (async () => {
+      const deadline = Date.now() + 20_000;
+      while (Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+        const indexed = await fetchProfileOverview(address).catch(() => null);
+        if (!indexed?.aiCreditBalance) continue;
+        const indexedMist = mistBigint(indexed.aiCreditBalance.balanceMist);
+        const caughtUp = deltaMist >= 0n ? indexedMist >= target : indexedMist <= target;
+        if (!caughtUp) continue;
+        queryClient.setQueryData(key, indexed);
+        return;
+      }
+    })();
+  }
 
   function publishCreatedAgent(row: SubAgentRow) {
     seedCreatedSubAgent(row);
@@ -125,7 +172,21 @@ export function useAgentActions() {
     return {client: client as ClientWithCoreApi, human: keypair};
   };
 
+  async function finishAgentSetup(agentId:string) {
+    if(!vault)throw new Error('Unlock agent backups first.');
+    const epoch=vault.generation();const {client:rpc,human}=requireClient();
+    const setup=await vault.verifiedSetup(agentId);
+    const ids=await resolveAgentChainIds();
+    const followUp=new Transaction();
+    ensureAgentMemoryVaultTx(ids,{accountId:vault.api.accountId,agentObjectId:agentId},followUp);
+    if(setup.intent?.budget&&setup.state.budget==='pending')setAgentBudgetTx(ids,{...intentBudget(setup.intent)!,agentObjectId:agentId},followUp);
+    vault.assertCurrent(epoch);await executeAsHuman(rpc,human,followUp);vault.assertCurrent(epoch);
+    await vault.api.setSetup(agentId,{vault:'complete',budget:setup.intent?.budget?'complete':'skipped'});
+    await invalidate();
+  }
+
   return {
+    finishAgentSetup,
     async createOrganization(args: {
       accountId: string;
       orgType: number;
@@ -173,16 +234,21 @@ export function useAgentActions() {
       label: string;
       capabilities: number;
       expiresAtMs?: number | null;
-      nextIndex: number;
+      draft?: AgentKeyEnvelopeV1;
+      delegatableCaps?: number;
       budget?: Omit<AgentBudgetArgs, 'agentObjectId'>;
     }) {
       const {client: rpc, human} = requireClient();
       const ids = await resolveAgentChainIds();
-      const derived = await deriveAgentKeypair(human as Ed25519Keypair, {
-        organizationId: args.organizationId,
-        index: args.nextIndex,
-      });
-      const capabilities = withRootRegistration(args.capabilities);
+      if (!vault) throw new Error('Passkey agent backups are not enabled.');
+      const epoch = vault.generation();
+      const saved=args.draft?await vault.verifiedIntent(args.draft):null;
+      if(saved){if(saved.parentAgentId!==null)throw new Error('Choose the saved child setup with its original parent.');args={...args,label:saved.label,capabilities:saved.capabilities,delegatableCaps:saved.delegatableCaps,expiresAtMs:saved.expiresAtMs,budget:intentBudget(saved)};}
+      const prepared = args.draft ? {envelope: args.draft, key: await vault.recoverDraft(args.draft)} : await vault.prepare(args.organizationId,registrationIntent(args,null));
+      await vault.api.setIntent(prepared.envelope.keyId,saved??registrationIntent(args,null));
+      const derived = prepared.key;
+      const capabilities = args.capabilities;
+      const delegatableCaps = args.delegatableCaps ?? 0;
       const register = registerSubAgentTx(ids, {
         accountId: args.accountId,
         organizationId: args.organizationId,
@@ -190,22 +256,16 @@ export function useAgentActions() {
         derivedAddress: derived.address,
         label: args.label,
         capabilities,
-        delegatableCaps: capabilities,
+        delegatableCaps,
         expiresAtMs: args.expiresAtMs ?? null,
       });
-      const digest = await executeAsHuman(rpc, human, register);
-      const agentObjectId = await requireCreatedObjectId(rpc, digest, 'SubAgent');
+      const existingId = await findRegisteredDraft(prepared.envelope);
+      vault.assertCurrent(epoch);
+      const agentObjectId = existingId ?? await requireCreatedObjectId(rpc, await executeAsHuman(rpc, human, register), 'SubAgent');
+      vault.assertCurrent(epoch);
+      await vault.finalize(prepared.envelope, derived.seed, agentObjectId);
 
-      const followUp = new Transaction();
-      ensureAgentMemoryVaultTx(
-        ids,
-        {accountId: args.accountId, agentObjectId},
-        followUp,
-      );
-      if (args.budget) {
-        setAgentBudgetTx(ids, {...args.budget, agentObjectId}, followUp);
-      }
-      await executeAsHuman(rpc, human, followUp);
+      await finishAgentSetup(agentObjectId);
       await invalidate(args.organizationId);
       publishCreatedAgent(
         createdSubAgentRow({
@@ -214,10 +274,10 @@ export function useAgentActions() {
           accountId: args.accountId,
           label: args.label,
           capabilities,
-          delegatableCaps: capabilities,
+          delegatableCaps,
           parentObjectId: null,
-          depth: 0,
-          registeredBy: human.toMySoAddress(),
+          depth: 1,
+          registeredBy: address!,
           expiresAtMs: args.expiresAtMs ?? null,
           organizationId: args.organizationId,
         }),
@@ -232,29 +292,28 @@ export function useAgentActions() {
       label: string;
       capabilities: number;
       expiresAtMs?: number | null;
-      nextIndex: number;
-      maxScanIndex: number;
+      draft?: AgentKeyEnvelopeV1;
+      delegatableCaps?: number;
+      approveParentGrant?: boolean;
       budget?: Omit<AgentBudgetArgs, 'agentObjectId'>;
     }) {
       const {client: rpc, human} = requireClient();
       const ids = await resolveAgentChainIds();
-      const parentKey = await findAgentKeypair(
-        human as Ed25519Keypair,
-        args.parent.derived_address,
-        args.parent.organization_id ?? args.organizationId,
-        Math.max(args.maxScanIndex, 32),
-      );
-      if (!parentKey) {
-        throw new Error('Could not re-derive the parent agent key from this login.');
-      }
+      if (!vault) throw new Error('Passkey agent backups are not enabled.');
+      const epoch = vault.generation();
+      const saved=args.draft?await vault.verifiedIntent(args.draft):null;
+      if(saved){if(saved.parentAgentId!==args.parent.agent_object_id)throw new Error('Choose the original parent for this saved setup.');args={...args,label:saved.label,capabilities:saved.capabilities,delegatableCaps:saved.delegatableCaps,expiresAtMs:saved.expiresAtMs,budget:intentBudget(saved)};}
+      const parentKey = await vault.getAgent(args.parent);
+      const parentPolicy = await readAgentPolicy(args.parent.agent_object_id);
       const grant = registrationGrant(
         {
-          capabilities: args.parent.capabilities,
-          delegatableCaps: args.parent.delegatable_caps,
+          capabilities: parentPolicy.capabilities,
+          delegatableCaps: parentPolicy.delegatableCaps,
         },
         args.capabilities,
       );
       if (grant) {
+        if (!args.approveParentGrant) throw new Error('Approve the displayed parent permission update before creating this child.');
         await executeAsHuman(
           rpc,
           human,
@@ -263,15 +322,22 @@ export function useAgentActions() {
             agentObjectId: args.parent.agent_object_id,
             capabilities: grant.capabilities,
             delegatableCaps: grant.delegatableCaps,
-            expiresAtMs: args.parent.expires_at_ms,
+            expiresAtMs: parentPolicy.expiresAt,
+            identityClass:parentPolicy.identityClass,roleTags:parentPolicy.roleTags,
+            approvalRequiredCaps: parentPolicy.approvalRequiredCaps,
+            maxActionSpend: parentPolicy.maxActionSpend == null ? null : String(parentPolicy.maxActionSpend),
+            platformScope: parentPolicy.platformScope,
+            registerScope: parentPolicy.registerScope,
           }),
         );
       }
-      const child = await deriveAgentKeypair(human as Ed25519Keypair, {
-        organizationId: args.organizationId ?? args.parent.organization_id,
-        index: args.nextIndex,
-      });
-      const digest = await executeAsAgent(
+      const prepared = args.draft ? {envelope: args.draft, key: await vault.recoverDraft(args.draft)} : await vault.prepare(args.organizationId ?? args.parent.organization_id!,registrationIntent(args,args.parent.agent_object_id));
+      await vault.api.setIntent(prepared.envelope.keyId,saved??registrationIntent(args,args.parent.agent_object_id));
+      const child = prepared.key;
+      const delegatableCaps = args.delegatableCaps ?? 0;
+      const existingId = await findRegisteredDraft(prepared.envelope);
+      vault.assertCurrent(epoch);
+      const digest = existingId ? null : await executeAsAgent(
         rpc,
         parentKey.keypair,
         human,
@@ -282,22 +348,19 @@ export function useAgentActions() {
           derivedAddress: child.address,
           label: args.label,
           capabilities: args.capabilities,
-          delegatableCaps: args.capabilities,
-          expiresAtMs: args.expiresAtMs ?? null,
+          delegatableCaps,
+          expiresAtMs: parentPolicy.expiresAt == null ? (args.expiresAtMs ?? null) : Math.min(args.expiresAtMs ?? parentPolicy.expiresAt, parentPolicy.expiresAt),
+          approvalRequiredCaps: parentPolicy.approvalRequiredCaps & args.capabilities,
+          maxActionSpend: parentPolicy.maxActionSpend == null ? null : String(parentPolicy.maxActionSpend),
+          platformScope: parentPolicy.platformScope,
         }),
+        parentKey.signal,
       );
       // The parent signs delegated registration; recover the created child from effects.
-      const agentObjectId = await requireCreatedObjectId(rpc, digest, 'SubAgent');
-      const followUp = new Transaction();
-      ensureAgentMemoryVaultTx(
-        ids,
-        {accountId: args.accountId, agentObjectId},
-        followUp,
-      );
-      if (args.budget) {
-        setAgentBudgetTx(ids, {...args.budget, agentObjectId}, followUp);
-      }
-      await executeAsHuman(rpc, human, followUp);
+      const agentObjectId = existingId ?? await requireCreatedObjectId(rpc, digest, 'SubAgent');
+      vault.assertCurrent(epoch);
+      await vault.finalize(prepared.envelope, child.seed, agentObjectId);
+      await finishAgentSetup(agentObjectId);
       await invalidate(args.organizationId);
       publishCreatedAgent(
         createdSubAgentRow({
@@ -306,10 +369,10 @@ export function useAgentActions() {
           accountId: args.accountId,
           label: args.label,
           capabilities: args.capabilities,
-          delegatableCaps: args.capabilities,
+          delegatableCaps,
           parentObjectId: args.parent.agent_object_id,
           depth: args.parent.depth + 1,
-          registeredBy: human.toMySoAddress(),
+          registeredBy: parentKey.address,
           expiresAtMs: args.expiresAtMs ?? null,
           organizationId: args.organizationId ?? args.parent.organization_id,
         }),
@@ -322,19 +385,23 @@ export function useAgentActions() {
       agentObjectId: string;
       organizationId?: string | null;
       capabilities: number;
-      /** Caps this agent may grant to children. Defaults to `capabilities`. */
+      /** Explicit delegation change; omitted preserves the current grant within the new capabilities. */
       delegatableCaps?: number;
       expiresAtMs?: number | null;
       label?: string;
     }) {
       const {client: rpc, human} = requireClient();
       const ids = await resolveAgentChainIds();
+      const policy = await readAgentPolicy(args.agentObjectId);
       const tx = updateSubAgentTx(ids, {
         accountId: args.accountId,
         agentObjectId: args.agentObjectId,
         capabilities: args.capabilities,
-        delegatableCaps: args.delegatableCaps ?? args.capabilities,
-        expiresAtMs: args.expiresAtMs ?? null,
+        delegatableCaps: args.delegatableCaps ?? (policy.delegatableCaps & args.capabilities),
+        expiresAtMs: args.expiresAtMs === undefined ? policy.expiresAt : args.expiresAtMs,
+        identityClass:policy.identityClass,roleTags:policy.roleTags,
+        approvalRequiredCaps:policy.approvalRequiredCaps,maxActionSpend:policy.maxActionSpend,
+        platformScope:policy.platformScope,registerScope:policy.registerScope,
       });
       if (args.label) {
         updateSubAgentLabelTx(
@@ -378,6 +445,7 @@ export function useAgentActions() {
       const ids = await resolveAgentChainIds();
       await executeAsHuman(rpc, human, depositAiCreditTx(ids, args));
       await invalidate();
+      publishCreditBalance(args.amountMist);
     },
 
     async withdrawCredits(args: {balanceId: string; amountMist: bigint}) {
@@ -385,6 +453,7 @@ export function useAgentActions() {
       const ids = await resolveAgentChainIds();
       await executeAsHuman(rpc, human, withdrawAiCreditTx(ids, args));
       await invalidate();
+      publishCreditBalance(-args.amountMist);
     },
 
     async setAccountCaps(args: {

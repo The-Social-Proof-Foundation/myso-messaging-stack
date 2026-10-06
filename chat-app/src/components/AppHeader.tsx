@@ -1,4 +1,4 @@
-import { ArrowRight } from 'lucide-react';
+import { ArrowRight, Plus } from 'lucide-react';
 import { Link, useLocation } from 'react-router-dom';
 import { useCreateMessage } from '../contexts/CreateMessageContext';
 import { useMySocialAuth } from '../contexts/MySocialAuthContext';
@@ -59,12 +59,13 @@ export function AppHeader() {
             type="button"
             borderOpacity={false}
             onClick={openCreateMessage}
-            className="h-9 shrink-0 px-4 text-secondary-700 dark:text-secondary-400"
+            aria-label="New"
+            className="h-9 shrink-0 px-5 text-secondary-700 dark:text-secondary-400"
           >
-            <div className="flex items-center gap-1.5">
-              <span aria-hidden="true">+</span>
-              <span className="font-chakra">Create New</span>
-            </div>
+            <span className="flex items-center gap-1.5 px-1.5">
+              <Plus aria-hidden="true" />
+              <span className="font-chakra">New</span>
+            </span>
           </CalloutButton>
         ) : null}
         {session ? (

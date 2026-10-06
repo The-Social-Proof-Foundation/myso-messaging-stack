@@ -1,4 +1,5 @@
 import {ReservationNavAvatar} from './ReservationNavAvatar';
+import {AgentOrb} from './agents/AgentOrb';
 
 export interface Typer {
   address: string;
@@ -8,6 +9,8 @@ export interface Typer {
   /** SPT reservation ring (same as message bubbles). */
   showRing?: boolean;
   ringPercent?: number;
+  /** Agent typer: orb instead of the empty photo, in the listening state. */
+  orb?: boolean;
 }
 
 interface TypingIndicatorProps {
@@ -59,6 +62,16 @@ export function TypingIndicator({
         <ReservationNavAvatar
           address={primary.address}
           imageSrc={primary.avatarSrc}
+          face={
+            primary.orb ? (
+              <AgentOrb
+                agentKey={primary.address}
+                size={AVATAR_SIZE}
+                label={primary.label}
+                state="listening"
+              />
+            ) : undefined
+          }
           size={AVATAR_SIZE}
           showRing={primary.showRing}
           ringPercent={primary.ringPercent}

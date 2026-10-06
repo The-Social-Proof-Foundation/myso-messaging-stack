@@ -11,11 +11,21 @@ import {
 } from './gas-pool';
 import { getCurrentNetwork, isSponsoredGasAllowed } from './network-utils';
 import { resolveGasPaymentForSigner } from './resolve-gas-payment';
+import {
+  sessionLooksLikeZkLogin,
+  zkLoginChainAddress,
+  zkLoginChainSignature,
+} from './zklogin-signin';
 
 export type SignAndWaitOptions = {
+  signal?: AbortSignal;
   gasBudget?: number;
   reserveDurationSecs?: number;
   logPrefix?: string;
+  /** Account that pays gas and is the on-chain sender. Defaults to the signer address. */
+  senderAddress?: string;
+  /** Replaces the signer's own signature. Used for zkLogin. */
+  signTransactionBytes?: (txBytes: Uint8Array) => Promise<string>;
 };
 
 /**
@@ -41,12 +51,31 @@ export async function signAndExecuteTransactionAndWait(
     logPrefix = 'SmartGas',
   } = options;
 
-  const sender = signer.toMySoAddress();
-  transaction.setSenderIfNotSet(sender);
+  options.signal?.throwIfAborted();
+  const signerAddress = signer.toMySoAddress();
+  const sender = options.senderAddress ?? signerAddress;
+  transaction.setSender(sender);
 
   const network = getCurrentNetwork();
   const sponsoredAllowed = isSponsoredGasAllowed(network);
+  const zkAddress = options.senderAddress ? null : zkLoginChainAddress();
+  if (
+    !options.senderAddress &&
+    sessionLooksLikeZkLogin() &&
+    !zkAddress
+  ) {
+    throw new Error('Sign in again so this zkLogin account can sign the transaction.');
+  }
+
   const canAfford = await canAffordGas(client, sender);
+  const zkPaysGas =
+    zkAddress != null &&
+    zkAddress.toLowerCase() !== signerAddress.toLowerCase() &&
+    !canAfford &&
+    (await canAffordGas(client, zkAddress));
+  if (zkPaysGas && zkAddress) {
+    return executeGasOwnerPaid(client, signer, transaction, zkAddress, options.signal);
+  }
 
   console.log(
     `[${logPrefix}] network=${network} sponsoredAllowed=${sponsoredAllowed} canAfford=${canAfford}`,
@@ -59,7 +88,7 @@ export async function signAndExecuteTransactionAndWait(
   }
 
   if (canAfford || !sponsoredAllowed) {
-    return executeUserPaid(client, signer, transaction);
+    return executeUserPaid(client, signer, transaction, options.signTransactionBytes, options.signal);
   }
 
   return executeSponsored(
@@ -70,15 +99,54 @@ export async function signAndExecuteTransactionAndWait(
     gasBudget,
     reserveDurationSecs,
     logPrefix,
+    options.signal,
   );
+}
+
+/** Messaging identity stays the ephemeral key. Gas is paid by the funded zkLogin account. */
+async function executeGasOwnerPaid(
+  client: ClientWithCoreApi,
+  senderSigner: Signer,
+  transaction: Transaction,
+  gasOwner: string,
+  signal?: AbortSignal,
+): Promise<string> {
+  transaction.setSender(senderSigner.toMySoAddress());
+  transaction.setGasOwner(gasOwner);
+  const gas = await resolveGasPaymentForSigner(client, gasOwner);
+  transaction.setGasPayment(gas.kind === 'coins' ? gas.refs : []);
+
+  const txBytes = await transaction.build({ client });
+  signal?.throwIfAborted();
+  const senderSig = await senderSigner.signTransaction(txBytes);
+  const gasSig = await zkLoginChainSignature(txBytes);
+  if (!gasSig) {
+    throw new Error('Sign in again so this zkLogin account can sign the transaction.');
+  }
+  signal?.throwIfAborted();
+  const result = await client.core.executeTransaction({
+    transaction: txBytes,
+    signatures: [senderSig.signature, gasSig],
+  });
+  const tx = result.Transaction ?? result.FailedTransaction;
+  if (!tx) {
+    throw new Error('Transaction submission returned no result.');
+  }
+  if (tx.status.success === false) {
+    throw new Error(tx.status.error?.message ?? 'On-chain transaction failed.');
+  }
+  await client.core.waitForTransaction({ result });
+  return tx.digest;
 }
 
 async function executeUserPaid(
   client: ClientWithCoreApi,
   signer: Signer,
   transaction: Transaction,
+  signTransactionBytes?: (txBytes: Uint8Array) => Promise<string>,
+  signal?: AbortSignal,
 ): Promise<string> {
-  const sender = signer.toMySoAddress();
+  const sender = transaction.getData().sender ?? signer.toMySoAddress();
   const gas = await resolveGasPaymentForSigner(client, sender);
   if (gas.kind === 'coins') {
     transaction.setGasPayment(gas.refs);
@@ -87,10 +155,16 @@ async function executeUserPaid(
     transaction.setGasPayment([]);
   }
 
-  const result = await signer.signAndExecuteTransaction({
-    transaction,
-    client,
-  });
+  signal?.throwIfAborted();
+  const result = (signTransactionBytes || signal)
+    ? await (async () => {
+        const txBytes = await transaction.build({ client });
+        signal?.throwIfAborted();
+        const signature=signTransactionBytes?await signTransactionBytes(txBytes):(await signer.signTransaction(txBytes)).signature;
+        signal?.throwIfAborted();
+        return client.core.executeTransaction({transaction:txBytes,signatures:[signature]});
+      })()
+    : await signer.signAndExecuteTransaction({transaction,client});
 
   const tx = result.Transaction ?? result.FailedTransaction;
   if (!tx) {
@@ -115,6 +189,7 @@ async function executeSponsored(
   gasBudget: number,
   reserveDurationSecs: number,
   logPrefix: string,
+  signal?: AbortSignal,
 ): Promise<string | null> {
   const reservation = await reserveGas(gasBudget, reserveDurationSecs);
   const { sponsor_address, reservation_id, gas_coins } = reservation.result;
@@ -134,9 +209,11 @@ async function executeSponsored(
   );
 
   const txBytes = await transaction.build({ client });
+  signal?.throwIfAborted();
   const { signature } = await signer.signTransaction(txBytes);
   const txBytesBase64 = toBase64(txBytes);
 
+  signal?.throwIfAborted();
   const sponsoredResult = await executeSponsoredTransaction(
     reservation_id,
     txBytesBase64,

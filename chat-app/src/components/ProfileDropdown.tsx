@@ -158,7 +158,7 @@ export function ProfileDropdown() {
           >
             <div className="p-0">
               <HoldSignOutButton
-                className="flex cursor-pointer select-none items-center gap-2 rounded-none border-none bg-transparent px-2 py-2 text-sm text-[var(--destructive)] outline-none hover:bg-secondary-50 dark:hover:bg-secondary-800"
+                className="flex w-full cursor-pointer select-none items-center gap-2 rounded-none border-none bg-transparent px-2 py-2 text-sm text-[var(--destructive)] outline-none hover:bg-[var(--accent)]"
                 progressBarClassName="bg-[var(--destructive-foreground)]"
                 onConfirm={() => {
                   setOpen(false);
