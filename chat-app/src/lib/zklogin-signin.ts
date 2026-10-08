@@ -291,7 +291,12 @@ export async function zkLoginPersonalMessageSignature(bytes: Uint8Array): Promis
   });
 }
 
-export function clearZkLoginSigner(): void {
+/**
+ * Drop in-memory / sessionStorage zkLogin state only.
+ * The IndexedDB proof and account flag stay so the same user can sign back in
+ * and reuse the proof without calling the prover.
+ */
+export function clearZkLoginSessionMemory(): void {
   current = null;
   pending = null;
   proofGaveUp = false;
@@ -299,9 +304,16 @@ export function clearZkLoginSigner(): void {
     sessionStorage.removeItem(PENDING_KEY);
     sessionStorage.removeItem(CURRENT_KEY);
     sessionStorage.removeItem(PROOF_KEY);
-    localStorage.removeItem(ACCOUNT_FLAG);
   }
-  void clearPersistedZkLoginSigner();
+}
+
+/**
+ * End the active zkLogin session in this tab.
+ * Does **not** delete the persisted proof — logout / OAuth expiry must keep it
+ * for re-auth. Only {@link discardUnusableProof} removes IndexedDB (expired/invalid).
+ */
+export function clearZkLoginSigner(): void {
+  clearZkLoginSessionMemory();
 }
 
 function authConfig() {
@@ -459,6 +471,20 @@ async function saltFor(accessToken: string, iss: string, aud: string): Promise<s
   return salt;
 }
 
+/**
+ * The account's stored zkLogin salt, read from the same service the sign-in wrote it to. Unlike
+ * the public salt endpoint, this one is reachable on every network the app signs in on.
+ */
+export async function fetchZkLoginSalt(accessToken: string): Promise<string> {
+  const response = await fetch(`${saltApi()}/zklogin-salt`, {
+    headers: { Authorization: `Bearer ${accessToken}`, Accept: 'application/json' },
+  });
+  if (!response.ok) throw new Error(`Could not read your zkLogin salt (${response.status}). Sign in again.`);
+  const body = (await response.json()) as { salt?: string };
+  if (!body.salt) throw new Error('Could not read your zkLogin salt. Sign in again.');
+  return body.salt;
+}
+
 function restorePending(): Pending | null {
   if (pending) return pending;
   const raw = sessionStorage.getItem(PENDING_KEY);
@@ -525,13 +551,13 @@ function proofAcceptable(proof: ZkProof): boolean {
   );
 }
 
+/** Proof is expired or corrupt — wipe IndexedDB so we do not keep a dead signer. */
 async function discardUnusableProof(): Promise<void> {
-  current = null;
-  await clearPersistedZkLoginSigner();
+  clearZkLoginSessionMemory();
   if (typeof window !== 'undefined') {
-    sessionStorage.removeItem(CURRENT_KEY);
     localStorage.removeItem(ACCOUNT_FLAG);
   }
+  await clearPersistedZkLoginSigner();
 }
 
 function notifyZkLoginProofExpired(): void {
@@ -542,16 +568,20 @@ function notifyZkLoginProofExpired(): void {
 async function persistCurrent(sub?: string): Promise<void> {
   if (!current) return;
   persistSessionCache();
-  await saveZkLoginSigner(current.ephemeral.getSecretKey(), {
-    address: current.address,
-    addressSeed: current.addressSeed,
-    maxEpoch: current.maxEpoch,
-    proofPoints: current.proof.proofPoints,
-    issBase64Details: current.proof.issBase64Details,
-    headerBase64: current.proof.headerBase64,
-    proofVersion: current.proof.proofVersion,
-    sub,
-  });
+  try {
+    await saveZkLoginSigner(current.ephemeral.getSecretKey(), {
+      address: current.address,
+      addressSeed: current.addressSeed,
+      maxEpoch: current.maxEpoch,
+      proofPoints: current.proof.proofPoints,
+      issBase64Details: current.proof.issBase64Details,
+      headerBase64: current.proof.headerBase64,
+      proofVersion: current.proof.proofVersion,
+      sub,
+    });
+  } catch (error) {
+    console.warn('[zkLogin] failed to persist proof to IndexedDB:', error);
+  }
 }
 
 async function activateLoadedProof(loaded: {
@@ -592,7 +622,6 @@ async function activateLoadedProof(loaded: {
 }
 
 export async function restoreZkLoginSignerStatus(): Promise<ZkLoginRestoreStatus> {
-  if (zkLoginPending() && !current) return 'missing';
   if (current) {
     const clock = await chainClock().catch(() => null);
     if (!clock) return 'clock-unavailable';
@@ -606,6 +635,7 @@ export async function restoreZkLoginSignerStatus(): Promise<ZkLoginRestoreStatus
     }
     return 'ok';
   }
+  // A pending OAuth nonce must not hide a still-valid IndexedDB proof (re-auth reuse).
   const loaded = (await loadZkLoginSigner().catch(() => null)) ?? readLegacySessionProof();
   if (!loaded) return 'missing';
   return activateLoadedProof(loaded);
@@ -617,8 +647,10 @@ export async function restoreZkLoginSigner(): Promise<boolean> {
 
 async function reuseStoredProofForSubject(sub: string): Promise<string | null> {
   const loaded = (await loadZkLoginSigner().catch(() => null)) ?? readLegacySessionProof();
+  // Same OAuth subject only — never hand another account a stored proof.
   if (!loaded?.record.sub || loaded.record.sub !== sub) return null;
   if ((await activateLoadedProof(loaded)) !== 'ok') return null;
+  await persistCurrent(sub);
   return loaded.record.address;
 }
 

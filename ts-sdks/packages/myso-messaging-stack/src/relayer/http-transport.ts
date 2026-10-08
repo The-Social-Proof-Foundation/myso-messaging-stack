@@ -19,6 +19,7 @@ import type { RelayerTransport } from './transport.js';
 import type {
 	CheckDmGateParams,
 	DeleteMessageParams,
+	RespondToPaymentRequestParams,
 	DeletePushTokenParams,
 	DmGateResult,
 	FetchMessageParams,
@@ -365,6 +366,17 @@ export class HTTPRelayerTransport implements RelayerTransport {
 			wirePayload.shared_post_address =
 				normalized ?? params.sharedPostAddress.trim().toLowerCase();
 		}
+		if (params.paymentMetadata) {
+			const meta: Record<string, unknown> = { asset_kind: params.paymentMetadata.assetKind };
+			if (params.paymentMetadata.digest) meta.digest = params.paymentMetadata.digest;
+			if (params.paymentMetadata.requestMessageId) {
+				meta.request_message_id = params.paymentMetadata.requestMessageId;
+			}
+			if (params.paymentMetadata.senderWallet) {
+				meta.sender_wallet = params.paymentMetadata.senderWallet;
+			}
+			wirePayload.metadata = meta;
+		}
 		if (params.messageSignature) {
 			wirePayload.message_signature = params.messageSignature;
 		}
@@ -448,6 +460,23 @@ export class HTTPRelayerTransport implements RelayerTransport {
 			headers: { ...headers, 'Content-Type': 'application/json' },
 			body: JSON.stringify(body),
 		});
+	}
+
+	async respondToPaymentRequest(params: RespondToPaymentRequestParams): Promise<RelayerMessage> {
+		const { body, headers } = await createBodyAuth(params.signer, {
+			group_id: params.groupId,
+			message_id: params.messageId,
+			action: params.action,
+		});
+		const wire = await this.#request<WireMessageResponse>(
+			this.#relayerPath('/messages/respond'),
+			{
+				method: 'POST',
+				headers: { ...headers, 'Content-Type': 'application/json' },
+				body: JSON.stringify(body),
+			},
+		);
+		return fromWireMessage(wire);
 	}
 
 	async deleteMessage(params: DeleteMessageParams): Promise<void> {

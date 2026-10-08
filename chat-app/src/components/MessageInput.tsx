@@ -4,7 +4,7 @@ import EmojiPicker, {
   Theme as EmojiTheme,
   type EmojiClickData,
 } from 'emoji-picker-react';
-import { Smile } from 'lucide-react';
+import { HandCoins, Smile } from 'lucide-react';
 import type { AttachmentFile } from '../hooks/useMessages';
 import { usePageEngaged } from '../hooks/usePageEngaged';
 
@@ -40,6 +40,11 @@ interface MessageInputProps {
   onTyping?: (typing: boolean) => void;
   disabled?: boolean;
   sending?: boolean;
+  /** 1:1 DMs only: adds a payments menu (send / request MYSO). Omit in group chats. */
+  paymentMenu?: {
+    onSend: () => void;
+    onRequest: () => void;
+  };
 }
 
 /** Format bytes into a human-readable size string. */
@@ -54,8 +59,10 @@ export function MessageInput({
   onTyping,
   disabled = false,
   sending = false,
+  paymentMenu,
 }: Readonly<MessageInputProps>) {
   const pageEngaged = usePageEngaged();
+  const [showPaymentMenu, setShowPaymentMenu] = useState(false);
   const [text, setText] = useState('');
   const [files, setFiles] = useState<File[]>([]);
   const [fileError, setFileError] = useState<string | null>(null);
@@ -288,6 +295,50 @@ export function MessageInput({
             />
           </svg>
         </button>
+        {paymentMenu && (
+          <div className="relative mb-0.5 shrink-0">
+            <button
+              type="button"
+              onClick={() => setShowPaymentMenu((v) => !v)}
+              disabled={disabled || sending}
+              aria-haspopup="menu"
+              aria-expanded={showPaymentMenu}
+              className="flex h-9 w-9 items-center justify-center rounded-full text-secondary-400 hover:bg-secondary-100 hover:text-secondary-600 disabled:opacity-50 dark:hover:bg-secondary-700 dark:hover:text-secondary-300"
+              title="Payments"
+            >
+              <HandCoins className="h-5 w-5" aria-hidden />
+            </button>
+            {showPaymentMenu && (
+              <div
+                role="menu"
+                className="absolute bottom-full left-0 z-40 mb-2 w-44 overflow-hidden rounded-xl border border-secondary-200 bg-white py-1 shadow-xl dark:border-secondary-600 dark:bg-secondary-800"
+              >
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setShowPaymentMenu(false);
+                    paymentMenu.onSend();
+                  }}
+                  className="block w-full px-3 py-2 text-left text-sm text-secondary-800 hover:bg-secondary-100 dark:text-secondary-100 dark:hover:bg-secondary-700"
+                >
+                  Send MYSO
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setShowPaymentMenu(false);
+                    paymentMenu.onRequest();
+                  }}
+                  className="block w-full px-3 py-2 text-left text-sm text-secondary-800 hover:bg-secondary-100 dark:text-secondary-100 dark:hover:bg-secondary-700"
+                >
+                  Request MYSO
+                </button>
+              </div>
+            )}
+          </div>
+        )}
         <input
           ref={fileInputRef}
           type="file"

@@ -27,3 +27,9 @@ export {useAgentActions} from './useAgentActions';
 export {useDerivedAgentKey} from './useDerivedAgentKey';
 export {useInvalidateAgents} from './useInvalidateAgents';
 export {agentKeys} from './query-keys';
+export {
+  useAutomationHealth,
+  useAutomationJobs,
+  useAutomationRuns,
+  useCreateAutomationJob,
+} from './useAutomationJobs';

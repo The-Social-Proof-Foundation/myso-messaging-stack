@@ -7,6 +7,7 @@
 
 const STORAGE_KEY = 'chat-app-groups';
 const SELECTED_GROUP_KEY = 'chat-app-selected-group';
+const SELECTED_ORGANIZATION_KEY = 'chat-app-selected-organization';
 
 export interface StoredGroup {
   uuid: string;
@@ -106,4 +107,40 @@ export function updateStoredGroupName(uuid: string, name: string): void {
     g.uuid === uuid ? { ...g, name } : g,
   );
   localStorage.setItem(STORAGE_KEY, JSON.stringify(groups));
+}
+
+/** Read the last-open agentic organization for a wallet. */
+export function getSelectedOrganizationId(walletAddress?: string | null): string | null {
+  if (!walletAddress) return null;
+  try {
+    const raw = localStorage.getItem(SELECTED_ORGANIZATION_KEY);
+    if (!raw) return null;
+    const id = (JSON.parse(raw) as Record<string, string>)[walletAddress.toLowerCase()];
+    return typeof id === 'string' && id.length > 0 ? id : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Persist (or clear, with `null`) the open agentic organization for a wallet. */
+export function setSelectedOrganizationId(
+  walletAddress: string | null | undefined,
+  organizationId: string | null,
+): void {
+  if (!walletAddress) return;
+  try {
+    let map: Record<string, string> = {};
+    try {
+      const raw = localStorage.getItem(SELECTED_ORGANIZATION_KEY);
+      if (raw) map = JSON.parse(raw) as Record<string, string>;
+    } catch {
+      map = {};
+    }
+    const addr = walletAddress.toLowerCase();
+    if (organizationId) map[addr] = organizationId;
+    else delete map[addr];
+    localStorage.setItem(SELECTED_ORGANIZATION_KEY, JSON.stringify(map));
+  } catch {
+    // ignore (e.g. private mode / disabled storage)
+  }
 }

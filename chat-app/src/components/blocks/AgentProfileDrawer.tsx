@@ -9,9 +9,14 @@ import {Button} from '@/components/ui/button';
 import {Separator} from '@/components/ui/separator';
 import {IosToggle} from '@/components/IosToggle';
 import {MysoAmount} from '@/components/agents/MysoAmount';
+import {StatTile, mysoUnitClass} from '@/components/agents/StatTile';
 import {AgentStatusDot} from '@/components/blocks/AgentStatusMark';
 import {AgentOrb} from '@/components/agents/AgentOrb';
-import {useAgentActions, useMemoryAccount, useOrgAuditLogs, useOrgSpendBreakdown} from '@/hooks/agents';
+import {AgentModelLabel} from '@/components/agents/AgentModelLabel';
+import {ErrorNotice} from '@/components/agents/ErrorNotice';
+import {useAgentChatProgress} from '@/lib/agents/chat-progress';
+import {useAgentActions, useMemoryAccount, useOrgAuditLogs} from '@/hooks/agents';
+import {useAgentStats} from '@/hooks/agents/useAgentStats';
 import {useDerivedAgentKey} from '@/hooks/agents/useDerivedAgentKey';
 import {useAllSubAgents} from '@/hooks/agents/useSubAgents';
 import type {AgentChartNode} from '@/lib/agents/agent-chart';
@@ -57,7 +62,9 @@ export function AgentProfileDrawer({
 }: Readonly<AgentProfileDrawerProps>) {
   const [copied, setCopied] = useState(false);
   const [view, setView] = useState<'details' | 'audit'>('details');
-  const spend = useOrgSpendBreakdown(organizationId);
+  const chat = useAgentChatProgress(agent.id);
+  const statsAgents = useMemo(() => [{id: agent.id, fullAddress: agent.fullAddress}], [agent.id, agent.fullAddress]);
+  const stats = useAgentStats(organizationId, statsAgents).get(agent.id);
   const audit = useOrgAuditLogs(organizationId);
   const agents = useAllSubAgents();
   const account = useMemoryAccount();
@@ -68,10 +75,6 @@ export function AgentProfileDrawer({
   );
   const accountId = account.data?.account_id ?? null;
   const canPickModel = ownsAgent(accountId, row);
-  const spendRow = useMemo(
-    () => spend.items.find((row) => sameId(row.agent_object_id, agent.id)) ?? null,
-    [spend.items, agent.id],
-  );
   const auditRows = useMemo(
     () => audit.items.filter((row) => sameId(row.target_id, agent.id)),
     [audit.items, agent.id],
@@ -145,7 +148,9 @@ export function AgentProfileDrawer({
             {agent.parentName ? null : (
               <p className="mt-0.5 text-xs text-muted-foreground">Root agent in this organization.</p>
             )}
-            <p className="mt-0.5 truncate text-xs text-muted-foreground">{agent.role}</p>
+            <p className="mt-0.5 truncate text-xs text-muted-foreground">
+              <AgentModelLabel agentId={agent.id} fallback={agent.role} />
+            </p>
           </div>
         </div>
 
@@ -160,12 +165,32 @@ export function AgentProfileDrawer({
             Audit logs
           </Button>
           {onChat ? (
-            <Button variant="outline" size="sm" className="h-8 flex-1 text-xs" onClick={onChat}>
-              <MessageSquare data-icon="inline-start" strokeWidth={2} aria-hidden />
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-8 flex-1 text-xs"
+              onClick={onChat}
+              disabled={chat.busy}
+              aria-busy={chat.busy}
+            >
+              {chat.busy ? (
+                <span
+                  aria-hidden
+                  className="size-3.5 animate-spin rounded-full border-2 border-current/30 border-t-current"
+                />
+              ) : (
+                <MessageSquare data-icon="inline-start" strokeWidth={2} aria-hidden />
+              )}
               Chat
             </Button>
           ) : null}
         </div>
+        {chat.busy ? (
+          <p role="status" className="text-xs text-muted-foreground">
+            {chat.message}
+          </p>
+        ) : null}
+        {chat.error ? <ErrorNotice>{chat.error}</ErrorNotice> : null}
         </div>
 
         <Separator />
@@ -174,28 +199,24 @@ export function AgentProfileDrawer({
           <p className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
             Stats
           </p>
-          {spend.isInitialLoading ? (
-            <p className="mt-2 text-xs text-muted-foreground">Loading spend…</p>
-          ) : spend.isError && isForbidden(spend.error) ? (
-            <p className="mt-2 text-xs text-muted-foreground">Spend needs dashboard access.</p>
-          ) : spend.isError ? (
-            <p className="mt-2 text-xs text-destructive">Could not load spend.</p>
-          ) : (
-            <dl className="mt-2 grid grid-cols-2 gap-2">
-              <div>
-                <dt className="text-[11px] text-muted-foreground">Spend</dt>
-                <dd className="text-sm text-foreground">
-                  {spendRow ? <MysoAmount amount={formatMistAmount(spendRow.spent_mist)} /> : '—'}
-                </dd>
-              </div>
-              <div>
-                <dt className="text-[11px] text-muted-foreground">Calls</dt>
-                <dd className="text-sm text-foreground">
-                  {spendRow ? String(spendRow.usage_events) : '—'}
-                </dd>
-              </div>
-            </dl>
-          )}
+          <div className="mt-2 grid grid-cols-2 gap-2">
+            <StatTile label="Balance" value={drawerAmount(stats?.balanceMist)} />
+            <StatTile label="AI spent" value={drawerAmount(stats?.spentMist)} />
+            <StatTile
+              label="Budget left"
+              value={
+                stats?.budgetEnabled && stats.budgetMist != null
+                  ? drawerAmount(stats.budgetMist - (stats.spentMist ?? 0n))
+                  : stats
+                    ? 'No budget'
+                    : '—'
+              }
+            />
+            <StatTile
+              label="Memory"
+              value={stats?.memoryEntries == null ? '—' : stats.memoryEntries.toLocaleString()}
+            />
+          </div>
         </div>
 
         <Separator />
@@ -214,10 +235,7 @@ export function AgentProfileDrawer({
         ) : null}
 
         <div className="flex flex-col gap-4 p-4">
-        <div>
-          <p className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
-            Capabilities
-          </p>
+        <CollapsibleSection title="Capabilities" count={agent.capabilities.length}>
           <CapabilityControls
             labels={agent.capabilities}
             row={row}
@@ -225,7 +243,7 @@ export function AgentProfileDrawer({
             organizationId={organizationId}
             onSave={actions.updateAgent}
           />
-        </div>
+        </CollapsibleSection>
 
         {agent.parentName ? (
           <div>
@@ -241,6 +259,48 @@ export function AgentProfileDrawer({
         )}
       </div>
     </aside>
+  );
+}
+
+function drawerAmount(mist: bigint | null | undefined) {
+  if (mist == null) return '—';
+  return <MysoAmount amount={formatMistAmount(mist < 0n ? 0n : mist)} unitClassName={mysoUnitClass} />;
+}
+
+/** Header button that folds its content away with a short height animation. Closed by default. */
+function CollapsibleSection({
+  title,
+  count,
+  children,
+}: Readonly<{title: string; count?: number; children: ReactNode}>) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div>
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={() => setOpen((value) => !value)}
+        className="flex w-full items-center justify-between text-left"
+      >
+        <span className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
+          {title}
+          {count != null ? <span className="ml-1.5 normal-case tracking-normal">({count})</span> : null}
+        </span>
+        <ChevronDown
+          className={`h-4 w-4 text-muted-foreground transition-transform duration-200 ease-out ${open ? 'rotate-180' : ''}`}
+          aria-hidden
+        />
+      </button>
+      <div
+        aria-hidden={!open}
+        inert={!open}
+        className={`grid transition-[grid-template-rows,opacity] duration-200 ease-out motion-reduce:transition-none ${
+          open ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0'
+        }`}
+      >
+        <div className="overflow-hidden">{children}</div>
+      </div>
+    </div>
   );
 }
 
@@ -278,6 +338,7 @@ function ModelControls({
 
   const options = models.data?.models ?? [];
   const selected = current.data?.model_id ?? '';
+  const selectedIsDefault = current.data?.source !== 'saved';
   const selectedLabel =
     options.find((option) => option.id === selected)?.display_name || selected || 'Model';
 
@@ -351,6 +412,13 @@ function ModelControls({
     <div>
       <p className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">Model</p>
       {body}
+      {derived.data && !models.isPending && !current.isPending && !current.isError ? (
+        <p className="mt-1.5 text-xs text-muted-foreground">
+          {selectedIsDefault
+            ? 'No model chosen yet — the server default is answering. Pick one to fix it for this agent.'
+            : 'Saved for this agent.'}
+        </p>
+      ) : null}
       {error ? <p className="mt-2 text-xs text-destructive">{error}</p> : null}
     </div>
   );

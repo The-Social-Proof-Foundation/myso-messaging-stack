@@ -3,7 +3,7 @@ import {useAgentVault, AGENT_BACKUPS_ENABLED, findRegisteredDraft} from '../../c
 import type {AgentKeyEnvelopeV1, AgentKeySetup} from '@socialproof/memory';
 import {Button} from '../Button';
 import {useAgentActions} from '../../hooks/agents/useAgentActions';
-import {CUSTODY_TIER_INFO, CUSTODY_TIERS, type CustodyTier} from '../../lib/agents/custody-vault';
+import {CUSTODY_TIER_INFO, PRIMARY_CUSTODY, webauthnAvailable, type CustodyTier} from '../../lib/agents/custody-vault';
 import type {PasskeySummary} from '../../lib/agents/passkey-vault';
 
 type WrapSummary = {method: CustodyTier; subject: string; revision: number};
@@ -11,15 +11,18 @@ type WrapSummary = {method: CustodyTier; subject: string; revision: number};
 const fieldClass =
   'rounded-md border border-secondary-300 bg-white px-2 py-1 text-sm dark:border-secondary-600 dark:bg-secondary-900 dark:text-secondary-100';
 
-/** Agent key custody: one root, unlockable through any configured tier. Passkeys are optional. */
+/**
+ * Agent key custody. The MySocial login always holds the agent keys and is never removable; a
+ * passkey is an optional backup that wraps the same root, so adding one never re-encrypts an agent.
+ */
 export function AgentSecurityPanel() {
   const vault = useAgentVault();
   const actions = useAgentActions();
   const [setups, setSetups] = useState<AgentKeySetup[]>([]);
   const [records, setRecords] = useState<PasskeySummary[]>([]);
   const [tiers, setTiers] = useState<WrapSummary[]>([]);
+  const [enabled, setEnabled] = useState<CustodyTier[]>([]);
   const [selected, setSelected] = useState('');
-  const [code, setCode] = useState('');
   const [drafts, setDrafts] = useState<AgentKeyEnvelopeV1[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -40,6 +43,7 @@ export function AgentSecurityPanel() {
     if (!vault) return;
     setTiers(await vault.availableTiers());
     setRecords(await vault.listPasskeys());
+    setEnabled(await vault.enabledTiers());
   };
 
   useEffect(() => {
@@ -50,15 +54,18 @@ export function AgentSecurityPanel() {
 
   if (!AGENT_BACKUPS_ENABLED || !vault) return null;
 
-  const configured = (method: CustodyTier) => tiers.some((t) => t.method === method);
-  const locked = vault.status !== 'ready';
-  const activeInfo = vault.activeMethod ? CUSTODY_TIER_INFO[vault.activeMethod] : null;
-  const statusLabel =
-    vault.status === 'ready'
-      ? `Unlocked with ${activeInfo?.label ?? 'custody'}`
-      : vault.status === 'unsupported'
-        ? 'This device cannot use passkeys'
-        : 'Locked';
+  const ready = vault.status === 'ready';
+  const hasCustody = tiers.length > 0;
+  const hasLoginHolder = tiers.some((t) => t.method === PRIMARY_CUSTODY);
+  const passkeys = tiers.filter((t) => t.method === 'passkey-prf-v1');
+  const passkeyEnabled = enabled.includes('passkey-prf-v1');
+  const passkeySupported = passkeyEnabled && webauthnAvailable();
+  const login = CUSTODY_TIER_INFO[PRIMARY_CUSTODY];
+  const statusLabel = ready
+    ? `Unlocked with ${vault.activeMethod ? CUSTODY_TIER_INFO[vault.activeMethod].label : 'agent keys'}`
+    : hasCustody
+      ? 'Locked'
+      : 'Not set up yet';
 
   return (
     <section
@@ -71,222 +78,163 @@ export function AgentSecurityPanel() {
             Agent keys
           </p>
           <p className="mt-0.5 text-xs text-secondary-500 dark:text-secondary-400">
-            {statusLabel}. Choose how to unlock them. Your MySocial login works on any
-            device; a passkey never leaves this device.
+            {statusLabel}. Your MySocial login always holds these agent keys, on any device; a
+            passkey is an optional backup.
           </p>
         </div>
-        {vault.status === 'ready' ? (
+        {ready ? (
           <Button variant="secondary" size="sm" onClick={() => vault.lock()}>
             Lock
           </Button>
         ) : null}
       </div>
 
-      <div className="mt-3 flex flex-wrap items-center gap-2">
-        {vault.status === 'ready' ? (
-          <>
-            <Button
-              variant="secondary"
-              size="sm"
-              disabled={busy}
-              onClick={() =>
-                void run(async () => {
-                  await vault.upgradeToPasskey();
-                  await refresh();
-                })
-              }
-            >
-              Add passkey
-            </Button>
-            {configured('recovery-code-v1') ? null : (
-              <Button
-                variant="secondary"
-                size="sm"
-                disabled={busy || !code}
-                onClick={() =>
-                  void run(async () => {
-                    await vault.adoptTier('recovery-code-v1', {code});
-                    await refresh();
-                  })
-                }
-              >
-                Add recovery code
-              </Button>
-            )}
-            <Button
-              variant="secondary"
-              size="sm"
-              disabled={busy}
-              onClick={() =>
-                void run(async () => {
-                  setDrafts(await vault.pending());
-                  setSetups(await vault.api.setups());
-                })
-              }
-            >
-              Incomplete setups
-            </Button>
-          </>
-        ) : (
-          <>
-            {tiers.length ? (
+      <div className="mt-3 rounded-lg border border-secondary-200 px-3 py-2 dark:border-secondary-700">
+        <p className="text-xs font-medium text-secondary-800 dark:text-secondary-200">
+          {login.label} — always on
+        </p>
+        <p className="mt-0.5 text-xs text-secondary-500 dark:text-secondary-400">{login.tradeoff}</p>
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          {ready ? (
+            hasLoginHolder ? (
+              <span className="text-xs text-secondary-500 dark:text-secondary-400">
+                Holding your agent keys.
+              </span>
+            ) : (
               <Button
                 variant="secondary"
                 size="sm"
                 disabled={busy}
                 onClick={() =>
                   void run(async () => {
-                    await vault.unlock({code: code || undefined});
+                    await vault.adoptTier(PRIMARY_CUSTODY);
                     await refresh();
                   })
                 }
               >
-                Unlock agent keys
+                Add my MySocial login
               </Button>
-            ) : null}
+            )
+          ) : (
             <Button
               variant="secondary"
               size="sm"
               disabled={busy}
               onClick={() =>
                 void run(async () => {
-                  await vault.unlock({method: 'zklogin-root-v1'});
+                  await vault.unlock();
                   await refresh();
                 })
               }
             >
-              {tiers.length ? 'Unlock with login' : 'Use my MySocial login'}
+              {hasCustody ? 'Unlock agent keys' : 'Set up with my MySocial login'}
             </Button>
-            <Button
-              variant="secondary"
-              size="sm"
-              disabled={busy || !code}
-              onClick={() =>
-                void run(async () => {
-                  await vault.unlock({method: 'recovery-code-v1', code});
-                  await refresh();
-                })
-              }
-            >
-              {tiers.length ? 'Unlock with code' : 'Use a recovery code'}
-            </Button>
-            <Button
-              variant="secondary"
-              size="sm"
-              disabled={busy}
-              onClick={() =>
-                void run(async () => {
-                  await vault.adoptTier('passkey-prf-v1');
-                  await refresh();
-                })
-              }
-            >
-              {tiers.length ? 'Add passkey' : 'Use a passkey'}
-            </Button>
-          </>
-        )}
-        <Button variant="ghost" size="sm" disabled={busy} onClick={() => void run(refresh)}>
-          Refresh
-        </Button>
-      </div>
-
-      <label className="mt-3 block text-xs text-secondary-600 dark:text-secondary-300">
-        Recovery code
-        <input
-          aria-label="Recovery code"
-          value={code}
-          onChange={(e) => setCode(e.target.value)}
-          placeholder="Only if you use one"
-          className={`${fieldClass} mt-1 block w-full max-w-xs`}
-          autoComplete="off"
-        />
-      </label>
-
-      {tiers.length > 0 ? (
-        <ul className="mt-3 space-y-2 text-xs text-secondary-500 dark:text-secondary-400">
-          {tiers.map((t) => (
-            <li key={t.method} className="flex items-start justify-between gap-2">
-              <span>
-                <span className="font-medium text-secondary-800 dark:text-secondary-200">
-                  {CUSTODY_TIER_INFO[t.method].label}
-                </span>
-                {' — '}
-                {CUSTODY_TIER_INFO[t.method].secret}.
-              </span>
-              <Button
-                variant="ghost"
-                size="sm"
-                disabled={busy || locked || tiers.length <= 1}
-                onClick={() =>
-                  void run(async () => {
-                    await vault.removeCustodyMethod(t.method);
-                    await refresh();
-                  })
-                }
-              >
-                Remove
-              </Button>
-            </li>
-          ))}
-        </ul>
-      ) : null}
-
-      {records.length > 0 ? (
-        <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
-          <select
-            aria-label="Passkey"
-            value={selected}
-            onChange={(e) => setSelected(e.target.value)}
-            className={fieldClass}
-          >
-            <option value="">Choose passkey</option>
-            {records.map((r, i) => (
-              <option key={r.id} value={r.id}>
-                Passkey {i + 1}
-                {r.active ? '' : ' (setup incomplete)'}
-              </option>
-            ))}
-          </select>
+          )}
+          <Button variant="ghost" size="sm" disabled={busy} onClick={() => void run(refresh)}>
+            Refresh
+          </Button>
           <Button
             variant="secondary"
             size="sm"
-            disabled={busy || !selected}
+            disabled={busy}
             onClick={() =>
               void run(async () => {
-                await vault.unlock({method: 'passkey-prf-v1', credentialId: selected});
-                await refresh();
+                setDrafts(await vault.pending());
+                setSetups(await vault.api.setups());
               })
             }
           >
-            Unlock with selected
-          </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            disabled={busy || !selected || locked}
-            onClick={() =>
-              void run(async () => {
-                await vault.removePasskey(selected);
-                await refresh();
-              })
-            }
-          >
-            Remove selected
+            Incomplete setups
           </Button>
         </div>
+        {vault.loginHolderMissing ? (
+          <p className="mt-1 text-xs text-secondary-500 dark:text-secondary-400">
+            These agent keys were created with a passkey. Add your MySocial login so a lost passkey
+            cannot strand them.
+          </p>
+        ) : null}
+      </div>
+
+      {passkeyEnabled || passkeys.length > 0 ? (
+      <div className="mt-3 rounded-lg border border-secondary-200 px-3 py-2 dark:border-secondary-700">
+        <p className="text-xs font-medium text-secondary-800 dark:text-secondary-200">
+          {CUSTODY_TIER_INFO['passkey-prf-v1'].label} — optional
+        </p>
+        <p className="mt-0.5 text-xs text-secondary-500 dark:text-secondary-400">
+          {!passkeyEnabled
+            ? 'This Memory server does not offer passkey custody.'
+            : passkeySupported
+              ? CUSTODY_TIER_INFO['passkey-prf-v1'].tradeoff
+              : 'This browser cannot use passkeys. Your MySocial login works everywhere.'}
+        </p>
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          {ready ? (
+            <Button
+              variant="secondary"
+              size="sm"
+              disabled={busy || !passkeySupported}
+              onClick={() =>
+                void run(async () => {
+                  await vault.addPasskey();
+                  await refresh();
+                })
+              }
+            >
+              Add passkey
+            </Button>
+          ) : null}
+        </div>
+        {passkeys.length > 0 ? (
+          <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+            <select
+              aria-label="Passkey"
+              value={selected}
+              onChange={(e) => setSelected(e.target.value)}
+              className={fieldClass}
+            >
+              <option value="">Choose passkey</option>
+              {records.map((r, i) => (
+                <option key={r.id} value={r.id}>
+                  Passkey {i + 1}
+                  {r.active ? '' : ' (setup incomplete)'}
+                </option>
+              ))}
+            </select>
+            {ready ? (
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={busy || !selected}
+                onClick={() =>
+                  void run(async () => {
+                    await vault.removePasskey(selected);
+                    setSelected('');
+                    await refresh();
+                  })
+                }
+              >
+                Remove selected
+              </Button>
+            ) : (
+              <Button
+                variant="secondary"
+                size="sm"
+                disabled={busy || !selected}
+                onClick={() =>
+                  void run(async () => {
+                    await vault.unlock({method: 'passkey-prf-v1', credentialId: selected});
+                    await refresh();
+                  })
+                }
+              >
+                Unlock with selected
+              </Button>
+            )}
+          </div>
+        ) : null}
+      </div>
       ) : null}
 
-      {vault.status === 'unsupported' ? (
-        <p className="mt-2 text-xs text-secondary-500 dark:text-secondary-400">
-          Unlock with your MySocial login or a recovery code instead. There is no
-          server recovery fallback for the passkey tier.
-        </p>
-      ) : null}
-      {activeInfo ? (
-        <p className="mt-2 text-xs text-secondary-500 dark:text-secondary-400">
-          {activeInfo.tradeoff} {activeInfo.caution}
-        </p>
-      ) : null}
       {error || vault.error ? (
         <p role="alert" className="mt-2 text-xs text-danger-500 dark:text-danger-400">
           {error || vault.error}
@@ -348,11 +296,10 @@ export function AgentSecurityPanel() {
       ))}
 
       <p className="mt-3 text-xs text-secondary-500 dark:text-secondary-400">
-        Every unlock path opens the same agent keys, so adding one never re-encrypts an
-        agent.{' '}
-        {CUSTODY_TIERS.length > 2
-          ? 'Keep at least two paths if you can.'
-          : 'Keep at least one path you can recover.'}
+        Every unlock path opens the same agent keys, so adding one never re-encrypts an agent.{' '}
+        {hasLoginHolder
+          ? 'Your MySocial login is the one you can always recover.'
+          : 'Add your MySocial login as the holder you can always recover.'}
       </p>
     </section>
   );

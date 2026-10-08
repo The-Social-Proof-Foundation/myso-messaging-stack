@@ -261,6 +261,7 @@ export function useCreateAgentChat(): CreateAgentChatState {
 
       setStage('preparing');
       if (!vault) throw new Error('Unlock agent keys first.');
+      await vault.ensureUnlocked();
       const epoch = vault.generation();
       const derived = await vault.getAgent(agent);
       vault.assertCurrent(epoch);
@@ -280,28 +281,30 @@ export function useCreateAgentChat(): CreateAgentChatState {
       );
       vault.assertCurrent(epoch);
 
-      setStage('syncing');
       const principal = address ?? keypair.toMySoAddress();
-      await waitForAgentChatReady({
-        client,
-        signer: keypair,
-        groupId,
-        uuid,
-        principalAddress: principal,
-      });
-
-      // Without this the owner can read the chat but not reply.
+      // The relayer authenticates the messaging key, which in a zkLogin session is not the
+      // principal's address. Grant that key read and send first, or the chat 403s forever.
+      const messagingAddress = keypair.toMySoAddress();
       setStage('permissions');
       try {
         await ensureAgentChatSendPermission({
           client: client as never,
           signer: keypair,
           groupId,
-          member: principal,
+          member: messagingAddress,
         });
       } catch (grantError) {
-        console.warn('[chat-app] agent chat created but send permission grant failed:', grantError);
+        console.warn('[chat-app] agent chat created but access grant failed:', grantError);
       }
+
+      setStage('syncing');
+      await waitForAgentChatReady({
+        client,
+        signer: keypair,
+        groupId,
+        uuid,
+        principalAddress: messagingAddress,
+      });
 
       const hydrated = await openChat({
         groupId,

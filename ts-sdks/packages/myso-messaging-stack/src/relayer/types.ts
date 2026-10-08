@@ -17,7 +17,60 @@ export type SyncStatus =
 	| 'DELETED';
 
 /** Timeline message kind. */
-export type MessageKind = 'text' | 'system' | 'post' | 'request_payment' | 'poll';
+export type MessageKind = 'text' | 'system' | 'post' | 'request_payment' | 'poll' | 'token_transfer';
+
+/** Asset class of a chat payment. */
+export type PaymentAssetKind = 'native' | 'spt';
+
+/** Relayer-confirmed on-chain status of a `token_transfer` message. */
+export type TokenTransferStatus = 'pending' | 'success' | 'failed';
+
+/** Lifecycle of a `request_payment` message (relayer-enforced). */
+export type PaymentRequestStatus = 'open' | 'rejected' | 'cancelled' | 'expired' | 'paid';
+
+/**
+ * Relayer-owned cleartext metadata for 1:1 DM payment messages. Amount, asset details and
+ * notes are inside the encrypted body; only these fields are visible to the relayer.
+ */
+export type PaymentMetadata =
+	| {
+			type: 'token_transfer';
+			digest: string;
+			assetKind: PaymentAssetKind;
+			status: TokenTransferStatus;
+			/** DM counterpart (recipient), derived by the relayer. */
+			to: string;
+			/** Set when this transfer settles a payment request. */
+			requestMessageId?: string;
+			/** Failure reason when `status === 'failed'` (e.g. `chain_failed`). */
+			reason?: string;
+			/** Funded wallet that signed the transfer when it differs from the messaging key. */
+			senderWallet?: string;
+	  }
+	| {
+			type: 'request_payment';
+			assetKind: PaymentAssetKind;
+			/** DM counterpart who is asked to pay, derived by the relayer. */
+			payer: string;
+			status: PaymentRequestStatus;
+			/** Transfer message that settles this request while `status === 'paid'`. */
+			fulfillingMessageId?: string;
+			fulfilledDigest?: string;
+	  };
+
+/** Cleartext fields the client sends when creating a payment message. */
+export interface PaymentSendMetadata {
+	digest?: string;
+	assetKind: PaymentAssetKind;
+	requestMessageId?: string;
+	/**
+	 * Funded chain wallet that signed the transfer when it differs from the messaging key
+	 * (web zkLogin). Omit when the messaging key signed the transfer (iOS).
+	 */
+	senderWallet?: string;
+}
+
+export type PaymentRequestAction = 'reject' | 'cancel';
 
 /** Known v1 system event types. Unknown future types arrive as plain `string`. */
 export type SystemEventType = 'member_joined' | 'member_left' | 'member_removed' | (string & {});
@@ -59,6 +112,8 @@ export interface RelayerMessage {
 	kind?: MessageKind;
 	/** Present when `kind === 'system'`. */
 	system?: SystemMessage;
+	/** Present for `token_transfer` and `request_payment`. */
+	paymentMetadata?: PaymentMetadata;
 }
 
 export interface SendMessageParams {
@@ -73,6 +128,8 @@ export interface SendMessageParams {
 	idempotencyKey?: string;
 	/** Cleartext on-chain post id when `kind === 'post'`. */
 	sharedPostAddress?: string;
+	/** Cleartext payment fields for `token_transfer` / `request_payment` (1:1 DMs only). */
+	paymentMetadata?: PaymentSendMetadata;
 	attachments?: Attachment[];
 	/** Hex-encoded per-message signature for sender verification. */
 	messageSignature?: string;
@@ -115,6 +172,15 @@ export interface DeleteMessageParams {
 	signer: Signer;
 	messageId: string;
 	groupId: string;
+}
+
+export interface RespondToPaymentRequestParams {
+	signer: Signer;
+	groupId: string;
+	/** The `request_payment` message to act on. */
+	messageId: string;
+	/** `reject` (payer) or `cancel` (requester). */
+	action: PaymentRequestAction;
 }
 
 export interface SubscribeParams {

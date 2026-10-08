@@ -15,7 +15,10 @@ import EmojiPicker, {
   type EmojiClickData,
 } from 'emoji-picker-react';
 import { Plus } from 'lucide-react';
-import type { MessageTickStatus } from '@socialproof/myso-messaging-stack';
+import type {
+  MessageTickStatus,
+  PaymentRequestAction,
+} from '@socialproof/myso-messaging-stack';
 import type {
   Message,
   AttachmentHandle,
@@ -28,6 +31,11 @@ import {
 } from './ReservationNavAvatar';
 import {AgentOrb} from './agents/AgentOrb';
 import { formatMessageTime } from '../lib/message-time';
+import { isPaymentKind } from '../lib/chat-payments';
+import { PaymentMessageCard } from './PaymentMessageCard';
+
+/** Lines of text shown before a long message collapses behind "Show more". */
+const COLLAPSED_TEXT_LINES = 15;
 
 /** Quick reaction palette shown in the reaction tray. */
 const REACTION_EMOJIS = ['👍', '❤️', '😂', '😮', '😢', '🙏'];
@@ -79,6 +87,15 @@ interface MessageBubbleProps {
   reactionTopClearancePx?: number;
   /** Report measured content-column width for clearance refine. */
   onBubbleWidthChange?: (messageId: string, width: number) => void;
+  /** 1:1 DM payments: payer confirms an open request (submits the transfer). */
+  onConfirmPaymentRequest?: (message: Message) => Promise<void>;
+  /** 1:1 DM payments: payer rejects / requester cancels an open request. */
+  onRespondPaymentRequest?: (
+    messageId: string,
+    action: PaymentRequestAction,
+  ) => Promise<void>;
+  /** A payment action is in flight in this thread. */
+  paymentBusy?: boolean;
 }
 
 /** Uniform bubble radius for every message (no cluster corner edits). */
@@ -683,6 +700,9 @@ export function MessageBubble({
   avatarRingPercent = 0,
   reactionTopClearancePx = 0,
   onBubbleWidthChange,
+  onConfirmPaymentRequest,
+  onRespondPaymentRequest,
+  paymentBusy = false,
 }: Readonly<MessageBubbleProps>) {
   const [editing, setEditing] = useState(false);
   const [editText, setEditText] = useState(message.text);
@@ -699,6 +719,14 @@ export function MessageBubble({
   const bubbleWrapperRef = useRef<HTMLDivElement>(null);
   /** Bubble / image column — measured for width-aware reaction clearance. */
   const contentColumnRef = useRef<HTMLDivElement>(null);
+  const textRef = useRef<HTMLParagraphElement>(null);
+  const [textExpanded, setTextExpanded] = useState(false);
+  const [textOverflows, setTextOverflows] = useState(false);
+  useLayoutEffect(() => {
+    const el = textRef.current;
+    if (!el || textExpanded) return;
+    setTextOverflows(el.scrollHeight > el.clientHeight + 1);
+  }, [message.text, textExpanded, editing]);
   const lastReportedWidthRef = useRef(0);
 
   useLayoutEffect(() => {
@@ -876,7 +904,8 @@ export function MessageBubble({
   const attachments = message.attachments ?? [];
   const imageAttachments = attachments.filter(isImageAttachment);
   const fileOnlyAttachments = attachments.filter((h) => !isImageAttachment(h));
-  const showTextBubble = editing || Boolean(message.text?.trim());
+  const isPayment = isPaymentKind(message.kind) && !message.isDeleted;
+  const showTextBubble = !isPayment && (editing || Boolean(message.text?.trim()));
 
   // Single state: ✓ delivered, or ✓✓ read (replaces delivered — never both statuses).
   const deliveryTicks =
@@ -1104,6 +1133,32 @@ export function MessageBubble({
                 </div>
               )}
 
+              {isPayment && (
+                <div className="relative w-fit max-w-full">
+                  <PaymentMessageCard
+                    message={message}
+                    isOwnMessage={isOwnMessage}
+                    peerLabel={
+                      labelForAddress?.(
+                        isOwnMessage
+                          ? message.paymentMetadata?.type === 'token_transfer'
+                            ? message.paymentMetadata.to
+                            : (message.paymentMetadata?.payer ?? message.senderAddress)
+                          : message.senderAddress,
+                      ) ?? 'them'
+                    }
+                    onConfirm={onConfirmPaymentRequest}
+                    onRespond={onRespondPaymentRequest}
+                    busy={paymentBusy}
+                  />
+                  {reactionChipItems ? (
+                    <ReactionChipRow isOwnMessage={isOwnMessage}>
+                      {reactionChipItems}
+                    </ReactionChipRow>
+                  ) : null}
+                </div>
+              )}
+
               {showTextBubble && (
                 <div className="relative w-fit max-w-full">
                   <div
@@ -1142,12 +1197,41 @@ export function MessageBubble({
                         </div>
                       </div>
                     ) : (
-                      <p className="text-[15px] leading-snug break-words whitespace-pre-wrap">
-                        <LinkifiedText
-                          text={message.text}
-                          isOwnMessage={isOwnMessage}
-                        />
-                      </p>
+                      <>
+                        <p
+                          ref={textRef}
+                          className="text-[15px] leading-snug break-words whitespace-pre-wrap"
+                          style={
+                            textExpanded
+                              ? undefined
+                              : {
+                                  display: '-webkit-box',
+                                  WebkitBoxOrient: 'vertical',
+                                  WebkitLineClamp: COLLAPSED_TEXT_LINES,
+                                  overflow: 'hidden',
+                                }
+                          }
+                        >
+                          <LinkifiedText
+                            text={message.text}
+                            isOwnMessage={isOwnMessage}
+                          />
+                        </p>
+                        {(textOverflows || textExpanded) && (
+                          <button
+                            type="button"
+                            onClick={() => setTextExpanded((v) => !v)}
+                            aria-expanded={textExpanded}
+                            className={`mt-1 text-xs font-semibold underline-offset-2 hover:underline ${
+                              isOwnMessage
+                                ? 'text-white/80 hover:text-white'
+                                : 'text-primary-600 dark:text-primary-400'
+                            }`}
+                          >
+                            {textExpanded ? 'Show less' : 'Show more'}
+                          </button>
+                        )}
+                      </>
                     )}
                   </div>
                   {imageAttachments.length === 0 && reactionChipItems ? (

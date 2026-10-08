@@ -906,3 +906,62 @@ agent identity. Adding a passkey later re-wraps the same root.
 
 See `docs/agent-custody-tiers-plan.md` for the phased plan and the
 memory-repo `docs/security/agent-key-backups.md` for the cryptographic contract.
+
+**Revision: the login tier holds, the other tiers back it up.** The tiers above are not peers in
+the shipped client. `zklogin-root-v1` is the holder: it is the only method that can create an
+account's root, it is created by the first unlock, it is never removable, and it is added
+automatically to any account whose existing wrap is a passkey. `passkey-prf-v1` and
+`recovery-code-v1` are optional extra wraps of the same root; a passkey can never mint a root, so
+passkey-only custody is no longer reachable from the app, and `unlock()` never requires WebAuthn.
+Client shape: `custody-vault.ts` (`PRIMARY_CUSTODY`, `OPTIONAL_CUSTODY`, one `unlock()` with a
+passkey-only fallback), and one owner session is cached per token lifetime instead of one per
+request.
+
+### ADR-8: Memory on demand, generation through the AI-credit gateway
+
+**Context.** The upstream Walrus Memory chatbot example wraps the model once and recalls before
+every generation, saving new context after each turn. That is the lightest integration, but it is
+the wrong default for a chat surface: most turns are social or self-contained, and an
+unconditional recall costs a query embedding, a vector search, a set of MYDATA
+download-and-decrypt round trips, and a larger prompt — for facts the turn never used. Agent
+replies here run on paid AI credits reserved through the gateway, so an unnecessary recall is
+also a real cost.
+
+**Decision.** Memory is per-turn opt-in, and model generation never happens in the browser.
+
+1. **Recall on demand.** `src/lib/agents/memory-turn.ts` decides from the message text whether a
+   turn refers to stored facts (`decideRecall`) and whether it states something durable
+   (`decideRemember`). The result is sent as `recall` on `/api/ask`; `recall: false` answers from
+   the model alone and skips the embedding, the search and every decrypt. Both are pure functions
+   so the policy is testable without a server.
+2. **Generation through the gateway.** The browser holds no provider key. With
+   `AI_CREDIT_ENABLED=true`, the memory server's `/api/ask` reserves a credit and calls the
+   AI-credit gateway, which proxies OpenRouter. `chat → gateway → OpenRouter` is therefore the
+   only path in production; `AI_CREDIT_ENABLED=false` is a local-development fallback.
+3. **One idempotency key per logical turn.** `turnIdempotencyKey(scopeId, text)` is stable across
+   retries of the same turn, so the gateway reconciles an existing reservation rather than
+   reserving and billing a second inference. `askAgent` only retries when a key is present.
+4. **Cross-account isolation is enforced client-side too.**
+   `src/lib/agents/account-isolation.ts` refuses to sign with an agent key against an account it
+   is not registered under, before any memory call leaves the browser, and exposes a read-only
+   negative probe that requires a foreign account's memories to be *refused*. The probe reports
+   `isolated: null` — inconclusive — rather than passing when it cannot run.
+5. **Writes are confirmed and deduplicated.** `rememberAgentFacts` batches to 20 items per call,
+   caps a turn at 50 new memories, and only returns once every job reports `done`; a job that is
+   not `done` throws. A content-addressed `sha256(namespace + ':' + text)` ledger persisted in
+   `localStorage` stops a retry after a restart from double-writing, because the server does not
+   deduplicate. `withMemoryRetry` retries 4 times with exponential backoff and jitter and **fails
+   fast on every 4xx**, since an auth or permission error will not succeed on a retry.
+
+**Consequences.**
+
+- A typical social turn no longer embeds, searches, or decrypts anything. The memory server's
+  `recall` field is additive and defaults to `true`, so every other caller is unaffected.
+- `done` is a durability signal, not read-after-write consistency: the vector index can briefly
+  lag a completed write, so a recall immediately after a write may miss it. Do not treat an empty
+  first result as "no such memory" on a read-after-write critical path.
+- A full recall page is the only truncation signal the server gives, so `recallAgentMemories`
+  surfaces `truncated` when `results.length >= limit`.
+- Headless callers (a service, worker, or automations job) build the same client from key,
+  account id and server URL through `createHeadlessAgentMemoryClient`, so no wallet prompt is ever
+  on the path of a scheduled run.

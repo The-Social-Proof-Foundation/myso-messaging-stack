@@ -46,4 +46,17 @@ export const agentKeys = {
 
   organizationCategories: () => ['agents', 'organization-categories'] as const,
   profileOverview: (address: string) => ['agents', 'profile-overview', address] as const,
+
+  /**
+   * Automation is keyed by account: the relayer derives the account from the
+   * request signature, so two agents under one address can see different jobs
+   * and must not share a cache entry.
+   */
+  automationJobs: (accountId: string) => ['agents', 'automation-jobs', accountId] as const,
+  automationRuns: (accountId: string, jobId: string) =>
+    ['agents', 'automation-runs', accountId, jobId] as const,
+  automationHealth: (accountId: string) =>
+    ['agents', 'automation-health', accountId] as const,
+  automationDelegates: (accountId: string) =>
+    ['agents', 'automation-delegates', accountId] as const,
 };

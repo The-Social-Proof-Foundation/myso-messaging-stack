@@ -6,6 +6,10 @@ import {cn} from '@/lib/utils';
 import {agentOrbFallbackBackground, agentOrbSpec} from '@/lib/agents/agent-orb';
 import {acquireAgentOrb} from './agent-orb-pool';
 
+/** Orbs under this diameter (px) animate at SMALL_ORB_SPEED. */
+const SMALL_ORB_SIZE = 40;
+const SMALL_ORB_SPEED = 0.3;
+
 interface AgentOrbProps {
   /** Agent derived address. The same address always renders the same orb. */
   agentKey: string;
@@ -69,8 +73,13 @@ export function AgentOrb({
     const canvas = canvasRef.current;
     if (!canvas) return;
     const next = agentOrbSpec(agentKey);
+    // Tiny orbs read as jittery at full speed, so slow the drift down.
+    const theme =
+      size < SMALL_ORB_SIZE
+        ? {...next.theme, motion: {...next.theme.motion, speed: SMALL_ORB_SPEED}}
+        : next.theme;
     const orb = createOrb(canvas, {
-      theme: next.theme,
+      theme,
       timeOffset: next.timeOffset,
       quality: 'low',
       state: stateRef.current,
@@ -82,7 +91,7 @@ export function AgentOrb({
       controllerRef.current = null;
       orb.destroy();
     };
-  }, [live, failed, agentKey]);
+  }, [live, failed, agentKey, size]);
 
   useEffect(() => {
     controllerRef.current?.setState(state);

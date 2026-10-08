@@ -27,11 +27,25 @@ import type {
   AttachmentHandle,
   MemberReceipt,
   MessageTickStatus,
+  PaymentMetadata,
+  PaymentPayload,
+  PaymentRequestAction,
   ReceiptMode,
+  TokenTransferPayload,
   RelayerReactionEntry,
   RelayerReactionEvent,
   RelayerReceiptEvent,
 } from '@socialproof/myso-messaging-stack';
+import {
+  NATIVE_MYSO_ASSET,
+  senderWalletForRelayer,
+  submitNativeMysoTransfer,
+} from '../lib/chat-payments';
+import {
+  pendingTransfersForGroup,
+  removePendingTransfer,
+  savePendingTransfer,
+} from '../lib/pending-transfers';
 import {
   formatPaidClaimError,
   formatRelayerError,
@@ -65,6 +79,10 @@ import {
 import { invalidateGroupMembers } from '../lib/group-members-cache';
 import { isMembershipSystemType } from '../lib/system-message-copy';
 import { publishSidebarMessagePreview } from './useSidebarMessagePreviews';
+import {
+  isRelayerMembershipPending,
+  waitForRelayerMembership,
+} from '../lib/wait-for-relayer-membership';
 
 export interface SystemMessageFields {
   type: string;
@@ -88,9 +106,30 @@ export interface Message {
   isAgentMessage?: boolean;
   principalOwner?: string;
   subAgentId?: string;
-  kind?: 'text' | 'system';
+  kind?: MessageKindValue;
   system?: SystemMessageFields;
+  /** Relayer-confirmed state for `token_transfer` / `request_payment` (1:1 DMs). */
+  paymentMetadata?: PaymentMetadata;
+  /** Decrypted payment body (amount, asset, note/description). */
+  payment?: PaymentPayload;
 }
+
+export type MessageKindValue =
+  | 'text'
+  | 'system'
+  | 'post'
+  | 'request_payment'
+  | 'poll'
+  | 'token_transfer';
+
+const KNOWN_MESSAGE_KINDS: ReadonlySet<string> = new Set([
+  'text',
+  'system',
+  'post',
+  'request_payment',
+  'poll',
+  'token_transfer',
+]);
 
 /** Reaction entries per message, keyed by the message's relayer `order`. */
 export type MessageReactions = Map<number, RelayerReactionEntry[]>;
@@ -156,6 +195,33 @@ export interface UseMessagesResult {
   confirmPayment: () => Promise<void>;
   /** Dismiss the payment dialog and drop the pending message. */
   cancelPayment: () => void;
+  /** 1:1 DM payment (transfer / request / respond) in flight. */
+  paymentBusy: boolean;
+  /** Send MYSO to the DM peer and post a `token_transfer` message tracking the transaction. */
+  sendTokenTransfer: (args: SendTokenTransferArgs) => Promise<void>;
+  /** Ask the DM peer to pay (`request_payment` message). */
+  sendPaymentRequest: (args: SendPaymentRequestArgs) => Promise<void>;
+  /** Pay an open request addressed to me (submits the transfer, links it to the request). */
+  confirmPaymentRequest: (request: Message) => Promise<void>;
+  /** Reject (payer) or cancel (requester) an open request. */
+  respondToPaymentRequest: (
+    messageId: string,
+    action: PaymentRequestAction,
+  ) => Promise<void>;
+}
+
+export interface SendTokenTransferArgs {
+  /** DM counterpart (chain address that receives the funds). */
+  recipient: string;
+  amountMist: bigint;
+  note?: string;
+  /** Payment request this transfer settles. */
+  requestMessageId?: string;
+}
+
+export interface SendPaymentRequestArgs {
+  amountMist: bigint;
+  description?: string;
 }
 
 export interface UseMessagesOptions {
@@ -202,7 +268,8 @@ function sortMessagesByOrder(msgs: Message[]): Message[] {
 }
 
 function normalizeMessage(raw: Message): Message {
-  const kind = raw.kind === 'system' ? 'system' : 'text';
+  const kind: MessageKindValue =
+    raw.kind && KNOWN_MESSAGE_KINDS.has(raw.kind) ? raw.kind : 'text';
   return {
     ...raw,
     kind,
@@ -319,6 +386,8 @@ export function useMessages(
 
   const recoveryEnabled = isMessageRecoveryEnabled();
   const [messages, setMessages] = useState<Message[]>([]);
+  const messagesRef = useRef<Message[]>([]);
+  messagesRef.current = messages;
   const [loading, setLoading] = useState(true);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [restoring, setRestoring] = useState(false);
@@ -779,6 +848,8 @@ export function useMessages(
       return {messages: merged, ledger: nextLedger};
     }
 
+    const membershipWait = new AbortController();
+
     async function loadInitial() {
       try {
         void loadReadState();
@@ -796,12 +867,30 @@ export function useMessages(
           initial = caught.messages;
           nextLedger = caught.ledger;
         } else {
-          const result = (await client.messaging.getMessages({
-            signer,
-            groupRef: {uuid},
-            limit: MESSAGE_PAGE_SIZE,
-            mydataApproveContext: undefined,
-          })) as SDKGetMessagesResult;
+          const fetchTip = () =>
+            client.messaging.getMessages({
+              signer,
+              groupRef: {uuid},
+              limit: MESSAGE_PAGE_SIZE,
+              mydataApproveContext: undefined,
+            }) as Promise<SDKGetMessagesResult>;
+          let result: SDKGetMessagesResult;
+          try {
+            result = await fetchTip();
+          } catch (err) {
+            // A freshly granted membership 403s until the relayer syncs the chain event.
+            // Wait for it (shared, backed-off probe) and retry once rather than showing
+            // a permanent error for a state that resolves itself.
+            if (!isRelayerMembershipPending(err)) throw err;
+            await waitForRelayerMembership({
+              client,
+              signer,
+              groupId,
+              uuid,
+              signal: membershipWait.signal,
+            });
+            result = await fetchTip();
+          }
 
           if (cancelled || uuidRef.current !== uuid) return;
 
@@ -905,6 +994,7 @@ export function useMessages(
 
     return () => {
       cancelled = true;
+      membershipWait.abort();
       isLoadingInitialRef.current = false;
     };
   }, [uuid, groupId, client, signer, recoveryEnabled, flushDeliveredAck]);
@@ -957,10 +1047,17 @@ export function useMessages(
         for await (const event of stream) {
           if (controller.signal.aborted || uuidRef.current !== uuid) break;
           switch (event.type) {
-            case 'message':
+            case 'message': {
+              // Relayer-driven payment status changes arrive as `message.edited` without
+              // `isEdited`; they update the existing row in place.
+              const isPaymentStatusUpdate =
+                (event.message.kind === 'token_transfer' ||
+                  event.message.kind === 'request_payment') &&
+                messagesRef.current.some((m) => m.messageId === event.message.messageId);
               setMessages((prev) => mergeMessage(prev, event.message as Message));
               // Tombstones / edits update in-place — do not bump sidebar activity or ACK.
               if (
+                !isPaymentStatusUpdate &&
                 !event.message.isDeleted &&
                 !event.message.isEdited &&
                 typeof event.message.order === 'number'
@@ -969,6 +1066,7 @@ export function useMessages(
                 scheduleDeliveredAck(event.message.order);
               }
               break;
+            }
             case 'reaction':
               setReactions((prev) => applyReactionEvent(prev, event.reaction));
               break;
@@ -1640,6 +1738,184 @@ export function useMessages(
     }
   }, [client, recoveryEnabled, restoring]);
 
+  // ------------------------------------------------------------------
+  // 1:1 DM payments (token_transfer / request_payment)
+  // ------------------------------------------------------------------
+  const [paymentBusy, setPaymentBusy] = useState(false);
+
+  /** Post (or re-post) the chat message for an executed transfer. Idempotent per digest. */
+  const postTransferMessage = useCallback(
+    async (item: {
+      digest: string;
+      payload: TokenTransferPayload;
+      requestMessageId?: string;
+      senderWallet?: string;
+    }) => {
+      const maxAttempts = 5;
+      let lastErr: unknown;
+      for (let attempt = 0; attempt < maxAttempts; attempt++) {
+        try {
+          await client.messaging.sendTokenTransfer({
+            signer,
+            groupRef: {uuid: uuidRef.current},
+            digest: item.digest,
+            payload: item.payload,
+            requestMessageId: item.requestMessageId,
+            senderWallet: item.senderWallet,
+            mydataApproveContext: undefined,
+          });
+          return;
+        } catch (err) {
+          lastErr = err;
+          // Membership lag and transient network errors are retried; the post is idempotent.
+          if (attempt < maxAttempts - 1) {
+            await new Promise((resolve) => setTimeout(resolve, 700 * (attempt + 1)));
+            continue;
+          }
+        }
+      }
+      throw lastErr ?? new Error('Failed to post the transfer message.');
+    },
+    [client, signer],
+  );
+
+  const sendTokenTransfer = useCallback(
+    async (args: SendTokenTransferArgs) => {
+      if (args.amountMist <= 0n) throw new Error('Enter an amount greater than zero.');
+      setPaymentBusy(true);
+      setError(null);
+      let digest: string | null = null;
+      try {
+        digest = await submitNativeMysoTransfer({
+          client,
+          signer,
+          recipient: args.recipient,
+          amountMist: args.amountMist,
+        });
+        const item = {
+          digest,
+          payload: {
+            v: 1 as const,
+            amount: args.amountMist.toString(),
+            asset: NATIVE_MYSO_ASSET,
+            to: args.recipient,
+            note: args.note?.trim() || undefined,
+          },
+          requestMessageId: args.requestMessageId,
+          senderWallet: senderWalletForRelayer(signer),
+        };
+        // The transfer is already on-chain: persist first so a failed post can be retried.
+        savePendingTransfer({groupUuid: uuidRef.current, savedAt: Date.now(), ...item});
+        await postTransferMessage(item);
+        removePendingTransfer(digest);
+      } catch (err) {
+        console.error('Failed to send transfer:', err);
+        const message = digest
+          ? `Transfer ${digest.slice(0, 8)}… was sent, but the chat message did not post. It will retry when you reopen this chat.`
+          : err instanceof Error
+            ? err.message
+            : 'Failed to send transfer.';
+        setError(message);
+        throw err;
+      } finally {
+        setPaymentBusy(false);
+      }
+    },
+    [client, signer, postTransferMessage],
+  );
+
+  const sendPaymentRequest = useCallback(
+    async (args: SendPaymentRequestArgs) => {
+      if (args.amountMist <= 0n) throw new Error('Enter an amount greater than zero.');
+      setPaymentBusy(true);
+      setError(null);
+      try {
+        await client.messaging.sendPaymentRequest({
+          signer,
+          groupRef: {uuid: uuidRef.current},
+          payload: {
+            v: 1,
+            amount: args.amountMist.toString(),
+            asset: NATIVE_MYSO_ASSET,
+            description: args.description?.trim() || undefined,
+          },
+          mydataApproveContext: undefined,
+        });
+      } catch (err) {
+        console.error('Failed to send payment request:', err);
+        setError(err instanceof Error ? err.message : 'Failed to send payment request.');
+        throw err;
+      } finally {
+        setPaymentBusy(false);
+      }
+    },
+    [client, signer],
+  );
+
+  const confirmPaymentRequest = useCallback(
+    async (request: Message) => {
+      const payload = request.payment;
+      if (request.kind !== 'request_payment' || !payload || !('amount' in payload)) {
+        throw new Error('This payment request cannot be paid.');
+      }
+      if (payload.asset.kind !== 'native' || payload.asset.id !== NATIVE_MYSO_ASSET.id) {
+        const msg = 'Only MYSO requests can be paid from the web app for now.';
+        setError(msg);
+        throw new Error(msg);
+      }
+      await sendTokenTransfer({
+        recipient: request.senderAddress,
+        amountMist: BigInt(payload.amount),
+        requestMessageId: request.messageId,
+      });
+    },
+    [sendTokenTransfer],
+  );
+
+  const respondToPaymentRequest = useCallback(
+    async (messageId: string, action: PaymentRequestAction) => {
+      setPaymentBusy(true);
+      setError(null);
+      try {
+        await client.messaging.respondToPaymentRequest({
+          signer,
+          groupRef: {uuid: uuidRef.current},
+          messageId,
+          action,
+        });
+      } catch (err) {
+        console.error('Failed to respond to payment request:', err);
+        setError(err instanceof Error ? err.message : 'Failed to update payment request.');
+        throw err;
+      } finally {
+        setPaymentBusy(false);
+      }
+    },
+    [client, signer],
+  );
+
+  // Retry transfers that executed on-chain but whose chat message never posted.
+  useEffect(() => {
+    if (loading) return;
+    const pending = pendingTransfersForGroup(uuid);
+    if (pending.length === 0) return;
+    let cancelled = false;
+    void (async () => {
+      for (const item of pending) {
+        if (cancelled) return;
+        try {
+          await postTransferMessage(item);
+          removePendingTransfer(item.digest);
+        } catch (err) {
+          console.warn('Pending transfer retry failed:', item.digest, err);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [loading, uuid, postTransferMessage]);
+
   return {
     messages,
     loading,
@@ -1670,6 +1946,11 @@ export function useMessages(
     paymentError,
     confirmPayment,
     cancelPayment,
+    paymentBusy,
+    sendTokenTransfer,
+    sendPaymentRequest,
+    confirmPaymentRequest,
+    respondToPaymentRequest,
   };
 }
 

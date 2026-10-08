@@ -11,6 +11,7 @@ pub mod membership;
 pub mod message;
 pub mod message_attribution;
 pub mod paid_escrow;
+pub mod payment_metadata;
 pub mod push_device;
 pub mod system_message;
 pub mod user_read_state;

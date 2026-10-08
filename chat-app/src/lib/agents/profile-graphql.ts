@@ -197,3 +197,40 @@ export async function fetchProfileOverview(
     organizations: data.profile?.agenticOrganizations ?? [],
   };
 }
+
+const ORG_AGENT_STATS_QUERY = `
+  query OrganizationAgentStats($organizationId: String!) {
+    agenticOrganization(organizationId: $organizationId) {
+      agentSpendBreakdown(limit: 200) {
+        agentObjectId
+        spentMist
+        usageEvents
+        budgetMist
+        budgetEnabled
+        memoryEntries
+        memoryBytes
+      }
+    }
+  }
+`;
+
+export interface AgentIndexedStats {
+  agentObjectId: string;
+  spentMist: string | number | null;
+  usageEvents: string | number | null;
+  budgetMist: string | number | null;
+  budgetEnabled: boolean;
+  memoryEntries: string | number | null;
+  memoryBytes: string | number | null;
+}
+
+/** Per-agent spend, call and budget stats for an organization. Public indexer read, no dashboard grant. */
+export async function fetchOrganizationAgentStats(
+  organizationId: string,
+  signal?: AbortSignal,
+): Promise<AgentIndexedStats[]> {
+  const data = await graphqlQuery<{
+    agenticOrganization: {agentSpendBreakdown: AgentIndexedStats[] | null} | null;
+  }>(ORG_AGENT_STATS_QUERY, {organizationId}, signal);
+  return data.agenticOrganization?.agentSpendBreakdown ?? [];
+}

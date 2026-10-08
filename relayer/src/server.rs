@@ -21,6 +21,7 @@ use crate::handlers::archive::get_archive_messages;
 use crate::handlers::dm_gate;
 use crate::handlers::group_features;
 use crate::handlers::health::health_check;
+use crate::handlers::messages::payments::respond_to_payment_request;
 use crate::handlers::messages::{create_message, delete_message, get_messages, update_message};
 use crate::handlers::notification_push;
 use crate::handlers::presence::post_presence;
@@ -159,6 +160,18 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         archive_sync_service.run().await;
     });
 
+    crate::services::transfer_confirmation::init(
+        crate::services::transfer_confirmation::ConfirmationConfig {
+            rpc_url: config.myso_rpc_url.clone(),
+            social_package_id: config.social_package_id.clone(),
+        },
+    );
+    let confirmation_state = app_state.clone();
+    tokio::spawn(async move {
+        crate::services::transfer_confirmation::run_confirmation_sweep(confirmation_state, 30)
+            .await;
+    });
+
     if config.workflow_enabled {
         let sweep_store = workflow_store.clone();
         let sweep_interval_secs = config.workflow_expiry_sweep_interval_secs;
@@ -183,6 +196,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             "/messages",
             get(get_messages).post(create_message).put(update_message),
         )
+        .route("/messages/respond", post(respond_to_payment_request))
         .route("/messages/:message_id", delete(delete_message));
 
     let v1_group_routes = Router::new()

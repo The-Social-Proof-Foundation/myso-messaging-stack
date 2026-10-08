@@ -1,11 +1,14 @@
 /**
- * Compatibility entry point: the vault is now custody-tier based (`CustodyVault`, which unlocks the
- * same recovery root with a passkey, the MySocial login key, or a login key plus a recovery code).
- * `PasskeyVault` remains as an alias so existing imports, tests and the browser harness keep working.
+ * Compatibility entry point: the vault is custody-tier based (`CustodyVault`). The MySocial login
+ * (`PRIMARY_CUSTODY`) always holds an account's agent keys; a passkey is an optional backup that
+ * wraps the same root. `PasskeyVault` remains as an alias so existing imports, tests and the
+ * browser harness keep working.
  */
 export {
   CustodyVault,
   CustodyVault as PasskeyVault,
+  PRIMARY_CUSTODY,
+  OPTIONAL_CUSTODY,
   CUSTODY_TIERS,
   CUSTODY_TIER_INFO,
   publicCredential,

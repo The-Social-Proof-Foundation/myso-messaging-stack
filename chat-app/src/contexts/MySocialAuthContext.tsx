@@ -51,7 +51,7 @@ import {
 } from '../lib/auth-utils';
 import {
   ZKLOGIN_PROOF_EXPIRED_EVENT,
-  clearZkLoginSigner,
+  clearZkLoginSessionMemory,
   isZkLoginAccount,
   restoreZkLoginSignerStatus,
   resumePendingZkLogin,
@@ -192,7 +192,7 @@ export function MySocialAuthProvider({
         if (stored && zkLoginEphemeralKeypair()) next = stored;
       }
       if (!next && revoked) {
-        clearZkLoginSigner();
+        clearZkLoginSessionMemory();
         setKeypair(null);
         setSignInError(SESSION_EXPIRED_MESSAGE);
       } else if (next && !sessionLacksRefreshToken(next)) {
@@ -248,7 +248,7 @@ export function MySocialAuthProvider({
       if (!s && hadSessionRef.current) {
         if (getAuthSessionRaw() && zkLoginEphemeralKeypair()) return;
         setSignInError(SESSION_EXPIRED_MESSAGE);
-        clearZkLoginSigner();
+        clearZkLoginSessionMemory();
         setKeypair(null);
         setIsUsingDevMessengerSigner(false);
         setDeriveKeyError(null);
@@ -331,7 +331,7 @@ export function MySocialAuthProvider({
           refreshBackoffUntilRef.current = Date.now() + result.retryAfterMs;
         } else if (result.status === 'revoked') {
           refreshBackoffUntilRef.current = 0;
-          clearZkLoginSigner();
+          clearZkLoginSessionMemory();
           setKeypair(null);
           setSignInError(SESSION_EXPIRED_MESSAGE);
         } else {
@@ -674,9 +674,9 @@ export function MySocialAuthProvider({
         await a.signOut();
       }
     } finally {
-      // Ensure shared localStorage is cleared so other tabs observe logout.
+      // Clear OAuth session only. Keep IndexedDB zk proof for the next sign-in.
       removeAuthSession();
-      clearZkLoginSigner();
+      clearZkLoginSessionMemory();
       setSession(null);
       setKeypair(null);
       setIsUsingDevMessengerSigner(false);
@@ -708,7 +708,8 @@ export function MySocialAuthProvider({
   useEffect(() => {
     const maybeExpire = () => {
       if (zkLoginPending() || zkLoginProofInFlight()) return;
-      if (!sessionLooksLikeZkLogin() && !isZkLoginAccount()) return;
+      // Logged out on purpose: keep IndexedDB proof for the next sign-in.
+      if (!sessionLooksLikeZkLogin()) return;
       void restoreZkLoginSignerStatus().then((status) => {
         if (status === 'expired' || status === 'invalid' || status === 'missing') {
           void logoutBecauseZkLoginExpired();

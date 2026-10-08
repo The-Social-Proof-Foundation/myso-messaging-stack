@@ -363,6 +363,101 @@ impl StorageAdapter for PostgresStorage {
         Ok(message)
     }
 
+    async fn update_message_metadata_trusted(
+        &self,
+        id: Uuid,
+        patch: serde_json::Value,
+        allowed_from_status: &[&str],
+    ) -> StorageResult<Option<Message>> {
+        let allowed: Vec<String> = allowed_from_status.iter().map(|s| s.to_string()).collect();
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| StorageError::OperationFailed(e.to_string()))?;
+
+        // Compare-and-set: the status guard and the write are one statement.
+        // Re-archive when the row was already synced so File Storage sees the new status.
+        let row = sqlx::query(
+            r#"UPDATE messages
+               SET metadata = COALESCE(metadata, '{}'::jsonb) || $2::jsonb,
+                   updated_at = $3,
+                   sync_status = CASE WHEN sync_status IN ('SYNCED', 'UPDATED')
+                                      THEN 'UPDATE_PENDING' ELSE sync_status END
+               WHERE id = $1
+                 AND kind IN ('token_transfer', 'request_payment')
+                 AND (metadata ->> 'status') = ANY($4)
+               RETURNING *"#,
+        )
+        .bind(id)
+        .bind(&patch)
+        .bind(Utc::now())
+        .bind(&allowed)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|e| StorageError::OperationFailed(e.to_string()))?;
+
+        let Some(row) = row else {
+            tx.rollback()
+                .await
+                .map_err(|e| StorageError::OperationFailed(e.to_string()))?;
+            return Ok(None);
+        };
+        let message = row_to_message(&row);
+
+        let notify = MessageEditedEvent::new(
+            message.group_id.clone(),
+            message.id,
+            message.order.unwrap_or(0),
+            message.sender_wallet_addr.clone(),
+        );
+        let notify_json = serde_json::to_string(&notify)
+            .map_err(|e| StorageError::OperationFailed(e.to_string()))?;
+        sqlx::query("SELECT pg_notify($1, $2)")
+            .bind(MESSAGE_EVENTS_CHANNEL)
+            .bind(notify_json)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| StorageError::OperationFailed(e.to_string()))?;
+
+        tx.commit()
+            .await
+            .map_err(|e| StorageError::OperationFailed(e.to_string()))?;
+        Ok(Some(message))
+    }
+
+    async fn list_token_transfers_by_digest(&self, digest: &str) -> StorageResult<Vec<Message>> {
+        let rows = sqlx::query(
+            "SELECT * FROM messages WHERE kind = 'token_transfer' AND (metadata ->> 'digest') = $1",
+        )
+        .bind(digest)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| StorageError::OperationFailed(e.to_string()))?;
+        Ok(rows.iter().map(row_to_message).collect())
+    }
+
+    async fn list_pending_token_transfers(
+        &self,
+        older_than: chrono::DateTime<chrono::Utc>,
+        limit: usize,
+    ) -> StorageResult<Vec<Message>> {
+        let rows = sqlx::query(
+            r#"SELECT * FROM messages
+               WHERE kind = 'token_transfer'
+                 AND (metadata ->> 'status') = 'pending'
+                 AND created_at < $1
+               ORDER BY created_at ASC
+               LIMIT $2"#,
+        )
+        .bind(older_than)
+        .bind(limit as i64)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| StorageError::OperationFailed(e.to_string()))?;
+        Ok(rows.iter().map(row_to_message).collect())
+    }
+
     async fn delete_message(&self, id: Uuid) -> StorageResult<Message> {
         let mut tx = self
             .pool

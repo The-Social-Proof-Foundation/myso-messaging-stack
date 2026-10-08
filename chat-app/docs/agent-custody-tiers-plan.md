@@ -11,7 +11,7 @@ Related: `myso-memory/docs/security/agent-key-backups.md` (custody contract), `c
 | 1 — SDK v2 wraps | done | `myso-memory/packages/sdk/src/agent-key-envelope.ts` (`ROOT_WRAP_VERSION`, `CUSTODY_METHODS`, `CustodyBinding`, `RecoveryRootWrapV2`, `normalizeCustodyBinding`, `rootWrapV2AAD`, `wrapRecoveryRootV2`/`unwrapRecoveryRootV2`/`unwrapAnyRecoveryRoot`, `isRecoveryRootWrapV2`, `deriveZkLoginRootSecret`, `deriveRecoveryCodeSecret`, `formatRecoveryCodeParams`/`parseRecoveryCodeParams`, `generateDeviceWrapSecret`); `packages/sdk/src/agent-key-backup-client.ts` (`ownerChallenge`/`ownerVerify`, `getRoot`/`getRootV1`/`putRoot`, `listRoots`, `getCustodyPolicy`/`putCustodyPolicy`, `CustodyPurpose`); `packages/sdk/test/agent-key-root-wrap-v2.test.ts` |
 | 2 — memory server | done | migration `015_agent_custody_tiers.sql`; method-aware `VaultSession` (with legacy `credential` compat) and `vault()`; purpose-bound owner challenge v1/v2 plus custody vault tokens; `custody_limit` per-account throttle and `custody_audit` events; v2 root-wrap validation with method-conditional canonical-empty rules; wrap PUT authorized by an already-active method; `recovery-roots` + `custody-policy` routes; tier config + capability flags; `custody_last_method` guard; sidecar accepts the v2 prefix; unit test `custody_root_wrap_key_sets_are_strict` and the extended `#[ignore]` PG/Redis integration test |
 | 3 — client vault | done | `chat-app/src/lib/agents/custody-vault.ts` (`CustodyVault`, `CUSTODY_TIER_INFO`, login-seed provider, tier unlock/adopt/remove, `upgradeToPasskey`); `passkey-vault.ts` kept as a compatibility re-export; `AgentKeyVaultContext.tsx` builds the vault with a lazy `SHA256(sub + '_' + salt)` seed provider; `custody-vault.test.ts` |
-| 4 — agent-management UI | done | `PasskeyVaultPanel.tsx` → custody panel (`AgentSecurityPanel`, alias exported) with unlock-per-tier, configured tiers + tradeoffs, remove guards, passkey management, drafts/setups; tier chooser inline in `CreateAgentDialog`; all 19 gates reworded to "agent keys" (profile drawer, chat, memory reply, dev panel, registration hooks) |
+| 4 — agent-management UI | done, revised in §0b | `PasskeyVaultPanel.tsx` → custody panel (`AgentSecurityPanel`, alias exported) with unlock-per-tier, configured tiers + tradeoffs, remove guards, passkey management, drafts/setups; tier chooser inline in `CreateAgentDialog`; all 19 gates reworded to "agent keys" (profile drawer, chat, memory reply, dev panel, registration hooks). §0b removes the tier chooser again: the panel is the always-on login holder plus an optional passkey backup |
 | 5 — config/docs | done | `chat-app/src/vite-env.d.ts` (`VITE_AGENT_CUSTODY_TIERS`, `VITE_PASSKEY_CONNECT_ORIGINS`), `chat-app/.env.example`, `myso-memory/services/server/.env.example`, `myso-memory/docs/reference/environment-variables.md` (all backup/tier variables, limiter semantics), `chat-app/docs/SYSTEM_DESIGN.md` ADR-7 (appended byte-safely — that file is not valid UTF-8) |
 | tests | written, not run | `packages/sdk/test/agent-key-root-wrap-v2.test.ts`; server unit test `custody_root_wrap_key_sets_are_strict` (plus `owner_auth` message-format tests) and the extended `#[ignore]` integration test; `chat-app/src/lib/agents/custody-vault.test.ts`; `chat-app/tests/passkey-vault.browser.spec.ts` updated for tier detection; new `custody-login.browser.spec.ts` + harness/html for the no-passkey path. Compile checks pass: `tsc --noEmit` clean for the SDK source and both SDK test files, `tsc --noEmit -p tsconfig.app.json` clean for the chat-app (including the new unit tests), and `cargo check --all-targets` exit 0 for the memory server (including the new test targets). The only type errors reachable anywhere are pre-existing nullability looseness in the untouched fixture body of `tests/passkey-vault.browser.spec.ts`, which the project does not typecheck |
 
@@ -21,10 +21,36 @@ Known gaps to close in follow-up work:
 - `device-key-v1` exists in the SDK and server but is intentionally not surfaced in the chat-app UI and is not in the default tier list.
 - New passkey enrollments keep the v1 wrap format (byte-compatible with existing records); v2 is dual-read. Migrating passkey wraps to v2 is optional follow-up.
 - Per-agent mixed tiers (multiple roots) remain deferred (D2): one root per account, any number of unlock methods. Consequently there is no per-row tier badge on agent rows: the active tier is an account-level property, shown once in the custody panel rather than repeated on every agent.
-- The per-account limiter counts one increment per challenge plus one per custody-purpose verify, so the default of 10 is roughly three or four unlocks per minute per account; raise it for test suites that unlock repeatedly.
+- The per-account limiter counts one increment per challenge plus one per custody-purpose verify, so the default of 10 is roughly three or four unlocks per minute per account; raise it for test suites that unlock repeatedly. After the §0b revision, reads (`availableTiers`, `listPasskeys`, `custodyPolicy`) reuse one cached owner token, so only a real unlock spends the limited pair.
 - The rollout flip in Phase 5 (agents reachable with backups enabled by default) is a deployment decision, not a code change made here.
 
+## 0b. Revision: the login tier is the holder, the other tiers are optional
+
+The tier work above shipped with three tiers presented as peers and a preference heuristic
+(`detectTier`) that still picked a passkey first. That contradicted the goal in §1 and left several
+broken paths. The client now enforces one rule: **`zklogin-root-v1` always holds an account's agent
+keys; every other method is an optional extra wrap of the same root.**
+
+Client changes (all in `chat-app`; the SDK and server contracts are unchanged):
+
+| # | Before | Now |
+|---|---|---|
+| 1 | `detectTier` preferred `passkey-prf-v1` whenever a passkey wrap existed (`custody-vault.ts:226`) | `PRIMARY_CUSTODY` is the default in `unlock()`; a passkey is used only when the account has no login wrap |
+| 2 | `unlock()` threw "Passkeys need a supported browser on HTTPS" on a device without WebAuthn (`:216`, `:170-174`) | `unlock()` never requires WebAuthn; only the passkey paths do, and they set a plain error instead of a vault status |
+| 3 | `unlockWithPasskey` could mint a brand-new root through `enroll(false)` (`:247`, `:382`) | a passkey only ever wraps the root already in memory (`enrollPasskey`); a root comes from the login tier alone |
+| 4 | `detectTier` opened an owner session, then the unlock opened another (`:166`, `:244`, `:324`) | one owner token is cached for its `expires_in`; reads (`availableTiers`, `listPasskeys`, `custodyPolicy`) share it |
+| 5 | `createTierWrap(mintRoot=false)` zero-filled the live root, so adopting a second path broke every later decrypt | the root buffer is only zeroed when it is actually replaced |
+| 6 | `removeCustodyMethod('zklogin-root-v1')` was allowed | the login holder is not removable; only optional paths are |
+| 7 | panel offered three equal tiers, a recovery-code button and a first-run "Use a passkey" that always threw | panel is "Your MySocial login - always on" plus an optional passkey backup; recovery-code stays implemented but is not surfaced |
+| 8 | `VITE_AGENT_CUSTODY_TIERS` was declared and documented but never read | removed from `vite-env.d.ts`, `.env.example` and `README.md`; the server's `GET /config` tier list is authoritative |
+| 9 | passkey-only accounts (pre-existing data) had no migration | `unlock()` opens them with the passkey and then adds the login holder automatically (`ensureLoginHolder`, reported via `loginHolderMissing`) |
+
+Not done here (deliberately): true 2FA (login **and** passkey) needs a combined-secret custody
+method in the SDK and server; and a server-side rule refusing a first root with no `zklogin-root-v1`
+wrap would make the invariant enforceable outside this client. Both are follow-ups in `myso-memory`.
+
 ## 1. Goal
+
 
 Today an agent cannot be created, unlocked, or used in the chat app without enrolling a
 WebAuthn PRF passkey. The goal is:

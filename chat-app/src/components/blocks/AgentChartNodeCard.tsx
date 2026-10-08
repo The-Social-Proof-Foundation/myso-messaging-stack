@@ -1,11 +1,14 @@
 import {useState} from 'react';
-import {Check, ChevronDown, ChevronRight, Copy, Users} from 'lucide-react';
+import {Check, ChevronDown, ChevronRight, Copy} from 'lucide-react';
 
 import {cn} from '@/lib/utils';
 import {AgentOrb} from '@/components/agents/AgentOrb';
+import {AgentModelLabel} from '@/components/agents/AgentModelLabel';
 import {Button} from '@/components/ui/button';
 import {AgentStatusDot} from '@/components/blocks/AgentStatusMark';
 import {type AgentChartNode} from '@/lib/agents/agent-chart';
+import {formatMistAmount} from '@/lib/agents/format';
+import type {AgentStats} from '@/hooks/agents/useAgentStats';
 
 const LEVEL_STRIP = [
   'bg-sky-400/80',
@@ -20,6 +23,9 @@ interface AgentChartNodeCardProps {
   isHighlighted: boolean;
   isDimmed: boolean;
   isExpanded?: boolean;
+  /** Just created: plays the enter animation once. */
+  isNew?: boolean;
+  stats?: AgentStats;
   onSelect: (node: AgentChartNode) => void;
   onToggleExpand?: (id: string) => void;
 }
@@ -30,15 +36,13 @@ export function AgentChartNodeCard({
   isHighlighted,
   isDimmed,
   isExpanded = false,
+  isNew = false,
+  stats,
   onSelect,
   onToggleExpand,
 }: Readonly<AgentChartNodeCardProps>) {
   const [copied, setCopied] = useState(false);
   const childCount = node.children?.length ?? 0;
-  const reports =
-    node.reportsCount === 1 ? '1 sub-agent' : `${node.reportsCount} sub-agents`;
-  const branch =
-    node.teamHeadcount === 1 ? '1 in branch' : `${node.teamHeadcount} in branch`;
 
   function copyAddress() {
     void navigator.clipboard.writeText(node.fullAddress).then(() => {
@@ -54,6 +58,7 @@ export function AgentChartNodeCard({
         isSelected && 'border-foreground/35',
         isHighlighted && 'border-foreground/45',
         isDimmed && 'opacity-40',
+        isNew && 'created-in',
       )}
       tabIndex={0}
       role="button"
@@ -107,17 +112,16 @@ export function AgentChartNodeCard({
                 {node.address}
               </p>
             </div>
-            <p className="mt-0.5 truncate text-xs text-muted-foreground">{node.role}</p>
+            <p className="mt-0.5 truncate text-xs text-muted-foreground">
+              <AgentModelLabel agentId={node.id} fallback={node.role} />
+            </p>
           </div>
         </div>
 
-        <div className="flex items-center justify-between rounded-lg bg-muted/60 px-2.5 py-1.5 text-xs">
-          <span className="flex items-center gap-1.5 font-medium text-foreground">
-            <Users className="size-3.5 text-muted-foreground" strokeWidth={2} aria-hidden />
-            {reports}
-          </span>
-          <span className="text-muted-foreground">{branch}</span>
-        </div>
+        <dl className="grid grid-cols-2 gap-1.5">
+          <CardStat label="Balance" value={stats?.balanceMist} />
+          <CardStat label="AI spent" value={stats?.spentMist} />
+        </dl>
 
         {childCount > 0 && onToggleExpand ? (
           <Button
@@ -141,6 +145,27 @@ export function AgentChartNodeCard({
           </Button>
         ) : null}
       </div>
+    </div>
+  );
+}
+
+function CardStat({
+  label,
+  value,
+  count,
+}: Readonly<{label: string; value?: bigint | null; count?: number | null}>) {
+  const text =
+    count !== undefined
+      ? count == null
+        ? '—'
+        : count.toLocaleString()
+      : value == null
+        ? '—'
+        : formatMistAmount(value);
+  return (
+    <div className="min-w-0 rounded-lg bg-muted/60 px-2 py-1.5">
+      <dt className="truncate text-[10px] text-muted-foreground">{label}</dt>
+      <dd className="truncate text-xs font-medium tabular-nums text-foreground">{text}</dd>
     </div>
   );
 }

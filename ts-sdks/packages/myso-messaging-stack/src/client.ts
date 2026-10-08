@@ -36,9 +36,15 @@ import type {
 import {
 	normalizeSharedPostAddress,
 	signMessageContent,
+	transferIdempotencyKey,
 	verifyMessageSender,
 	type VerifyMessageSenderParams,
 } from './verification.js';
+import {
+	encodePaymentRequestPayload,
+	encodeTokenTransferPayload,
+	parsePaymentPayload,
+} from './payments.js';
 import type {
 	DecryptedMessage,
 	DeleteMessageOptions,
@@ -50,7 +56,10 @@ import type {
 	MessagingEvent,
 	ReactionOptions,
 	RecoverMessagesOptions,
+	RespondToPaymentRequestOptions,
 	SendMessageOptions,
+	SendPaymentRequestOptions,
+	SendTokenTransferOptions,
 	SubscribeOptions,
 } from './messaging-types.js';
 import type { RecoveryTransport } from './recovery/transport.js';
@@ -363,8 +372,27 @@ export class MySoMessagingStackClient<TApproveContext = void> {
 			}
 		}
 
+		// 1:1 DM payments: the relayer rejects these in groups with more than two members.
+		let transferDigest: string | undefined;
+		if (kind === 'token_transfer') {
+			transferDigest = options.paymentMetadata?.digest?.trim();
+			if (!transferDigest) {
+				throw new Error('paymentMetadata.digest is required when kind is token_transfer');
+			}
+			if (options.idempotencyKey !== transferIdempotencyKey(senderAddress, transferDigest)) {
+				throw new Error('idempotencyKey must be transferIdempotencyKey(sender, digest)');
+			}
+		} else if (kind === 'request_payment') {
+			if (!options.paymentMetadata?.assetKind) {
+				throw new Error('paymentMetadata.assetKind is required when kind is request_payment');
+			}
+			if (!options.idempotencyKey?.startsWith('request:')) {
+				throw new Error('idempotencyKey must start with "request:" when kind is request_payment');
+			}
+		}
+
 		// 3. Sign the ciphertext for sender verification (includes kind;
-		// post also binds sharedPostAddress + idempotencyKey).
+		// post binds sharedPostAddress + idempotencyKey; token_transfer binds digest + key).
 		const messageSignature = await signMessageContent(options.signer, {
 			groupId,
 			kind,
@@ -372,6 +400,7 @@ export class MySoMessagingStackClient<TApproveContext = void> {
 			nonce: envelope.nonce,
 			keyVersion: envelope.keyVersion,
 			sharedPostAddress,
+			transferDigest,
 			idempotencyKey: options.idempotencyKey,
 		});
 
@@ -385,6 +414,10 @@ export class MySoMessagingStackClient<TApproveContext = void> {
 			kind,
 			idempotencyKey: options.idempotencyKey,
 			sharedPostAddress,
+			paymentMetadata:
+				kind === 'token_transfer' || kind === 'request_payment'
+					? options.paymentMetadata
+					: undefined,
 			attachments: attachmentRefs.length > 0 ? attachmentRefs : undefined,
 			messageSignature,
 			attribution: options.attribution
@@ -397,6 +430,68 @@ export class MySoMessagingStackClient<TApproveContext = void> {
 		});
 
 		return { messageId: result.messageId };
+	}
+
+	/**
+	 * Post a `token_transfer` message for an already-submitted on-chain transfer (1:1 DMs only).
+	 *
+	 * The caller submits the transfer first and passes its `digest`. The amount, asset and
+	 * note are encrypted; the relayer verifies the digest on-chain and sets the status
+	 * (`pending` -> `success` | `failed`). Retries are idempotent per `(sender, digest)`.
+	 */
+	async sendTokenTransfer(
+		options: SendTokenTransferOptions<TApproveContext>,
+	): Promise<{ messageId: string }> {
+		const senderAddress = options.signer.toMySoAddress();
+		const digest = options.digest.trim();
+		return this.sendMessage({
+			signer: options.signer,
+			groupRef: options.groupRef,
+			text: encodeTokenTransferPayload(options.payload),
+			kind: 'token_transfer',
+			idempotencyKey: transferIdempotencyKey(senderAddress, digest),
+			paymentMetadata: {
+				digest,
+				assetKind: options.payload.asset.kind,
+				requestMessageId: options.requestMessageId,
+				senderWallet: options.senderWallet,
+			},
+			...this.#approveContextSpread(options),
+		} as unknown as SendMessageOptions<TApproveContext>);
+	}
+
+	/**
+	 * Send a `request_payment` message asking the DM counterpart to pay (1:1 DMs only).
+	 * The counterpart can Confirm (by sending a `token_transfer` with `requestMessageId`) or
+	 * Reject via {@link respondToPaymentRequest}; the requester can cancel.
+	 */
+	async sendPaymentRequest(
+		options: SendPaymentRequestOptions<TApproveContext>,
+	): Promise<{ messageId: string }> {
+		const requestId = options.requestId?.trim() || globalThis.crypto.randomUUID();
+		return this.sendMessage({
+			signer: options.signer,
+			groupRef: options.groupRef,
+			text: encodePaymentRequestPayload(options.payload),
+			kind: 'request_payment',
+			idempotencyKey: `request:${requestId}`,
+			paymentMetadata: { assetKind: options.payload.asset.kind },
+			...this.#approveContextSpread(options),
+		} as unknown as SendMessageOptions<TApproveContext>);
+	}
+
+	/**
+	 * Reject (payer) or cancel (requester) an open payment request. The relayer enforces who
+	 * may act and that the request is still open; subscribers receive the updated message.
+	 */
+	async respondToPaymentRequest(options: RespondToPaymentRequestOptions): Promise<void> {
+		const { groupId } = this.derive.resolveGroupRef(options.groupRef);
+		await this.transport.respondToPaymentRequest({
+			signer: options.signer,
+			groupId,
+			messageId: options.messageId,
+			action: options.action,
+		});
 	}
 
 	/**
@@ -988,7 +1083,7 @@ export class MySoMessagingStackClient<TApproveContext = void> {
 				subAgentId: raw.subAgentId,
 				identityClass: raw.identityClass,
 				isAgentMessage: raw.isAgentMessage,
-				kind: 'text',
+				kind: raw.kind ?? 'text',
 			};
 		}
 
@@ -1013,10 +1108,20 @@ export class MySoMessagingStackClient<TApproveContext = void> {
 		const text = this.#textDecoder.decode(plaintext);
 
 		// Verify sender signature (fail-safe: false if missing or invalid).
+		const kind = raw.kind ?? 'text';
+		const transferDigest =
+			kind === 'token_transfer' && raw.paymentMetadata?.type === 'token_transfer'
+				? raw.paymentMetadata.digest
+				: undefined;
 		const senderVerified =
 			raw.signature && raw.publicKey
 				? await verifyMessageSender({
 						groupId: raw.groupId,
+						kind,
+						transferDigest,
+						idempotencyKey: transferDigest
+							? transferIdempotencyKey(raw.senderAddress, transferDigest)
+							: undefined,
 						encryptedText: raw.encryptedText,
 						nonce: raw.nonce,
 						keyVersion: raw.keyVersion,
@@ -1051,7 +1156,9 @@ export class MySoMessagingStackClient<TApproveContext = void> {
 			subAgentId: raw.subAgentId,
 			identityClass: raw.identityClass,
 			isAgentMessage: raw.isAgentMessage,
-			kind: 'text',
+			kind,
+			paymentMetadata: raw.paymentMetadata,
+			payment: parsePaymentPayload(kind, text),
 		};
 	}
 

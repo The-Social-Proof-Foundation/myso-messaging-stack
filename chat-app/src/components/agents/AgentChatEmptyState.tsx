@@ -5,6 +5,7 @@ import {truncateAddress} from '../../lib/agents/format';
 import type {AgentChatErrorInfo} from '../../lib/agents/format-agent-chat-error';
 import {AGENT_CHAT_STAGE_LABEL, type AgentChatStage} from '../../hooks/agents/useAgentChatActions';
 import {Button} from '../Button';
+import {ErrorNotice} from './ErrorNotice';
 
 interface AgentChatEmptyStateProps {
   agent: SubAgentRow;
@@ -66,9 +67,7 @@ export function AgentChatEmptyState({
         )}
 
         {error ? (
-          <p className="mt-4 rounded-lg border border-danger-200 bg-danger-50 px-3 py-2 text-xs text-danger-700 dark:border-danger-800 dark:bg-danger-950/40 dark:text-danger-300">
-            {error.message}
-          </p>
+          <ErrorNotice className="mt-4">{error.message}</ErrorNotice>
         ) : null}
       </div>
     </div>

@@ -6,6 +6,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { ChevronLeft } from 'lucide-react';
 import { useRequiredMessagingClient } from '../contexts/MessagingClientContext';
 import { grantMessagingPermission } from '../lib/agents/agent-chat-permissions';
+import { zkLoginChainAddress } from '../lib/zklogin-signin';
 import { signAndExecuteTransactionAndWait } from '../lib/sign-and-wait';
 import { updateStoredGroupName } from '../lib/group-store';
 import { clearEitherBlockCache } from '../lib/block-check';
@@ -35,6 +36,25 @@ import type { ReceiptMode } from '@socialproof/myso-messaging-stack';
 interface MemberWithPermissions {
   address: string;
   permissions: string[];
+}
+
+/**
+ * A zkLogin user is on chain as two addresses: the principal (added by the group contract) and the
+ * messaging key the relayer authenticates. Show them as one member, with the union of permissions.
+ */
+export function mergePrincipalIntoMessagingMember(
+  members: MemberWithPermissions[],
+  principal: string | null,
+  messagingAddress: string,
+): MemberWithPermissions[] {
+  if (!principal || principal === messagingAddress) return members;
+  const principalRow = members.find((m) => m.address === principal);
+  const messagingRow = members.find((m) => m.address === messagingAddress);
+  if (!principalRow || !messagingRow) return members;
+  const permissions = [...new Set([...messagingRow.permissions, ...principalRow.permissions])];
+  return members
+    .filter((m) => m !== principalRow)
+    .map((m) => (m === messagingRow ? { ...m, permissions } : m));
 }
 
 interface AdminPanelProps {
@@ -152,8 +172,12 @@ export function AdminPanel({
         exhaustive: true,
       });
       if (gen !== memberFetchGen.current) return;
-      const next = (result.members as MemberWithPermissions[]).filter(
-        (m) => !systemAddresses.has(m.address),
+      const next = mergePrincipalIntoMessagingMember(
+        (result.members as MemberWithPermissions[]).filter(
+          (m) => !systemAddresses.has(m.address),
+        ),
+        zkLoginChainAddress(),
+        signer.toMySoAddress(),
       );
       // Address keys stay stable — React adds/removes rows in place.
       setMembers(next);
@@ -164,7 +188,7 @@ export function AdminPanel({
       if (showSpinner) setLoadingMembers(false);
       setMembersLoaded(true);
     }
-  }, [client, groupId]);
+  }, [client, groupId, signer]);
 
   // Clear cache when switching groups so we don't flash the wrong roster.
   useEffect(() => {

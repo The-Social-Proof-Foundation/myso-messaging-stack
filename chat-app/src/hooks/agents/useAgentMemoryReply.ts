@@ -14,8 +14,10 @@ import {
   askAgent,
   createAgentMemoryClient,
   MemoryClientError,
-  rememberAgentFact,
+  rememberAgentFacts,
 } from '../../lib/agents/memory-client';
+import {assertAgentAccountBinding, CrossAccountMemoryError} from '../../lib/agents/account-isolation';
+import {decideRecall, decideRemember, turnIdempotencyKey} from '../../lib/agents/memory-turn';
 import {fetchSubAgentByObjectId} from '../../lib/agents/social-api';
 import {useAgentChatPlatform} from './useAgentChatPlatform';
 import {useMemoryAccount} from './useMemoryAccount';
@@ -41,6 +43,7 @@ function metadataRecord(parsed: unknown): GroupMetadataLike {
 }
 
 function replyError(error: unknown): string {
+  if (error instanceof CrossAccountMemoryError) return error.message;
   if (!(error instanceof MemoryClientError)) {
     return error instanceof Error ? error.message : 'This agent could not answer.';
   }
@@ -51,14 +54,32 @@ function replyError(error: unknown): string {
   if (error.kind === 'missing_capability') {
     return 'This agent needs memory and AI-spend capabilities before it can answer.';
   }
+  if (error.kind === 'unreachable') {
+    return 'Memory is temporarily unavailable, so this agent cannot answer right now. Try again shortly.';
+  }
   return error.message;
 }
 
+export interface AgentMemoryReplyOptions {
+  /** Turns already in the thread; a short follow-up needs memory once there is context. */
+  historyLength?: number;
+}
+
 /**
- * After the user sends in an agent group, ask that agent's own memory and post the
- * answer into the same thread as the agent.
+ * After the user sends in an agent group, answer as that agent.
+ *
+ * Memory is used on demand rather than every turn: the question is recalled only
+ * when it actually refers to stored facts, and a fact is written only when the
+ * turn states something durable. Generation is served by the AI-credit gateway
+ * (`chat -> gateway -> OpenRouter`) through the memory server, and the turn
+ * carries a stable idempotency key so a retry cannot bill or store twice.
  */
-export function useAgentMemoryReply(groupId: string, groupUuid: string) {
+export function useAgentMemoryReply(
+  groupId: string,
+  groupUuid: string,
+  options: AgentMemoryReplyOptions = {},
+) {
+  const historyLength = options.historyLength ?? 0;
   const client = useMessagingClient();
   const {keypair} = useMySocialAuth();
   const owner = useAuthenticatedAddress();
@@ -140,16 +161,35 @@ export function useAgentMemoryReply(groupId: string, groupUuid: string) {
 
         if (!vault || !owner) throw new Error('Unlock agent keys first.');
         if (!hasCapability(agent.capabilities, 'MESSAGE_SEND')) throw new Error('This agent needs permission to send messages.');
-        if (agent.account_id !== memoryAccountId || ref.creatorActor !== agent.derived_address) throw new Error('Chat agent binding mismatch');
+        // Cross-account guard: refuse to sign with this agent's key against an
+        // account it is not registered under, before any memory call goes out.
+        assertAgentAccountBinding({
+          agentObjectId: agent.agent_object_id,
+          agentAccountId: agent.account_id,
+          derivedAddress: agent.derived_address,
+          chatCreatorActor: ref.creatorActor,
+          expectedAccountId: memoryAccountId,
+        });
+        await vault.ensureUnlocked();
         const epoch = vault.generation();
         const derived = await vault.getAgent(agent);
         const memory = createAgentMemoryClient(derived, memoryAccountId);
         let result;
         try {
           vault.assertCurrent(epoch);
-          await rememberAgentFact(memory, text);
+          // Write only when the turn states something durable, then confirm every
+          // batch job reached `done` before the agent answers from it.
+          const remember = decideRemember(text);
+          if (remember.facts.length > 0) await rememberAgentFacts(memory, remember.facts);
           vault.assertCurrent(epoch);
-          result = await askAgent(memory, {question: text});
+          // Recall only when the turn refers to stored facts. `recall: false`
+          // answers from the model alone: no embedding, search or MYDATA decrypt.
+          const decision = decideRecall(text, historyLength);
+          result = await askAgent(memory, {
+            question: text,
+            recall: decision.recall,
+            idempotencyKey: await turnIdempotencyKey(groupId, text),
+          });
           vault.assertCurrent(epoch);
         } finally {memory.destroy();}
         const answer = result.answer.trim() || "I don't have anything in memory for that.";
@@ -183,6 +223,7 @@ export function useAgentMemoryReply(groupId: string, groupUuid: string) {
       agents.totalCount,
       client,
       groupId,
+      historyLength,
       groupUuid,
       keypair,
       metadata.data,

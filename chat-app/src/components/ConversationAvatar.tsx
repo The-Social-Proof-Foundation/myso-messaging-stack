@@ -12,7 +12,8 @@ const SINGLE_SIZE = 44;
 type ConversationAvatarProps = {
   /** Member wallets for the group (may include self). */
   memberAddresses: readonly string[];
-  selfAddress: string | null | undefined;
+  /** Every identity the viewer may appear under (account + messaging member). */
+  selfAddress: string | null | undefined | readonly (string | null | undefined)[];
   profiles: WalletProfileBits;
   /** Agent derived addresses render an orb instead of the empty photo. */
   isAgentAddress?: (address: string) => boolean;
@@ -61,8 +62,9 @@ export function ConversationAvatar({
   profiles,
   isAgentAddress,
 }: Readonly<ConversationAvatarProps>) {
+  const selves = Array.isArray(selfAddress) ? selfAddress : [selfAddress];
   const others = memberAddresses.filter(
-    (a) => !sameAddress(a, selfAddress),
+    (a) => !selves.some((self) => sameAddress(a, self as string | null | undefined)),
   );
 
   // Unknown membership yet, or empty — default avatar.

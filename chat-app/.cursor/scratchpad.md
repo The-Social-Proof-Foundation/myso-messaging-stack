@@ -14,3 +14,5 @@ Chat-app stored proofs in sessionStorage, always called the Groth16 prover after
 
 ## Executor's Feedback
 Chat-app still talks to the public prover URL (no Next `/api/zklogin/prove` proxy). SessionStorage `mysocial_zklogin_current` is a same-tab cache only; IndexedDB is the source of truth.
+
+Logout / OAuth expiry only clears in-memory zk state. IndexedDB proof + account flag stay so the same `sub` can sign back in and skip the prover until maxEpoch.

@@ -1,0 +1,66 @@
+import {describe, expect, it} from 'vitest';
+
+import {decideRecall, decideRemember, turnIdempotencyKey} from './memory-turn';
+
+describe('decideRecall', () => {
+  it('skips memory for small talk', () => {
+    expect(decideRecall('gm').recall).toBe(false);
+    expect(decideRecall('thanks!').reason).toBe('small-talk');
+  });
+
+  it('skips memory for a self-contained question with no history', () => {
+    expect(decideRecall('what is 2+2?').recall).toBe(false);
+  });
+
+  it('recalls when the turn refers to stored facts', () => {
+    expect(decideRecall('what did we discuss earlier?').recall).toBe(true);
+    expect(decideRecall('what is my favourite colour?').recall).toBe(true);
+    expect(decideRecall('do you remember my budget?').reason).toBe(
+      'refers-to-prior-context',
+    );
+  });
+
+  it('treats a short follow-up as needing prior context', () => {
+    expect(decideRecall('and the other one?', 4).recall).toBe(true);
+    expect(decideRecall('and the other one?', 0).recall).toBe(false);
+  });
+
+  it('never recalls on an empty turn', () => {
+    expect(decideRecall('   ').recall).toBe(false);
+  });
+});
+
+describe('decideRemember', () => {
+  it('stores a stated durable fact', () => {
+    expect(decideRemember('my favourite colour is black').facts).toEqual([
+      'my favourite colour is black',
+    ]);
+    expect(decideRemember('I prefer concise summaries').reason).toBe('stated-a-fact');
+  });
+
+  it('does not store questions or small talk', () => {
+    expect(decideRemember('what is 2+2?').facts).toEqual([]);
+    expect(decideRemember('hey there').facts).toEqual([]);
+  });
+
+  it('honours an explicit /remember command', () => {
+    expect(decideRemember('/remember I drink oat milk')).toEqual({
+      facts: ['I drink oat milk'],
+      reason: 'explicit-remember',
+    });
+    expect(decideRemember('/remember').facts).toEqual([]);
+  });
+
+  it('refuses to store an oversized turn verbatim', () => {
+    expect(decideRemember(`my name is ${'x'.repeat(600)}`).facts).toEqual([]);
+  });
+});
+
+describe('turnIdempotencyKey', () => {
+  it('is stable for the same turn and differs across turns', async () => {
+    const first = await turnIdempotencyKey('group-1', 'hello');
+    expect(await turnIdempotencyKey('group-1', 'hello')).toBe(first);
+    expect(await turnIdempotencyKey('group-1', 'hello!')).not.toBe(first);
+    expect(await turnIdempotencyKey('group-2', 'hello')).not.toBe(first);
+  });
+});

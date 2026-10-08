@@ -237,6 +237,96 @@ impl StorageAdapter for InMemoryStorage {
         Ok(message.clone())
     }
 
+    async fn update_message_metadata_trusted(
+        &self,
+        id: Uuid,
+        patch: serde_json::Value,
+        allowed_from_status: &[&str],
+    ) -> StorageResult<Option<Message>> {
+        let mut messages = self
+            .messages
+            .write()
+            .map_err(|e| StorageError::OperationFailed(format!("Lock poisoned: {}", e)))?;
+        let message = messages.get_mut(&id).ok_or(StorageError::NotFound(id))?;
+
+        use crate::models::MessageKind;
+        if !matches!(
+            message.kind,
+            MessageKind::TokenTransfer | MessageKind::RequestPayment
+        ) {
+            return Ok(None);
+        }
+        let current = message
+            .metadata
+            .as_ref()
+            .and_then(|m| m.get("status"))
+            .and_then(|s| s.as_str());
+        if !current.is_some_and(|s| allowed_from_status.contains(&s)) {
+            return Ok(None);
+        }
+        let mut merged = message
+            .metadata
+            .clone()
+            .unwrap_or_else(|| serde_json::json!({}));
+        if let (Some(dst), Some(src)) = (merged.as_object_mut(), patch.as_object()) {
+            for (k, v) in src {
+                dst.insert(k.clone(), v.clone());
+            }
+        }
+        message.metadata = Some(merged);
+        message.updated_at = Utc::now();
+        if matches!(message.sync_status, SyncStatus::Synced | SyncStatus::Updated) {
+            message.sync_status = SyncStatus::UpdatePending;
+        }
+        Ok(Some(message.clone()))
+    }
+
+    async fn list_token_transfers_by_digest(&self, digest: &str) -> StorageResult<Vec<Message>> {
+        let messages = self
+            .messages
+            .read()
+            .map_err(|e| StorageError::OperationFailed(format!("Lock poisoned: {}", e)))?;
+        Ok(messages
+            .values()
+            .filter(|m| {
+                m.kind == crate::models::MessageKind::TokenTransfer
+                    && m.metadata
+                        .as_ref()
+                        .and_then(|v| v.get("digest"))
+                        .and_then(|v| v.as_str())
+                        == Some(digest)
+            })
+            .cloned()
+            .collect())
+    }
+
+    async fn list_pending_token_transfers(
+        &self,
+        older_than: chrono::DateTime<chrono::Utc>,
+        limit: usize,
+    ) -> StorageResult<Vec<Message>> {
+        let messages = self
+            .messages
+            .read()
+            .map_err(|e| StorageError::OperationFailed(format!("Lock poisoned: {}", e)))?;
+        let mut out: Vec<Message> = messages
+            .values()
+            .filter(|m| {
+                m.kind == crate::models::MessageKind::TokenTransfer
+                    && m.created_at < older_than
+                    && m.metadata
+                        .as_ref()
+                        .and_then(|v| v.get("status"))
+                        .and_then(|v| v.as_str())
+                        == Some("pending")
+            })
+            .cloned()
+            .collect();
+        out.sort_by_key(|m| m.created_at);
+        out.truncate(limit);
+        Ok(out)
+    }
+
     async fn delete_message(&self, id: Uuid) -> StorageResult<Message> {
         let mut messages = self
             .messages
@@ -1724,5 +1814,117 @@ mod tests {
         // Verify via separate get
         let fetched = storage.get_message(msg_id).await.unwrap();
         assert_eq!(fetched.attachments, new_attachments);
+    }
+    fn transfer_message(nonce_seed: u8, digest: &str) -> Message {
+        use crate::models::MessageKind;
+        Message::with_attribution(
+            "group_1".to_string(),
+            "0xabc".to_string(),
+            vec![1, 2, 3],
+            unique_nonce(nonce_seed),
+            0,
+            vec![],
+            vec![0u8; 64],
+            vec![0u8; 33],
+            crate::models::MessageAttribution::human_message(),
+            MessageKind::TokenTransfer,
+            Some(format!("transfer:0xabc:{digest}")),
+        )
+        .with_metadata(serde_json::json!({
+            "version": 1,
+            "digest": digest,
+            "asset_kind": "native",
+            "status": "pending",
+            "to": "0xdef",
+        }))
+    }
+
+    #[tokio::test]
+    async fn trusted_metadata_update_is_compare_and_set() {
+        let storage = InMemoryStorage::new();
+        let created = storage
+            .create_message(transfer_message(70, "digest1"))
+            .await
+            .unwrap();
+
+        let applied = storage
+            .update_message_metadata_trusted(
+                created.id,
+                serde_json::json!({"status": "success"}),
+                &["pending"],
+            )
+            .await
+            .unwrap()
+            .expect("pending -> success applies");
+        let meta = applied.metadata.unwrap();
+        assert_eq!(meta["status"], "success");
+        assert_eq!(meta["digest"], "digest1", "merge keeps other keys");
+
+        // Already resolved: guard fails, nothing changes.
+        let second = storage
+            .update_message_metadata_trusted(
+                created.id,
+                serde_json::json!({"status": "failed"}),
+                &["pending"],
+            )
+            .await
+            .unwrap();
+        assert!(second.is_none());
+        let fetched = storage.get_message(created.id).await.unwrap();
+        assert_eq!(fetched.metadata.unwrap()["status"], "success");
+        assert!(!fetched.is_edited, "status updates are not user edits");
+    }
+
+    #[tokio::test]
+    async fn trusted_metadata_update_ignores_non_payment_kinds() {
+        let storage = InMemoryStorage::new();
+        let text = storage
+            .create_message(sample_message("group_1", 71))
+            .await
+            .unwrap();
+        let res = storage
+            .update_message_metadata_trusted(
+                text.id,
+                serde_json::json!({"status": "success"}),
+                &["pending"],
+            )
+            .await
+            .unwrap();
+        assert!(res.is_none());
+    }
+
+    #[tokio::test]
+    async fn lists_transfers_by_digest_and_pending() {
+        let storage = InMemoryStorage::new();
+        let a = storage
+            .create_message(transfer_message(72, "digestA"))
+            .await
+            .unwrap();
+        storage
+            .create_message(transfer_message(73, "digestB"))
+            .await
+            .unwrap();
+
+        let by_digest = storage.list_token_transfers_by_digest("digestA").await.unwrap();
+        assert_eq!(by_digest.len(), 1);
+        assert_eq!(by_digest[0].id, a.id);
+
+        let cutoff = Utc::now() + chrono::Duration::seconds(5);
+        assert_eq!(
+            storage.list_pending_token_transfers(cutoff, 10).await.unwrap().len(),
+            2
+        );
+        storage
+            .update_message_metadata_trusted(
+                a.id,
+                serde_json::json!({"status": "success"}),
+                &["pending"],
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            storage.list_pending_token_transfers(cutoff, 10).await.unwrap().len(),
+            1
+        );
     }
 }

@@ -373,15 +373,20 @@ Agent conversations live in the **home sidebar**:
   It is a dialog rather than a second full-height conversation view for the same reason.
 - Creating is done from dialogs: **New** in the sidebar agents header, the Agents tab, or the
   Organizations tab all open a modal form.
+- An organization with **no agents yet** renders that same form inline, centered in the chart
+  pane, instead of an empty-state label — both use `AgentCreateForm`, so the fields and buttons
+  can never drift apart.
 - `/agents → Agents → Chat` hands the agent over to the home view via router state.
 
 Agent signing keys are random 32-byte Ed25519 seeds generated in the browser. Each seed is
 encrypted under a random per-account recovery root, and only encrypted wraps of that root ever
-reach a server. The root is unlocked through a **custody tier**: a WebAuthn PRF passkey
-(`passkey-prf-v1`), the salt-derived login key (`zklogin-root-v1`), the login key plus a
-user-held recovery code (`recovery-code-v1`), or a device-only key with no server-side wrap
-(`device-key-v1`). Passkeys are therefore an optional upgrade, not a requirement. See
-`docs/agent-custody-tiers-plan.md` and the memory-repo `docs/security/agent-key-backups.md`.
+reach a server. **The MySocial login always holds that root** (`zklogin-root-v1`: the wrap secret
+is derived from the salt-derived login key), so agents can be created, unlocked and used with no
+passkey at all, on any device. A **passkey** (`passkey-prf-v1`) is an optional backup that
+re-wraps the same root — it can never create one — as is a user-held recovery code
+(`recovery-code-v1`). Adding or removing either never re-encrypts an agent envelope, and a
+`device-key-v1` wrap with no server-side copy exists in the SDK but is not surfaced in the app.
+See `docs/agent-custody-tiers-plan.md` and the memory-repo `docs/security/agent-key-backups.md`.
 
 Deterministic derivation (`sha256("mysocial-agent-v1" || human secret || org id || u32 index)`)
 is retired and retained only for explicit migration tooling — see
@@ -391,10 +396,11 @@ is retired and retained only for explicit migration tooling — see
 
 Before any of the on-chain steps below, the app must be able to **unlock agent keys**: creating,
 chatting as, and asking the memory of an agent all require the agent's signing seed, which is
-stored only as an encrypted envelope. The unlock is a custody tier (passkey, login key, or login
-key plus a recovery code) — a passkey is not required. When no root exists yet the app asks which
-tier to adopt. The seed is never persisted: the vault locks after 15 minutes idle, on logout, and
-on any 401 from the Memory server.
+stored only as an encrypted envelope. Unlocking defaults to the MySocial login and needs no
+passkey; when the account has no root yet, that first unlock creates it. An account whose only
+wrap is a passkey (created before the login holder existed) is opened with the passkey and then
+has the login added as a holder automatically. The seed is never persisted: the vault locks after
+15 minutes idle, on logout, and on any 401 from the Memory server.
 
 Creating an agent chat requires three things, all enforced on chain:
 
@@ -441,6 +447,37 @@ Readiness waits on **`MessagingReader`**, not `MessagingSender`: the principal o
 group is granted `MessagingReader` + `PermissionsAdmin`, and the agent's admin caps are
 revoked in the same transaction.
 
+### Memory engine: how it adapts the Walrus Memory patterns
+
+Our architecture stays as it was — **chat → AI-credit gateway → OpenRouter**, with the memory
+server for recall/save and the automations server for scheduled or event-triggered work. The
+following Walrus Memory patterns were adapted onto it rather than adopted wholesale.
+
+| Walrus Memory pattern | Our equivalent |
+|---|---|
+| **Wallet delegation** — the owner authorizes an agent's *own* public key on-chain and keeps the wallet key | `memory::register_sub_agent` / `register_sub_agent_delegated` (`src/lib/agents/tx.ts`). The agent signs with its own Ed25519 seed; `derived_address`, `principal_owner` and `memory_account_id` are re-verified against chain state before any unlock. Delegation here is *hierarchical* (parent → child, with `delegatable_caps`), which is more expressive than the upstream flat ≤20-key model. |
+| **Cross-account security check** | `src/lib/agents/account-isolation.ts`. `assertAgentAccountBinding` runs before every memory call and refuses to sign with an agent key against an account it is not registered under; `verifyCrossAccountIsolation` is the read-only negative probe that requires account B's memories to be *refused* when asked for with account A's identity. The probe returns `isolated: null` (inconclusive) rather than passing when it cannot run — never a false green. |
+| **Headless setup** — key + account id + server URL, no browser | `createHeadlessAgentMemoryClient` in `src/lib/agents/memory-client.ts`. The SPA builds the same client through the custody vault; a service or automation builds it from those three fields directly. `serverUrl` is always explicit, because a network mismatch is the most common cause of an otherwise opaque auth failure. |
+| **Agent storage loop** — write → confirm persistence → recall, batching small writes | `rememberAgentFacts` writes in chunks of `REMEMBER_BULK_MAX` (20) and only returns once every job reports `done`; a job that is not `done` throws rather than being treated as saved. Recall goes through `recallAgentMemories`. |
+| **Production readiness** — duplicate writes, retries, spending limits, key custody, outages | `withMemoryRetry` (4 attempts, `2^i * 500 ms` + ≤250 ms jitter, **fail fast on every 4xx**); a content-addressed ledger keyed `sha256(namespace + ':' + text)` persisted in `localStorage` so a retry after a restart cannot double-write; `MAX_WRITES_PER_CYCLE` (50) as a per-turn ceiling; `MemoryClientError.retryable` encodes the status contract (`503` retry, `401` fix config); `probeAgentMemory` turns an outage into a degraded turn instead of a failed one. |
+| **Chatbot example** — recall every turn, save every turn | Deliberately **not** copied. `src/lib/agents/memory-turn.ts` decides per turn: `decideRecall` pulls stored facts only when the turn refers to them, and `decideRemember` stores something only when the turn states a durable fact. Most turns now skip the embedding, the vector search and every MYDATA decrypt. `/api/ask` takes the resulting `recall: false`, which is an additive opt-out on the memory server. |
+| **Storage funding** — WAL pays storage, SUI pays gas, and blob ownership is separate from payment | Unchanged and out of scope for the client: the memory server owns the Walrus write path, and the sponsored gas pool covers messaging transactions. |
+| **Hosted relayer / console allowance / capacity explorer** | Not wired in. The upstream hosted relayer publishes no numeric quota (only "the service can apply usage limits"), and Console's 5 GB-per-space allowance is a different product. Our storage story stays the self-hosted memory server. |
+
+Two upstream caveats are worth carrying forward because they shape the client:
+
+- **`done` is durability, not read-after-write consistency.** The vector index can briefly lag a
+  completed write, so a recall fired immediately after a write may miss it. Do not treat an
+  empty first result as "no such memory" on a read-after-write critical path.
+- **A full recall page means possible truncation.** The relayer caps recall at `limit` and drops
+  the rest with no signal, so `recallAgentMemories` reports `truncated` when
+  `results.length >= limit`.
+
+Every turn also carries a stable idempotency key (`turnIdempotencyKey`), so retrying one
+logical turn lets the AI-credit gateway reconcile the existing reservation instead of
+reserving and billing a second inference. That is why `askAgent` only retries when a key is
+present.
+
 ### Pagination
 
 Every list read goes through `src/lib/pagination.ts`. The social server clamps `limit` to 100
@@ -470,7 +507,6 @@ patched and unpatched social servers rather than failing outright.
 | `VITE_SOCIAL_SERVER_URL` | Social server for memory-account, AI-credit, org, sub-agent, and messaging-group reads. |
 | `VITE_PLATFORM_ID` | Optional. Overrides the auto-discovered Platform used for agent chats. |
 | `VITE_AGENT_KEY_BACKUPS_ENABLED` | `true` to enable agent-key custody (off by default). Also injects the vault CSP in production builds. |
-| `VITE_AGENT_CUSTODY_TIERS` | Optional comma list overriding the server's advertised tiers (`passkey-prf-v1`, `zklogin-root-v1`, `recovery-code-v1`). Leave unset to trust `GET /config`. |
 | `VITE_PASSKEY_CONNECT_ORIGINS` | Optional exact MYDATA key-server/websocket origins added to the production vault CSP. |
 
 ### Server prerequisites
@@ -486,6 +522,17 @@ port 8000). Set these on the memory server:
 | `SOCIAL_SERVER_URL` | The local social server (`http://127.0.0.1:9126`), used to resolve the signing agent. |
 | `ENABLE_AGENT_KEY_BACKUPS` | `true` to enable agent-key custody routes and the `agentKeyBackups` config flag. |
 | `AGENT_KEY_CUSTODY_TIERS` | Comma list of accepted custody methods. `AGENT_KEY_CUSTODY_TIERS=passkey-prf-v1` keeps the passkey-only posture. |
+
+Agent replies never call a model provider from the browser. With `AI_CREDIT_ENABLED=true`,
+`/api/ask` routes through the **AI-credit gateway** (`AI_CREDIT_ORACLE_URL`, authenticated with
+`AI_CREDIT_ORACLE_API_SECRET`) which owns the reservation and proxies OpenRouter, so the
+gateway is the only component that ever holds a provider key. `AI_CREDIT_ENABLED=false` is a
+local-development fallback that calls OpenRouter or OpenAI directly.
+
+`/api/ask` accepts `recall: false` (additive; absent means recall). The chat app sends it
+whenever `decideRecall` says the turn does not need stored facts, which skips the query
+embedding, the vector search and every MYDATA download/decrypt, and still returns a normal
+answer. `idempotency_key` makes a retry of one logical turn reconcile instead of billing twice.
 | `AGENT_KEY_REQUIRE_TIER` | Optional minimum tier; a weaker unlock is refused with `custody_tier_required`. |
 | `AGENT_KEY_UNLOCK_PER_MINUTE` | Per-account custody unlock/challenge attempts per minute (default 10). |
 | `PASSKEY_RP_ID` / `PASSKEY_ALLOWED_ORIGINS` | Required only when the `passkey-prf-v1` tier is enabled; exact RP ID and exact HTTPS origins. |

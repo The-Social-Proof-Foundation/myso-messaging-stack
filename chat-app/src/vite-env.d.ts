@@ -14,9 +14,10 @@ interface ImportMetaEnv {
   readonly VITE_AGENT_PLATFORM_ID?: string;
   readonly VITE_AGENT_MEMORY_ACCOUNT_ID?: string;
   readonly VITE_AGENT_KEY_BACKUPS_ENABLED?: string;
-  readonly VITE_AGENT_CUSTODY_TIERS?: string;
   readonly VITE_PASSKEY_CONNECT_ORIGINS?: string;
   readonly VITE_PLATFORM_ID?: string;
+  /** Public X25519 key (`<id>:<base64url>`) delegate seeds are encrypted to. Not a secret. */
+  readonly VITE_AUTOMATION_MYDATA_KEY?: string;
 }
 
 interface ImportMeta {

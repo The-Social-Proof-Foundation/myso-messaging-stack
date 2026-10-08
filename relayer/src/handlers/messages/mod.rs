@@ -1,5 +1,6 @@
 pub mod error;
 pub mod handlers;
+pub mod payments;
 pub mod request;
 pub mod response;
 

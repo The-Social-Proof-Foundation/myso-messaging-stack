@@ -38,6 +38,9 @@ const noopTransport: RelayerTransport = {
 	deleteMessage: () => {
 		throw new Error('noopTransport: deleteMessage not implemented');
 	},
+	respondToPaymentRequest: () => {
+		throw new Error('noopTransport: respondToPaymentRequest not implemented');
+	},
 	subscribe: () => {
 		throw new Error('noopTransport: subscribe not implemented');
 	},

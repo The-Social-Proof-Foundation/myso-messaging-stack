@@ -62,6 +62,10 @@ pub struct MessageResponse {
     /// Typed system event — present only when `kind == "system"`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub system: Option<SystemMessageWire>,
+    /// Relayer-owned cleartext payment metadata (digest, status, payer). Present only for
+    /// `token_transfer` and `request_payment`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<serde_json::Value>,
 }
 
 fn system_wire_from_message(msg: &Message) -> Option<SystemMessageWire> {
@@ -86,6 +90,11 @@ impl From<Message> for MessageResponse {
         );
 
         let system = system_wire_from_message(&msg);
+        let payment_metadata = if msg.kind.has_payment_metadata() {
+            msg.metadata.clone()
+        } else {
+            None
+        };
         let kind = msg.kind.as_str().to_string();
         // Explicit flag from update_content — never inferred from updated_at (archival bumps it).
         let is_edited = msg.is_edited && !msg.is_system();
@@ -113,6 +122,7 @@ impl From<Message> for MessageResponse {
             identity_class: msg.attribution.identity_class,
             kind,
             system,
+            metadata: payment_metadata,
         }
     }
 }

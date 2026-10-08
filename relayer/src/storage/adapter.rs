@@ -178,6 +178,30 @@ pub trait StorageAdapter: Send + Sync {
         public_key: Vec<u8>,
     ) -> StorageResult<Message>;
 
+    /// Trusted relayer-only mutator for payment-kind cleartext `metadata`
+    /// (`token_transfer` / `request_payment`). Merges the top-level keys of `patch` into
+    /// `metadata` **iff** the current `metadata.status` is one of `allowed_from_status`
+    /// (compare-and-set, atomic in Postgres). Does not touch ciphertext, signature or
+    /// `is_edited`. Returns `Some(updated)` when applied, `None` when the guard failed.
+    /// Postgres also emits a `message.edited` event so connected clients re-fetch.
+    async fn update_message_metadata_trusted(
+        &self,
+        id: Uuid,
+        patch: serde_json::Value,
+        allowed_from_status: &[&str],
+    ) -> StorageResult<Option<Message>>;
+
+    /// `token_transfer` rows whose `metadata.digest` equals `digest` (usually one per sender).
+    async fn list_token_transfers_by_digest(&self, digest: &str) -> StorageResult<Vec<Message>>;
+
+    /// `token_transfer` rows still `pending` and created before `older_than`
+    /// (oldest first). Drives the confirmation sweeper.
+    async fn list_pending_token_transfers(
+        &self,
+        older_than: chrono::DateTime<chrono::Utc>,
+        limit: usize,
+    ) -> StorageResult<Vec<Message>>;
+
     /// Marks a message for deletion (soft delete).
     /// Sets `sync_status` to `DELETE_PENDING` and updates `updated_at` timestamp.
     /// The message remains in storage until the File Storage sync job processes it.

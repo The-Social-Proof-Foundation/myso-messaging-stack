@@ -35,6 +35,7 @@ import type {
 	RelayerSubscriptionEvent,
 	RelayerUserEvent,
 	RelayerAgentConversation,
+	RespondToPaymentRequestParams,
 	SendMessageParams,
 	SendMessageResult,
 	SendTypingParams,
@@ -57,6 +58,11 @@ export interface RelayerTransport {
 	fetchMessage(params: FetchMessageParams): Promise<RelayerMessage>;
 	updateMessage(params: UpdateMessageParams): Promise<void>;
 	deleteMessage(params: DeleteMessageParams): Promise<void>;
+	/**
+	 * Reject (payer) or cancel (requester) an open `request_payment` message in a 1:1 DM.
+	 * Returns the relayer's updated message; subscribers also receive `message.edited`.
+	 */
+	respondToPaymentRequest(params: RespondToPaymentRequestParams): Promise<RelayerMessage>;
 	/**
 	 * Subscribe to a group's real-time events (messages, reactions, typing,
 	 * presence) as a single stream. Use afterOrder for message resumability.

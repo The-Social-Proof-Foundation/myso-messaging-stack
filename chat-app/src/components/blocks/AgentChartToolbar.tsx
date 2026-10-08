@@ -99,31 +99,32 @@ export function AgentChartToolbar({
       {details}
 
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex flex-wrap items-center gap-1.5">
-          <span className="text-xs text-muted-foreground">Status</span>
+        <div
+          role="tablist"
+          aria-label="Filter agents by status"
+          className="inline-flex items-center gap-0.5 rounded-lg bg-muted/60 p-0.5"
+        >
           {filters.map((filter) => {
             const selected = selectedFilter === filter.value;
             return (
               <button
                 key={filter.value}
                 type="button"
+                role="tab"
+                aria-selected={selected}
                 className={cn(
-                  'inline-flex h-7 items-center gap-1.5 rounded-full px-2.5 text-xs font-medium transition-colors',
+                  'inline-flex h-6 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium transition-colors',
+                  // Every pill carries a light surface so the row reads as
+                  // buttons on the muted track; the selected one adds a ring +
+                  // shadow and full-strength text to stay unmistakable.
                   selected
-                    ? 'bg-primary text-primary-foreground'
-                    : 'border border-border bg-background text-muted-foreground hover:bg-muted',
+                    ? 'bg-card text-foreground shadow-xs ring-1 ring-border dark:bg-secondary-600 dark:text-secondary-50 dark:ring-secondary-500/50'
+                    : 'bg-card text-muted-foreground hover:bg-card hover:text-foreground dark:bg-secondary-600/45 dark:text-secondary-400 dark:hover:bg-secondary-600/70 dark:hover:text-secondary-100',
                 )}
                 onClick={() => onFilterSelect(filter.value)}
               >
                 {filter.label}
-                <span
-                  className={cn(
-                    'rounded-full px-1.5 text-[11px]',
-                    selected ? 'bg-primary-foreground/20' : 'bg-muted text-muted-foreground',
-                  )}
-                >
-                  {filter.count}
-                </span>
+                <span className="text-[11px] tabular-nums opacity-60">{filter.count}</span>
               </button>
             );
           })}

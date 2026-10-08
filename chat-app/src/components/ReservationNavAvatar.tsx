@@ -35,14 +35,15 @@ function ringLayoutForSize(size: number): {
   return { size, padding: 4, strokeWidth: 2.35 };
 }
 
-/** Outer box width for a bubble avatar (includes SPT ring when shown). */
+/**
+ * Outer box width for an avatar. The SPT ring is drawn inside this box (the
+ * photo shrinks to make room), so it is the same with or without a ring.
+ */
 export function reservationAvatarShellSize(
   size: number,
-  showRing: boolean,
+  _showRing?: boolean,
 ): number {
-  if (!showRing) return size;
-  const { padding, strokeWidth } = ringLayoutForSize(size);
-  return size + padding * 2 + strokeWidth;
+  return size;
 }
 
 type ReservationNavAvatarProps = {
@@ -77,10 +78,11 @@ export function ReservationNavAvatar({
 }: Readonly<ReservationNavAvatarProps>) {
   const preset =
     typeof size === 'number' ? ringLayoutForSize(size) : PRESETS[size];
-  const imageDiameter = preset.size;
   const padding = showRing ? preset.padding : 0;
   const strokeWidth = showRing ? preset.strokeWidth : 0;
-  const shellSize = imageDiameter + padding * 2 + strokeWidth;
+  // `size` is the outer footprint; a ring eats into the photo, never the box.
+  const shellSize = preset.size;
+  const imageDiameter = shellSize - padding * 2 - strokeWidth;
   const gradientId = useId().replace(/:/g, '');
   const imageInset = padding + strokeWidth / 2;
 

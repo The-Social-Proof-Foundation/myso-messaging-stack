@@ -12,6 +12,7 @@ pub enum MessageKind {
     Post,
     RequestPayment,
     Poll,
+    TokenTransfer,
 }
 
 impl MessageKind {
@@ -22,6 +23,7 @@ impl MessageKind {
             Self::Post => "post",
             Self::RequestPayment => "request_payment",
             Self::Poll => "poll",
+            Self::TokenTransfer => "token_transfer",
         }
     }
 
@@ -32,6 +34,7 @@ impl MessageKind {
             "post" => Self::Post,
             "request_payment" => Self::RequestPayment,
             "poll" => Self::Poll,
+            "token_transfer" => Self::TokenTransfer,
             _ => Self::Text,
         }
     }
@@ -43,6 +46,7 @@ impl MessageKind {
             "post" => Some(Self::Post),
             "request_payment" => Some(Self::RequestPayment),
             "poll" => Some(Self::Poll),
+            "token_transfer" => Some(Self::TokenTransfer),
             _ => None,
         }
     }
@@ -55,8 +59,18 @@ impl MessageKind {
     pub fn is_encrypted_client_kind(self) -> bool {
         matches!(
             self,
-            Self::Text | Self::Post | Self::RequestPayment | Self::Poll
+            Self::Text | Self::Post | Self::RequestPayment | Self::Poll | Self::TokenTransfer
         )
+    }
+
+    /// 1:1 DM-only payment kinds. The relayer rejects these in groups with more than two members.
+    pub fn is_dm_payment_kind(self) -> bool {
+        matches!(self, Self::RequestPayment | Self::TokenTransfer)
+    }
+
+    /// Kinds whose cleartext `metadata` carries relayer-owned payment status.
+    pub fn has_payment_metadata(self) -> bool {
+        self.is_dm_payment_kind()
     }
 }
 

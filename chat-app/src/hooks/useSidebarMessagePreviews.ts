@@ -42,10 +42,14 @@ function persistPreviews(wallet: string | null | undefined) {
 
 function formatPreview(message: {
   text?: string;
+  kind?: string | null;
   isDeleted?: boolean;
   attachments?: unknown[];
 }): string {
   if (message.isDeleted) return 'Message deleted';
+  // Payment bodies are encrypted JSON — never surface them as preview text.
+  if (message.kind === 'token_transfer') return 'Sent a payment';
+  if (message.kind === 'request_payment') return 'Requested a payment';
   const text = message.text?.trim();
   if (text) return text.replace(/\s+/g, ' ');
   if (message.attachments && message.attachments.length > 0) {
@@ -92,6 +96,7 @@ export function publishSidebarMessagePreview(
   message: {
     order: number;
     text?: string;
+    kind?: string | null;
     isDeleted?: boolean;
     attachments?: unknown[];
   },

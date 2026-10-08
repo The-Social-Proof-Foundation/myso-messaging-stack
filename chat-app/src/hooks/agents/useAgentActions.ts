@@ -3,7 +3,16 @@ import type {ClientWithCoreApi} from '@socialproof/myso/client';
 import {Transaction} from '@socialproof/myso/transactions';
 
 import {useAgentVault, findRegisteredDraft, readAgentPolicy} from '../../contexts/AgentKeyVaultContext';
-import type {AgentKeyEnvelopeV1, AgentRegistrationIntent} from '@socialproof/memory';
+import {generateAgentKey, type AgentKeyEnvelopeV1, type AgentRegistrationIntent} from '@socialproof/memory';
+import type {AutomationClient} from '../../lib/agents/automation-client';
+import {
+  DELEGATE_CAPABILITIES,
+  DelegateError,
+  configuredMyDataKey,
+  delegateKeyRef,
+  encryptDelegateSeed,
+  validateDelegatePolicy,
+} from '../../lib/agents/automation-delegate';
 import {registrationGrant} from '../../lib/agents/capabilities';
 import {resolveAgentChainIds} from '../../lib/agents/chain-ids';
 import {executeAsAgent, executeAsHuman, requireCreatedObjectId} from '../../lib/agents/execute';
@@ -42,8 +51,23 @@ import {
   fetchProfileOverview,
   mistBigint,
   withCreditBalanceDelta,
+  type ProfileOrganizationStatistics,
   type ProfileOverview,
 } from '../../lib/agents/profile-graphql';
+
+const EMPTY_ORG_STATISTICS: ProfileOrganizationStatistics = {
+  totalAgents: 0,
+  activeAgents: 0,
+  totalRevenueMyso: 0,
+  totalOutboundSpendMyso: 0,
+  netCashFlowMyso: 0,
+  totalActionsExecuted: 0,
+  totalEngagement: 0,
+  memoryEntries: 0,
+  memoryBytes: 0,
+  aiCreditUsageEvents: 0,
+  aiCreditSpentMist: 0,
+};
 import {useMessagingClient} from '../../contexts/MessagingClientContext';
 import {useAuthenticatedAddress, useMySocialAuth} from '../../contexts/MySocialAuthContext';
 import {agentKeys} from './query-keys';
@@ -151,6 +175,7 @@ export function useAgentActions() {
 
   function publishCreatedAgent(row: SubAgentRow) {
     seedCreatedSubAgent(row);
+    if (row.organization_id) publishAgentCountBump(row.organization_id);
     const id = row.agent_object_id;
     void (async () => {
       const deadline = Date.now() + 20_000;
@@ -165,6 +190,76 @@ export function useAgentActions() {
     })();
   }
 
+  /**
+   * The sidebar reads the indexed profile overview, which trails the chain. Seed what we already
+   * know (the new organization, or one more agent in a count) so it shows up at once, and keep
+   * re-applying it until the indexer returns a snapshot that includes the change.
+   */
+  function publishOverviewChange(
+    apply: (overview: ProfileOverview) => ProfileOverview,
+    indexedHasChange: (overview: ProfileOverview) => boolean,
+  ) {
+    if (!address) return;
+    const key = agentKeys.profileOverview(address);
+    const seed = () =>
+      queryClient.setQueryData<ProfileOverview>(key, (current) =>
+        current && !indexedHasChange(current) ? apply(current) : current,
+      );
+    seed();
+    void (async () => {
+      const deadline = Date.now() + 30_000;
+      while (Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+        const indexed = await fetchProfileOverview(address).catch(() => null);
+        if (indexed && indexedHasChange(indexed)) {
+          queryClient.setQueryData(key, indexed);
+          return;
+        }
+        // A refetch triggered elsewhere may have replaced the seeded value with a stale one.
+        seed();
+      }
+    })();
+  }
+
+  function publishCreatedOrganization(row: ProfileOverview['organizations'][number]) {
+    const id = row.organizationId.toLowerCase();
+    publishOverviewChange(
+      (overview) => ({...overview, organizations: [...overview.organizations, row]}),
+      (overview) => overview.organizations.some((org) => org.organizationId.toLowerCase() === id),
+    );
+  }
+
+  /** One more agent in an organization's count; done once the indexed count reaches the target. */
+  function publishAgentCountBump(organizationId: string) {
+    if (!address) return;
+    const id = organizationId.toLowerCase();
+    const find = (overview?: ProfileOverview) =>
+      overview?.organizations.find((org) => org.organizationId.toLowerCase() === id);
+    const before = Number(
+      find(queryClient.getQueryData<ProfileOverview>(agentKeys.profileOverview(address)))?.statistics
+        ?.totalAgents ?? 0,
+    );
+    const target = before + 1;
+    publishOverviewChange(
+      (overview) => ({
+        ...overview,
+        organizations: overview.organizations.map((org) =>
+          org.organizationId.toLowerCase() === id
+            ? {
+                ...org,
+                statistics: {
+                  ...(org.statistics ?? EMPTY_ORG_STATISTICS),
+                  totalAgents: target,
+                  activeAgents: Number(org.statistics?.activeAgents ?? 0) + 1,
+                },
+              }
+            : org,
+        ),
+      }),
+      (overview) => Number(find(overview)?.statistics?.totalAgents ?? 0) >= target,
+    );
+  }
+
   const requireClient = () => {
     if (!client || !keypair) {
       throw new Error('Sign in and wait for the messaging client before sending a transaction.');
@@ -174,6 +269,7 @@ export function useAgentActions() {
 
   async function finishAgentSetup(agentId:string) {
     if(!vault)throw new Error('Unlock agent keys first.');
+    await vault.ensureUnlocked();
     const epoch=vault.generation();const {client:rpc,human}=requireClient();
     const setup=await vault.verifiedSetup(agentId);
     const ids=await resolveAgentChainIds();
@@ -206,6 +302,15 @@ export function useAgentActions() {
         'AgenticOrganization',
       );
       await invalidate(organizationId);
+      publishCreatedOrganization({
+        organizationId,
+        name: args.name,
+        description: args.description,
+        orgType: String(args.orgType),
+        active: true,
+        createdAt: Date.now(),
+        statistics: EMPTY_ORG_STATISTICS,
+      });
       return organizationId;
     },
 
@@ -237,6 +342,8 @@ export function useAgentActions() {
       draft?: AgentKeyEnvelopeV1;
       delegatableCaps?: number;
       budget?: Omit<AgentBudgetArgs, 'agentObjectId'>;
+      /** Reports each stage of the multi-step registration, for a progress display. */
+      onStep?: (step: string) => void;
     }) {
       const {client: rpc, human} = requireClient();
       const ids = await resolveAgentChainIds();
@@ -244,6 +351,7 @@ export function useAgentActions() {
       const epoch = vault.generation();
       const saved=args.draft?await vault.verifiedIntent(args.draft):null;
       if(saved){if(saved.parentAgentId!==null)throw new Error('Choose the saved child setup with its original parent.');args={...args,label:saved.label,capabilities:saved.capabilities,delegatableCaps:saved.delegatableCaps,expiresAtMs:saved.expiresAtMs,budget:intentBudget(saved)};}
+      args.onStep?.('Securing the agent key…');
       const prepared = args.draft ? {envelope: args.draft, key: await vault.recoverDraft(args.draft)} : await vault.prepare(args.organizationId,registrationIntent(args,null));
       await vault.api.setIntent(prepared.envelope.keyId,saved??registrationIntent(args,null));
       const derived = prepared.key;
@@ -259,12 +367,15 @@ export function useAgentActions() {
         delegatableCaps,
         expiresAtMs: args.expiresAtMs ?? null,
       });
+      args.onStep?.('Registering on chain…');
       const existingId = await findRegisteredDraft(prepared.envelope);
       vault.assertCurrent(epoch);
       const agentObjectId = existingId ?? await requireCreatedObjectId(rpc, await executeAsHuman(rpc, human, register), 'SubAgent');
       vault.assertCurrent(epoch);
+      args.onStep?.('Backing up the key…');
       await vault.finalize(prepared.envelope, derived.seed, agentObjectId);
 
+      args.onStep?.('Setting up memory…');
       await finishAgentSetup(agentObjectId);
       await invalidate(args.organizationId);
       publishCreatedAgent(
@@ -285,6 +396,127 @@ export function useAgentActions() {
       return {agentObjectId, derived};
     },
 
+    /**
+     * Create a delegate for unattended automation.
+     *
+     * Registers a fresh sub-agent on-chain with memory-only capabilities, a
+     * spend cap and an expiry, then encrypts its seed to the memory bridge. The
+     * user's own agent keys are never touched; the delegate's seed exists in
+     * this browser only until it is encrypted and uploaded.
+     */
+    async registerAutomationDelegate(args: {
+      accountId: string;
+      organizationId: string;
+      name: string;
+      expiresAtMs: number;
+      /** Spend cap in MIST, as a decimal string. */
+      maxActionSpendMist: string;
+      client: AutomationClient;
+      onStep?: (step: string) => void;
+    }) {
+      const myDataKey = configuredMyDataKey();
+      if (!myDataKey) {
+        throw new DelegateError(
+          'Automation delegates are not set up: the memory bridge has not published a MyData key (VITE_AUTOMATION_MYDATA_KEY).',
+        );
+      }
+      validateDelegatePolicy({
+        name: args.name,
+        expiresAtMs: args.expiresAtMs,
+        maxActionSpendMist: args.maxActionSpendMist,
+      });
+      const {client: rpc, human} = requireClient();
+      const ids = await resolveAgentChainIds();
+
+      args.onStep?.('Creating the delegate key…');
+      const key = await generateAgentKey();
+      try {
+        args.onStep?.('Registering the delegate on chain…');
+        const register = registerSubAgentTx(ids, {
+          accountId: args.accountId,
+          organizationId: args.organizationId,
+          publicKey: key.publicKey,
+          derivedAddress: key.address,
+          label: `Automation: ${args.name}`,
+          capabilities: DELEGATE_CAPABILITIES,
+          // Cannot mint children, and acts without an owner co-sign.
+          delegatableCaps: 0,
+          approvalRequiredCaps: 0,
+          maxActionSpend: args.maxActionSpendMist,
+          expiresAtMs: args.expiresAtMs,
+        });
+        const agentObjectId = await requireCreatedObjectId(
+          rpc,
+          await executeAsHuman(rpc, human, register),
+          'SubAgent',
+        );
+
+        try {
+          args.onStep?.('Setting up its memory vault…');
+          const followUp = new Transaction();
+          ensureAgentMemoryVaultTx(ids, {accountId: args.accountId, agentObjectId}, followUp);
+          await executeAsHuman(rpc, human, followUp);
+
+          args.onStep?.('Encrypting the key to the bridge…');
+          const encrypted_key = await encryptDelegateSeed(
+            key.seed,
+            myDataKey,
+            args.accountId,
+            args.name,
+            agentObjectId,
+          );
+          await args.client.putDelegate(args.name, {
+            agent_object_id: agentObjectId,
+            mydata_key_id: myDataKey.id,
+            encrypted_key,
+          });
+        } catch (error) {
+          // The seed existed only here, so it is gone with this call. Say so,
+          // and say what to do: an unusable delegate should be revoked, not left.
+          const reason = error instanceof Error ? error.message : String(error);
+          throw new DelegateError(
+            `The delegate was registered on-chain (${agentObjectId}) but could not be stored, ` +
+              `and its key is now gone. Revoke it and create it again. ${reason}`,
+          );
+        }
+
+        await invalidate();
+        return {
+          agentObjectId,
+          keyRef: delegateKeyRef(args.name),
+          expiresAtMs: args.expiresAtMs,
+        };
+      } finally {
+        key.seed.fill(0);
+      }
+    },
+
+    /**
+     * Revoke a delegate. The on-chain revoke is the kill switch (the relayer and
+     * the bridge both refuse a revoked delegate on their next request); deleting
+     * the stored ciphertext afterwards is housekeeping.
+     */
+    async revokeAutomationDelegate(args: {
+      accountId: string;
+      agentObjectId: string;
+      name: string;
+      client: AutomationClient;
+    }) {
+      const {client: rpc, human} = requireClient();
+      const ids = await resolveAgentChainIds();
+      await executeAsHuman(
+        rpc,
+        human,
+        revokeSubAgentTx(ids, {accountId: args.accountId, agentObjectId: args.agentObjectId}),
+      );
+      try {
+        await args.client.deleteDelegate(args.name);
+      } catch {
+        // Already unusable on-chain; a stale ciphertext row is harmless.
+      }
+      await invalidate();
+    },
+
     async registerChildAgent(args: {
       accountId: string;
       organizationId: string | null;
@@ -296,6 +528,8 @@ export function useAgentActions() {
       delegatableCaps?: number;
       approveParentGrant?: boolean;
       budget?: Omit<AgentBudgetArgs, 'agentObjectId'>;
+      /** Reports each stage of the multi-step registration, for a progress display. */
+      onStep?: (step: string) => void;
     }) {
       const {client: rpc, human} = requireClient();
       const ids = await resolveAgentChainIds();
@@ -331,10 +565,12 @@ export function useAgentActions() {
           }),
         );
       }
+      args.onStep?.('Securing the agent key…');
       const prepared = args.draft ? {envelope: args.draft, key: await vault.recoverDraft(args.draft)} : await vault.prepare(args.organizationId ?? args.parent.organization_id!,registrationIntent(args,args.parent.agent_object_id));
       await vault.api.setIntent(prepared.envelope.keyId,saved??registrationIntent(args,args.parent.agent_object_id));
       const child = prepared.key;
       const delegatableCaps = args.delegatableCaps ?? 0;
+      args.onStep?.('Registering on chain…');
       const existingId = await findRegisteredDraft(prepared.envelope);
       vault.assertCurrent(epoch);
       const digest = existingId ? null : await executeAsAgent(
@@ -359,7 +595,10 @@ export function useAgentActions() {
       // The parent signs delegated registration; recover the created child from effects.
       const agentObjectId = existingId ?? await requireCreatedObjectId(rpc, digest, 'SubAgent');
       vault.assertCurrent(epoch);
+      args.onStep?.('Backing up the key…');
       await vault.finalize(prepared.envelope, child.seed, agentObjectId);
+      args.onStep?.('Setting up memory…');
+      args.onStep?.('Setting up memory…');
       await finishAgentSetup(agentObjectId);
       await invalidate(args.organizationId);
       publishCreatedAgent(

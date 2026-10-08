@@ -6,6 +6,9 @@ import { fromHex } from '@socialproof/myso/utils';
 import type { Attachment } from '../attachments/types.js';
 import type {
 	MessageKind,
+	PaymentAssetKind,
+	PaymentMetadata,
+	PaymentRequestStatus,
 	RelayerMessage,
 	RelayerPresenceEvent,
 	RelayerReactionEvent,
@@ -14,6 +17,7 @@ import type {
 	RelayerUserEvent,
 	SyncStatus,
 	SystemMessage,
+	TokenTransferStatus,
 	WorkflowItem,
 } from './types.js';
 
@@ -53,6 +57,8 @@ export interface WireMessageResponse {
 	identity_class?: number | null;
 	kind?: string | null;
 	system?: WireSystemMessage | null;
+	/** Relayer-owned payment metadata (snake_case); only for payment kinds. */
+	metadata?: Record<string, unknown> | null;
 }
 
 export interface WireMessageCreatedEvent {
@@ -289,9 +295,69 @@ function parseMessageKind(raw: string | undefined | null): MessageKind {
 			return 'request_payment';
 		case 'poll':
 			return 'poll';
+		case 'token_transfer':
+			return 'token_transfer';
 		default:
 			return 'text';
 	}
+}
+
+function parseAssetKind(raw: unknown): PaymentAssetKind | undefined {
+	return raw === 'native' || raw === 'spt' ? raw : undefined;
+}
+
+function str(raw: unknown): string | undefined {
+	return typeof raw === 'string' && raw.length > 0 ? raw : undefined;
+}
+
+/** Parse relayer `metadata` for payment kinds. Unknown / malformed shapes yield `undefined`. */
+export function parsePaymentMetadata(
+	kind: MessageKind,
+	raw: Record<string, unknown> | null | undefined,
+): PaymentMetadata | undefined {
+	if (!raw) return undefined;
+	const assetKind = parseAssetKind(raw.asset_kind);
+	if (!assetKind) return undefined;
+	if (kind === 'token_transfer') {
+		const digest = str(raw.digest);
+		const to = str(raw.to);
+		const status = raw.status;
+		if (!digest || !to) return undefined;
+		if (status !== 'pending' && status !== 'success' && status !== 'failed') return undefined;
+		return {
+			type: 'token_transfer',
+			digest,
+			assetKind,
+			status: status as TokenTransferStatus,
+			to,
+			requestMessageId: str(raw.request_message_id),
+			reason: str(raw.reason),
+			senderWallet: str(raw.sender_wallet),
+		};
+	}
+	if (kind === 'request_payment') {
+		const payer = str(raw.payer);
+		const status = raw.status;
+		if (!payer) return undefined;
+		if (
+			status !== 'open' &&
+			status !== 'rejected' &&
+			status !== 'cancelled' &&
+			status !== 'expired' &&
+			status !== 'paid'
+		) {
+			return undefined;
+		}
+		return {
+			type: 'request_payment',
+			assetKind,
+			payer,
+			status: status as PaymentRequestStatus,
+			fulfillingMessageId: str(raw.fulfilling_message_id),
+			fulfilledDigest: str(raw.fulfilled_digest),
+		};
+	}
+	return undefined;
 }
 
 /** Convert a relayer JSON message to a RelayerMessage domain object. */
@@ -324,5 +390,6 @@ export function fromWireMessage(wire: WireMessageResponse): RelayerMessage {
 		isAgentMessage: Boolean(wire.principal_owner),
 		kind,
 		system,
+		paymentMetadata: parsePaymentMetadata(kind, wire.metadata),
 	};
 }

@@ -133,7 +133,7 @@ export function Sidebar({
                   <button
                     type="button"
                     onClick={() => onSelectGroup(group.uuid || group.groupId)}
-                    className={`w-full px-2 py-3 text-left transition-colors ${
+                    className={`w-full py-3 pl-[13px] pr-2 text-left transition-colors ${
                       selected
                         ? 'bg-bubble-sent/10 text-secondary-900 dark:bg-secondary-700 dark:text-secondary-50'
                         : 'text-secondary-700 hover:bg-secondary-50 dark:text-secondary-300 dark:hover:bg-secondary-700/50'
@@ -142,7 +142,7 @@ export function Sidebar({
                     <div className="flex items-center gap-2.5">
                       <ConversationAvatar
                         memberAddresses={members}
-                        selfAddress={address}
+                        selfAddress={selfAddresses}
                         profiles={profiles}
                         isAgentAddress={isAgentAddress}
                       />
@@ -151,6 +151,11 @@ export function Sidebar({
                           <p className="translate-y-px min-w-0 truncate text-sm font-medium leading-tight">
                             {title}
                           </p>
+                          {peer && isAgentAddress(peer) ? (
+                            <span className="shrink-0 self-center rounded-[3px] bg-primary-500/10 px-1.5 py-[3px] text-[9px] font-semibold uppercase leading-none tracking-[0.08em] text-primary-600 ring-1 ring-inset ring-primary-500/25 dark:bg-white/[0.06] dark:text-secondary-200 dark:ring-white/15">
+                              Agent
+                            </span>
+                          ) : null}
                           {peerHandle ? (
                             <span className="shrink-0 text-xs font-medium leading-tight tracking-tight text-secondary-500 dark:text-secondary-400">
                               {peerHandle}

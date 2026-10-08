@@ -21,6 +21,7 @@ import { useMessages } from '../hooks/useMessages';
 import { useAgentMemoryReply } from '../hooks/agents/useAgentMemoryReply';
 import { useRepairAgentChatSend } from '../hooks/agents/useAgentChatActions';
 import { useAgentNamesByAddress } from '../hooks/agents/useSubAgents';
+import { useAgentOrganizationLabel } from '../hooks/agents/useAgentOrganizationLabel';
 import { conversationPeerLabel, isKnownAgentAddress, knownAgentAddressSet } from '../lib/agents/agent-display-name';
 import { normalizeMetadataHex } from '../lib/agents/agent-chats';
 import { usePaidDmGate } from '../hooks/usePaidDmGate';
@@ -34,6 +35,8 @@ import { MessageInput } from './MessageInput';
 import { TypingIndicator } from './TypingIndicator';
 import { AdminPanel } from './AdminPanel';
 import { PaymentConfirmDialog } from './PaymentConfirmDialog';
+import { PaymentComposeDialog, type PaymentComposeMode } from './PaymentComposeDialog';
+import { isPaymentKind } from '../lib/chat-payments';
 import { useGroupMemberLabels } from '../hooks/useGroupMemberLabels';
 import { useDisplayGroupTitle } from '../hooks/useDisplayGroupTitle';
 import { dmPeerPresenceStatus } from '../lib/presence-utils';
@@ -92,6 +95,9 @@ type PackTimelineMessage = {
   kind?: string | null;
   isDeleted?: boolean;
 };
+
+/** Fixed width of the payment status card (px) — keeps reaction clearance estimates stable. */
+const PAYMENT_CARD_WIDTH_PX = 260;
 
 /**
  * Walk neighbors for pack chrome, skipping same-sender tombstones so tip
@@ -207,6 +213,8 @@ function DisplayChatHeader(
     officialName: string;
     memberAddresses?: readonly string[];
     dmPresence?: DmPresenceView;
+    dmPeer?: string | null;
+    peerIsAgent?: boolean;
     permissionsLoading?: boolean;
     onToggleAdmin?: () => void;
     adminPanelOpen?: boolean;
@@ -216,13 +224,23 @@ function DisplayChatHeader(
     onRestoreHistory?: () => void;
   }>,
 ) {
-  const { officialName, memberAddresses = [], ...rest } = props;
+  const { officialName, memberAddresses = [], dmPeer, peerIsAgent, ...rest } = props;
   const name = useDisplayGroupTitle(officialName, memberAddresses);
-  return <ChatHeader name={name} {...rest} />;
+  const agentInfo = useAgentOrganizationLabel(dmPeer);
+  return (
+    <ChatHeader
+      name={name}
+      isAgent={Boolean(peerIsAgent) || agentInfo.isAgent}
+      organizationName={agentInfo.organizationName}
+      {...rest}
+    />
+  );
 }
 
 function ChatHeader({
   name,
+  isAgent,
+  organizationName,
   dmPresence,
   permissionsLoading,
   onToggleAdmin,
@@ -233,6 +251,8 @@ function ChatHeader({
   onRestoreHistory,
 }: Readonly<{
   name: string;
+  isAgent?: boolean;
+  organizationName?: string | null;
   dmPresence?: DmPresenceView;
   permissionsLoading?: boolean;
   onToggleAdmin?: () => void;
@@ -262,10 +282,23 @@ function ChatHeader({
             : 'max-w-[min(100%,20rem)]'
         }`}
       >
-        <h3 className="w-full line-clamp-2 text-[15px] font-semibold leading-tight tracking-tight text-secondary-900 md:truncate md:line-clamp-none dark:text-secondary-100">
-          {name}
-        </h3>
-        {permissionsLoading ? (
+        <div className="flex w-full min-w-0 items-center justify-center gap-1.5">
+          <h3 className="min-w-0 truncate text-[15px] font-semibold leading-tight tracking-tight text-secondary-900 dark:text-secondary-100">
+            {name}
+          </h3>
+          {isAgent ? (
+            <span className="shrink-0 rounded-[3px] bg-primary-500/10 px-1.5 py-[3px] text-[9px] font-semibold uppercase leading-none tracking-[0.08em] text-primary-600 ring-1 ring-inset ring-primary-500/25 dark:bg-white/[0.06] dark:text-secondary-200 dark:ring-white/15">
+              Agent
+            </span>
+          ) : null}
+        </div>
+        {isAgent ? (
+          organizationName ? (
+            <span className="w-full truncate text-[11px] leading-none text-secondary-400 dark:text-secondary-500">
+              member of: {organizationName}
+            </span>
+          ) : null
+        ) : permissionsLoading ? (
           <span className="text-[11px] leading-none text-secondary-400 dark:text-secondary-500">
             Checking permissions…
           </span>
@@ -483,10 +516,16 @@ function ChatView({
     };
   }, []);
 
+  /** The single other member of a 1:1 DM (null in groups). Payments are DM-only. */
+  const dmPeer = useMemo(
+    () => dmPeerAddress(memberAddresses, myAddress),
+    [memberAddresses, myAddress],
+  );
+  const [paymentCompose, setPaymentCompose] = useState<PaymentComposeMode | null>(null);
+
   const tickPeerAddresses = useMemo(() => {
-    const peer = dmPeerAddress(memberAddresses, myAddress);
-    return peer ? [peer] : undefined;
-  }, [memberAddresses, myAddress]);
+    return dmPeer ? [dmPeer] : undefined;
+  }, [dmPeer]);
 
   const {
     messages,
@@ -517,6 +556,11 @@ function ChatView({
     paymentError,
     confirmPayment,
     cancelPayment,
+    paymentBusy,
+    sendTokenTransfer,
+    sendPaymentRequest,
+    confirmPaymentRequest,
+    respondToPaymentRequest,
   } = useMessages(group.uuid, group.groupId, {
     onReadStateChanged,
     claimPending: paidGate.claimPending,
@@ -525,7 +569,9 @@ function ChatView({
     receiptMode: receiptModeOverride,
     tickPeerAddresses,
   });
-  const memoryReply = useAgentMemoryReply(group.groupId, group.uuid);
+  const memoryReply = useAgentMemoryReply(group.groupId, group.uuid, {
+    historyLength: messages.length,
+  });
   const composerError = memoryReply.error ?? error;
 
   const systemObjectAddresses = useMemo(
@@ -901,6 +947,8 @@ function ChatView({
             officialName={group.name}
             memberAddresses={memberAddresses}
             dmPresence={dmPresence}
+            dmPeer={dmPeer}
+            peerIsAgent={dmPeer ? agentAddress(dmPeer) : false}
             permissionsLoading={permissionsLoading}
             onToggleAdmin={toggleAdminPanel}
             adminPanelOpen={adminPanelOpen}
@@ -1060,12 +1108,14 @@ function ChatView({
               );
               const currWidth =
                 measuredBubbleWidths.get(msg.messageId) ??
-                estimatedBubbleWidth({
-                  text: msg.isDeleted ? '' : msg.text,
-                  isDeleted: msg.isDeleted,
-                  hasImage,
-                  maxWidth: maxBubbleW,
-                });
+                (isPaymentKind(msg.kind) && !msg.isDeleted
+                  ? Math.min(PAYMENT_CARD_WIDTH_PX, maxBubbleW)
+                  : estimatedBubbleWidth({
+                      text: msg.isDeleted ? '' : msg.text,
+                      isDeleted: msg.isDeleted,
+                      hasImage,
+                      maxWidth: maxBubbleW,
+                    }));
               let prevWidth = 0;
               if (olderSameSender && prev && prev.kind !== 'system') {
                 const prevHasImage = (prev.attachments ?? []).some((a) =>
@@ -1073,12 +1123,14 @@ function ChatView({
                 );
                 prevWidth =
                   measuredBubbleWidths.get(prev.messageId) ??
-                  estimatedBubbleWidth({
-                    text: prev.isDeleted ? '' : prev.text,
-                    isDeleted: prev.isDeleted,
-                    hasImage: prevHasImage,
-                    maxWidth: maxBubbleW,
-                  });
+                  (isPaymentKind(prev.kind) && !prev.isDeleted
+                    ? Math.min(PAYMENT_CARD_WIDTH_PX, maxBubbleW)
+                    : estimatedBubbleWidth({
+                        text: prev.isDeleted ? '' : prev.text,
+                        isDeleted: prev.isDeleted,
+                        hasImage: prevHasImage,
+                        maxWidth: maxBubbleW,
+                      }));
               }
               const reactionTopClearancePx = needsClearance({
                 olderSameSender,
@@ -1102,10 +1154,25 @@ function ChatView({
                   <MessageBubble
                     message={msg}
                     isOwnMessage={isOwn}
-                    onEdit={isOwn && permissions.canEdit ? editMessage : undefined}
-                    onDelete={
-                      isOwn && permissions.canDelete ? deleteMessage : undefined
+                    onEdit={
+                      isOwn && permissions.canEdit && !isPaymentKind(msg.kind)
+                        ? editMessage
+                        : undefined
                     }
+                    onDelete={
+                      isOwn &&
+                      permissions.canDelete &&
+                      msg.kind !== 'token_transfer'
+                        ? deleteMessage
+                        : undefined
+                    }
+                    onConfirmPaymentRequest={
+                      dmPeer && permissions.canSend ? confirmPaymentRequest : undefined
+                    }
+                    onRespondPaymentRequest={
+                      dmPeer && permissions.canSend ? respondToPaymentRequest : undefined
+                    }
+                    paymentBusy={paymentBusy}
                     reactions={msgReactions}
                     onToggleReaction={
                       permissions.canSend ? toggleReaction : undefined
@@ -1222,6 +1289,14 @@ function ChatView({
             }}
             onTyping={sendTyping}
             sending={sending || claiming || memoryReply.replying}
+            paymentMenu={
+              dmPeer
+                ? {
+                    onSend: () => setPaymentCompose('send'),
+                    onRequest: () => setPaymentCompose('request'),
+                  }
+                : undefined
+            }
           />
         </>
       ) : (
@@ -1229,6 +1304,23 @@ function ChatView({
           You don't have permission to send messages in this group.
         </div>
       )}
+
+      {/* 1:1 DM payments: send / request MYSO */}
+      <PaymentComposeDialog
+        mode={paymentCompose}
+        peerLabel={dmPeer ? memberLabelFor(dmPeer) : 'them'}
+        busy={paymentBusy}
+        error={error}
+        onClose={() => setPaymentCompose(null)}
+        onSubmit={async ({ amountMist, note }) => {
+          if (!dmPeer) throw new Error('Payments are only available in 1:1 chats.');
+          if (paymentCompose === 'send') {
+            await sendTokenTransfer({ recipient: dmPeer, amountMist, note });
+          } else {
+            await sendPaymentRequest({ amountMist, description: note });
+          }
+        }}
+      />
 
       {/* Paid-DM gate: confirm on-chain escrow, then the pending send retries */}
       <PaymentConfirmDialog

@@ -3,6 +3,7 @@ import {useState} from 'react';
 import {useAgentActions, useMemoryAccount, useOrganizationCategories} from '../../hooks/agents';
 import {Button} from '../Button';
 import {Dialog, dialogFieldClass} from '../Dialog';
+import {ErrorNotice} from './ErrorNotice';
 
 interface CreateOrganizationDialogProps {
   open: boolean;
@@ -128,9 +129,7 @@ export function CreateOrganizationDialog({
         </label>
 
         {error ? (
-          <p className="rounded-lg border border-danger-200 bg-danger-50 px-3 py-2 text-xs text-danger-700 dark:border-danger-800 dark:bg-danger-950/40 dark:text-danger-300">
-            {error}
-          </p>
+          <ErrorNotice>{error}</ErrorNotice>
         ) : null}
       </form>
     </Dialog>

@@ -31,6 +31,9 @@ export function normalizeSharedPostAddress(raw?: string | null): string | null {
  * Default: `"{groupId}:{kind}:{hex(encryptedText)}:{hex(nonce)}:{keyVersion}"`
  * `kind === 'post'`:
  * `"{groupId}:post:{sharedPostAddress}:{idempotencyKey}:{hex(encryptedText)}:{hex(nonce)}:{keyVersion}"`
+ * `kind === 'token_transfer'`:
+ * `"{groupId}:token_transfer:{transferDigest}:{idempotencyKey}:{hex(encryptedText)}:{hex(nonce)}:{keyVersion}"`
+ * (digest and idempotency key are case-sensitive and used verbatim.)
  *
  * `groupId` is lowercased. Post addresses are padded like the relayer verify path.
  */
@@ -41,6 +44,8 @@ export function buildCanonicalMessage(params: {
 	nonce: Uint8Array;
 	keyVersion: bigint;
 	sharedPostAddress?: string;
+	/** Transaction digest bound into `token_transfer` signatures. */
+	transferDigest?: string;
 	idempotencyKey?: string;
 }): Uint8Array {
 	const kind = params.kind ?? 'text';
@@ -52,6 +57,10 @@ export function buildCanonicalMessage(params: {
 			(params.sharedPostAddress ?? '').trim().toLowerCase();
 		const idem = (params.idempotencyKey ?? '').trim();
 		canonical = `${groupId}:${kind}:${post}:${idem}:${toHex(params.encryptedText)}:${toHex(params.nonce)}:${params.keyVersion}`;
+	} else if (kind === 'token_transfer') {
+		const digest = (params.transferDigest ?? '').trim();
+		const idem = (params.idempotencyKey ?? '').trim();
+		canonical = `${groupId}:${kind}:${digest}:${idem}:${toHex(params.encryptedText)}:${toHex(params.nonce)}:${params.keyVersion}`;
 	} else {
 		canonical = `${groupId}:${kind}:${toHex(params.encryptedText)}:${toHex(params.nonce)}:${params.keyVersion}`;
 	}
@@ -73,6 +82,7 @@ export async function signMessageContent(
 		nonce: Uint8Array;
 		keyVersion: bigint;
 		sharedPostAddress?: string;
+		transferDigest?: string;
 		idempotencyKey?: string;
 	},
 ): Promise<string> {
@@ -101,7 +111,13 @@ export interface VerifyMessageSenderParams {
 	/** Hex-encoded public key with scheme flag prefix (as returned by the relayer). */
 	publicKey: string;
 	sharedPostAddress?: string;
+	transferDigest?: string;
 	idempotencyKey?: string;
+}
+
+/** Idempotency key for a chat transfer: scoped to the sender so a public digest cannot be front-run. */
+export function transferIdempotencyKey(senderAddress: string, digest: string): string {
+	return `transfer:${senderAddress.toLowerCase()}:${digest}`;
 }
 
 /**

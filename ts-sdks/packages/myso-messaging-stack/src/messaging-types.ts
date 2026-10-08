@@ -5,8 +5,11 @@
 import type { Signer } from '@socialproof/myso/cryptography';
 
 import type { Attachment, AttachmentFile, AttachmentHandle } from './attachments/types.js';
+import type { PaymentPayload, TokenTransferPayload, PaymentRequestPayload } from './payments.js';
 import type {
 	MessageKind,
+	PaymentMetadata,
+	PaymentRequestAction,
 	RelayerReactionEvent,
 	RelayerReceiptEvent,
 	SyncStatus,
@@ -14,7 +17,16 @@ import type {
 } from './relayer/types.js';
 import type { GroupRef } from './types.js';
 
-export type { MessageKind, SystemEventType, SystemMessage } from './relayer/types.js';
+export type {
+	MessageKind,
+	PaymentAssetKind,
+	PaymentMetadata,
+	PaymentRequestAction,
+	PaymentRequestStatus,
+	SystemEventType,
+	SystemMessage,
+	TokenTransferStatus,
+} from './relayer/types.js';
 
 // ── Conditional mydataApproveContext ────────────────────────────────
 
@@ -59,6 +71,10 @@ export interface DecryptedMessage extends MessageAttribution {
 	kind?: MessageKind;
 	/** Present when `kind === 'system'`. Unknown `system.type` values are kept as strings. */
 	system?: SystemMessage;
+	/** Relayer-confirmed payment state for `token_transfer` / `request_payment` (1:1 DMs). */
+	paymentMetadata?: PaymentMetadata;
+	/** Decrypted payment body (amount, asset, note/description). Undefined if malformed. */
+	payment?: PaymentPayload;
 }
 
 // ── Options types ────────────────────────────────────────────────
@@ -71,9 +87,16 @@ interface SendMessageOptionsBase {
 	/** Files to attach. Requires attachments support to be configured. */
 	files?: AttachmentFile[];
 	/** Timeline kind (`text` default). Signed into the message canonical string. */
-	kind?: 'text' | 'post' | 'request_payment' | 'poll';
-	/** Client idempotency key for safe retries. Required when `kind === 'post'`. */
+	kind?: 'text' | 'post' | 'request_payment' | 'poll' | 'token_transfer';
+	/** Client idempotency key for safe retries. Required for `post`, `token_transfer`, `request_payment`. */
 	idempotencyKey?: string;
+	/** Cleartext payment fields (`token_transfer` requires `digest`). 1:1 DMs only. */
+	paymentMetadata?: {
+		digest?: string;
+		assetKind: 'native' | 'spt';
+		requestMessageId?: string;
+		senderWallet?: string;
+	};
 	/** Cleartext on-chain post id when `kind === 'post'` (bound into signature). */
 	sharedPostAddress?: string;
 	/** Optional agent attribution for relayer POST body. */
@@ -157,6 +180,48 @@ export type EditMessageOptions<TApproveContext = void> = WithApproveContext<
 	EditMessageOptionsBase,
 	TApproveContext
 >;
+
+interface SendTokenTransferOptionsBase {
+	signer: Signer;
+	groupRef: GroupRef;
+	/** Digest of the already-submitted on-chain transfer. */
+	digest: string;
+	payload: TokenTransferPayload;
+	/** Payment request this transfer settles (the relayer links and settles it). */
+	requestMessageId?: string;
+	/** Funded wallet that signed the transfer, when it differs from the messaging key (web zkLogin). */
+	senderWallet?: string;
+}
+
+/** Options for {@link MySoMessagingStackClient.sendTokenTransfer}. */
+export type SendTokenTransferOptions<TApproveContext = void> = WithApproveContext<
+	SendTokenTransferOptionsBase,
+	TApproveContext
+>;
+
+interface SendPaymentRequestOptionsBase {
+	signer: Signer;
+	groupRef: GroupRef;
+	payload: PaymentRequestPayload;
+	/** Client request id; defaults to a random UUID. Sent as `request:<id>`. */
+	requestId?: string;
+}
+
+/** Options for {@link MySoMessagingStackClient.sendPaymentRequest}. */
+export type SendPaymentRequestOptions<TApproveContext = void> = WithApproveContext<
+	SendPaymentRequestOptionsBase,
+	TApproveContext
+>;
+
+/** Options for {@link MySoMessagingStackClient.respondToPaymentRequest}. No encryption involved. */
+export interface RespondToPaymentRequestOptions {
+	signer: Signer;
+	groupRef: GroupRef;
+	/** The `request_payment` message. */
+	messageId: string;
+	/** `reject` (payer) or `cancel` (requester). */
+	action: PaymentRequestAction;
+}
 
 /** Options for {@link MySoMessagingStackClient.deleteMessage}. No encryption involved. */
 export interface DeleteMessageOptions {

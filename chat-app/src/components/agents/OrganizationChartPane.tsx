@@ -1,4 +1,4 @@
-import {useMemo, useState, type ReactNode} from 'react';
+import {useMemo, useState} from 'react';
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
 import {ChevronLeft, Ellipsis} from 'lucide-react';
 
@@ -22,6 +22,7 @@ import {useAllSubAgents} from '../../hooks/agents/useSubAgents';
 import {useProfileOverview} from '../../hooks/agents/useProfileOverview';
 import {MysoAmount} from './MysoAmount';
 import {formatMistAmount} from '../../lib/agents/format';
+import {StatTile, mysoUnitClass} from './StatTile';
 
 interface OrganizationChartPaneProps {
   organizationId: string;
@@ -45,17 +46,6 @@ function categoryLabel(orgType: string | number | null | undefined): string | nu
 
 const moreItemClass =
   'flex w-full cursor-pointer select-none items-center rounded-md px-3 py-2 text-left text-sm text-secondary-800 outline-none hover:bg-secondary-50 focus:bg-secondary-50 data-[disabled]:pointer-events-none data-[disabled]:opacity-50 dark:text-secondary-100 dark:hover:bg-secondary-800 dark:focus:bg-secondary-800';
-
-const mysoUnitClass = 'font-chakra text-[10px] font-medium tracking-wide';
-
-function Stat({label, value}: Readonly<{label: string; value: ReactNode}>) {
-  return (
-    <div className="min-w-0 rounded-md border border-border bg-muted/70 py-1.5 pr-4 pl-2.5">
-      <p className="text-[11px] text-secondary-500">{label}</p>
-      <p className="text-sm text-secondary-900 dark:text-secondary-50">{value}</p>
-    </div>
-  );
-}
 
 export function OrganizationChartPane({
   organizationId,
@@ -187,7 +177,7 @@ export function OrganizationChartPane({
                 <div>
                   {stats ? (
                     <dl className="flex flex-wrap gap-2 pb-2">
-                      <Stat
+                      <StatTile
                         label="Revenue"
                         value={
                           <MysoAmount
@@ -196,7 +186,7 @@ export function OrganizationChartPane({
                           />
                         }
                       />
-                      <Stat
+                      <StatTile
                         label="Loss"
                         value={
                           <MysoAmount
@@ -205,7 +195,7 @@ export function OrganizationChartPane({
                           />
                         }
                       />
-                      <Stat
+                      <StatTile
                         label="Net"
                         value={
                           <MysoAmount
@@ -214,9 +204,9 @@ export function OrganizationChartPane({
                           />
                         }
                       />
-                      <Stat label="Actions" value={formatCount(stats.totalActionsExecuted)} />
-                      <Stat label="AI events" value={formatCount(stats.aiCreditUsageEvents)} />
-                      <Stat
+                      <StatTile label="Actions" value={formatCount(stats.totalActionsExecuted)} />
+                      <StatTile label="AI events" value={formatCount(stats.aiCreditUsageEvents)} />
+                      <StatTile
                         label="AI spent"
                         value={
                           <MysoAmount
@@ -225,8 +215,8 @@ export function OrganizationChartPane({
                           />
                         }
                       />
-                      <Stat label="Engagement" value={formatCount(stats.totalEngagement)} />
-                      <Stat
+                      <StatTile label="Engagement" value={formatCount(stats.totalEngagement)} />
+                      <StatTile
                         label="Memory"
                         value={`${formatCount(stats.memoryEntries)} · ${formatByteSize(stats.memoryBytes)}`}
                       />
@@ -238,6 +228,7 @@ export function OrganizationChartPane({
             }
             roots={chartRoots}
             organizationId={organizationId}
+            onAgentCreated={() => void agents.refetch()}
             onChat={(node) => {
               const match = orgAgents.find((agent) => sameId(agent.agent_object_id, node.id));
               if (match) onChat(match);

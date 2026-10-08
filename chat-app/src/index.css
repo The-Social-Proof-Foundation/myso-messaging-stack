@@ -467,3 +467,45 @@
     stroke-dashoffset: 0;
   }
 }
+
+/* Newly created organization row / agent card: a short fade-and-settle, nothing bouncy. */
+@keyframes created-in {
+  0% {
+    opacity: 0;
+    transform: translateY(8px) scale(0.97);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes created-row-in {
+  0% {
+    opacity: 0;
+    transform: translateY(-6px);
+    background-color: rgb(191 239 106 / 0.14);
+  }
+  60% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  100% {
+    background-color: transparent;
+  }
+}
+
+.created-in {
+  animation: created-in 420ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.created-row-in {
+  animation: created-row-in 900ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .created-in,
+  .created-row-in {
+    animation: none;
+  }
+}

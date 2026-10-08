@@ -19,6 +19,7 @@ pub mod push;
 pub mod realtime;
 pub mod share_webhook;
 pub mod system_objects;
+pub mod transfer_confirmation;
 pub mod workflow_expiry;
 
 pub use attribution_verify::AttributionVerifyService;

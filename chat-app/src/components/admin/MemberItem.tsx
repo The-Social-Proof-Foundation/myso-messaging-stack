@@ -127,29 +127,33 @@ export function MemberItem({
         title={address}
         aria-expanded={isExpanded}
       >
-        <span
-          className={`inline-block h-1.5 w-1.5 shrink-0 rounded-full ${
-            online ? 'bg-green-500' : 'bg-secondary-300 dark:bg-secondary-600'
-          }`}
-          title={online ? 'Online' : 'Offline'}
-        />
-        <ReservationNavAvatar
-          address={address}
-          imageSrc={avatarSrc}
-          face={
-            showAgentOrb ? (
-              <AgentOrb
-                agentKey={address}
-                size={MEMBER_AVATAR_SIZE}
-                label={displayLabel}
-              />
-            ) : undefined
-          }
-          size={MEMBER_AVATAR_SIZE}
-          showRing={showRing}
-          ringPercent={ringPercent}
-          className="shrink-0"
-        />
+        <span className="relative shrink-0">
+          <ReservationNavAvatar
+            address={address}
+            imageSrc={avatarSrc}
+            face={
+              showAgentOrb ? (
+                <AgentOrb
+                  agentKey={address}
+                  size={MEMBER_AVATAR_SIZE}
+                  label={displayLabel}
+                />
+              ) : undefined
+            }
+            size={MEMBER_AVATAR_SIZE}
+            showRing={showRing}
+            ringPercent={ringPercent}
+            className="shrink-0"
+          />
+          {!showAgentOrb && (
+            <span
+              className={`absolute bottom-[2px] left-[2px] h-2 w-2 rounded-full ring-2 ring-secondary-100 dark:ring-secondary-800 ${
+                online ? 'bg-green-500' : 'bg-secondary-300 dark:bg-secondary-600'
+              }`}
+              title={online ? 'Online' : 'Offline'}
+            />
+          )}
+        </span>
         <span
           className={`min-w-0 flex-1 truncate font-medium ${
             isWalletLabel ? 'font-mono' : ''

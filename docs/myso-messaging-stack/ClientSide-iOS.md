@@ -73,10 +73,11 @@ Join/leave/remove are **first-class messages** on `GET /messages` and `message.c
 
 | Field | Meaning |
 |-------|---------|
-| `kind` | `"text"` (default), `"system"`, `"post"`, `"request_payment"`, `"poll"` |
+| `kind` | `"text"` (default), `"system"`, `"post"`, `"request_payment"`, `"poll"`, `"token_transfer"` |
 | `system` | `{ type, member, actor? }` — typed; never raw JSON metadata (system only) |
+| `metadata` | Relayer-owned cleartext payment state — `token_transfer` / `request_payment` only (see below) |
 
-Client creates use `text` | `post` | `request_payment` | `poll`. Signed canonical string is:
+Client creates use `text` | `post` | `request_payment` | `poll` | `token_transfer`. Signed canonical string is:
 
 ```
 {group_id}:{kind}:{encrypted_text}:{nonce}:{key_version}
@@ -93,7 +94,24 @@ https://dripdrop.social/p/{chainPostId}
 
 Inbox preview: `"Shared a post"`. iOS renders a post card; tap opens `SharedPostDeepLinkView` (refreshes detail; unavailable/deleted if fetch fails). Older clients that treat ciphertext as text still see the title + link.
 
-**`request_payment` / `poll`:** accepted by relayer + decoded on clients; no composer/bubble product UI yet — show neutral `"Message"` preview.
+**`poll`:** accepted by relayer + decoded on clients; no product UI yet — show neutral `"Message"` preview.
+
+### 1:1 DM payments (`token_transfer`, `request_payment`)
+
+Available **only in one-to-one DMs**: the relayer rejects both kinds in groups with more than two members and from agent senders, and derives the counterpart (`to` / `payer`) from membership — clients never choose it.
+
+The message body is **encrypted JSON** (`TokenTransferPayload` / `PaymentRequestPayload`: `{ v: 1, amount (base units, string), asset { kind: native|spt, id, symbol, name?, decimals, iconUrl? }, to | description?, note? }`). Only `metadata` is cleartext, and the relayer owns its `status`:
+
+| Kind | `metadata` | Status values |
+|------|-----------|---------------|
+| `token_transfer` | `{ asset_kind, digest, status, to, request_message_id?, reason?, sender_wallet? }` | `pending` → `success` \| `failed` |
+| `request_payment` | `{ asset_kind, payer, status, fulfilling_message_id?, fulfilled_digest? }` | `open` → `paid` \| `rejected` \| `cancelled` \| `expired`; a failed linked transfer reopens `paid` → `open` |
+
+**Send:** submit the on-chain transfer first (existing wallet send), then `POST /v1/messages` with `kind: token_transfer`, `idempotency_key = transfer:<sender lowercase>:<digest>`, and `metadata: { asset_kind, digest, request_message_id? }`. The per-message signature binds the digest and key: `{group}:token_transfer:{digest}:{idem}:{enc}:{nonce}:{key_version}` (digest/key case-sensitive). The relayer verifies the digest on-chain (`GetTransaction`: sender, success, and for SPT a matching `TokenTransferredEvent`), then flips `metadata.status` and emits `message.edited` (no `is_edited`). A transfer that executed but whose message failed to post is retried (iOS `PendingChatTransferStore`) — posting is idempotent per `(sender, digest)`.
+
+**Request:** `kind: request_payment`, `idempotency_key = request:<uuid>`, `metadata: { asset_kind }`. The payer **Confirms** by sending a `token_transfer` carrying `request_message_id` (the relayer links it: `open → paid`), or **Rejects** via `POST /v1/messages/respond { group_id, message_id, action: "reject" }`; the requester can `cancel`. Both kinds are immutable (no edit); `token_transfer` cannot be deleted, a request cannot be deleted once `paid`.
+
+iOS: `PaymentMessageModels.swift`, `ChatPaymentService.swift`, `PaymentBubbleCardView` + `SendFlowSheet(chatPayment:)`. The card *is* the bubble (no gradient chrome); tap a transfer → `TransactionHistoryDetailView`.
 
 v1 `system.type`: `member_joined` | `member_left` | `member_removed`. Unknown types → generic “Group updated” (or hide); do not crash.
 

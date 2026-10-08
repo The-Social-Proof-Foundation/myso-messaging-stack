@@ -12,8 +12,10 @@ use std::sync::Arc;
 
 use chrono::{TimeZone, Utc};
 use myso_rpc::field::{FieldMask, FieldMaskUtil};
+use myso_rpc::proto::myso::rpc::v2::get_checkpoint_request::CheckpointId;
+use myso_rpc::proto::myso::rpc::v2::ledger_service_client::LedgerServiceClient;
 use myso_rpc::proto::myso::rpc::v2::subscription_service_client::SubscriptionServiceClient;
-use myso_rpc::proto::myso::rpc::v2::SubscribeCheckpointsRequest;
+use myso_rpc::proto::myso::rpc::v2::{GetCheckpointRequest, SubscribeCheckpointsRequest};
 use tokio_stream::StreamExt;
 use tracing::{debug, error, info, warn};
 
@@ -46,6 +48,43 @@ use super::realtime::{notify_user_feed_event, DiscoveryReason, RealtimeHub, User
 use super::system_objects::{is_system_object, system_object_addresses};
 
 use crate::models::workflow_item::WorkflowItem;
+
+/// Fields read from every checkpoint, streamed or replayed.
+const CHECKPOINT_READ_MASK: &str =
+    "transactions.events,transactions.digest,transactions.transaction.sender";
+
+/// Most missed checkpoints replayed after a gap. A gap beyond this skips ahead
+/// rather than replaying for hours, and says so loudly.
+const DEFAULT_BACKFILL_MAX_CHECKPOINTS: u64 = 500_000;
+
+/// `MEMBERSHIP_BACKFILL_MAX_CHECKPOINTS`; `0` turns replay off.
+fn backfill_limit(raw: Option<&str>) -> u64 {
+    raw.and_then(|v| v.trim().parse().ok())
+        .unwrap_or(DEFAULT_BACKFILL_MAX_CHECKPOINTS)
+}
+
+/// Checkpoints to replay before processing a streamed one: `[start, end)`.
+///
+/// The live subscription only delivers checkpoints from the moment it connects,
+/// so anything produced while the relayer was down, restarting or reconnecting
+/// is never delivered, and a group created in that window stays unreadable
+/// ("not a member") until someone replays it. `last` is the last checkpoint
+/// processed and `streamed` is the one that just arrived.
+///
+/// Returns `None` when nothing is missing or replay is off; otherwise the range
+/// and whether it was truncated to `limit` (the oldest checkpoints are dropped).
+fn backfill_range(last: u64, streamed: u64, limit: u64) -> Option<(u64, u64, bool)> {
+    if limit == 0 || streamed <= last.saturating_add(1) {
+        return None;
+    }
+    let first_missing = last + 1;
+    let missed = streamed - first_missing;
+    if missed > limit {
+        Some((streamed - limit, streamed, true))
+    } else {
+        Some((first_missing, streamed, false))
+    }
+}
 
 pub struct MembershipSyncService {
     myso_rpc_url: String,
@@ -381,13 +420,19 @@ impl MembershipSyncService {
 
         // Build the subscription request with field mask
         let mut request = SubscribeCheckpointsRequest::default();
-        request.read_mask = Some(FieldMask::from_str(
-            "transactions.events,transactions.digest,transactions.transaction.sender",
-        ));
+        request.read_mask = Some(FieldMask::from_str(CHECKPOINT_READ_MASK));
 
         let mut stream = client.subscribe_checkpoints(request).await?.into_inner();
 
         info!("Subscribed to checkpoint stream");
+
+        // Used to replay checkpoints the live stream skipped.
+        let mut ledger = LedgerServiceClient::connect(self.myso_rpc_url.clone()).await?;
+        let backfill_max = backfill_limit(
+            std::env::var("MEMBERSHIP_BACKFILL_MAX_CHECKPOINTS")
+                .ok()
+                .as_deref(),
+        );
 
         // Process each checkpoint as it arrives
         while let Some(response) = stream.next().await {
@@ -407,6 +452,49 @@ impl MembershipSyncService {
                     self.last_cursor = None;
                 } else if cursor <= last {
                     continue;
+                } else if let Some((start, end, truncated)) =
+                    backfill_range(last, cursor, backfill_max)
+                {
+                    if truncated {
+                        warn!(
+                            "Missed {} checkpoints while disconnected; replaying only the last {} \
+                             (MEMBERSHIP_BACKFILL_MAX_CHECKPOINTS). Groups created earlier in the \
+                             gap will not be recognized.",
+                            cursor - last - 1,
+                            backfill_max
+                        );
+                    }
+                    info!(
+                        "Replaying missed checkpoints {}..{} before resuming the stream",
+                        start, end
+                    );
+                    for seq in start..end {
+                        let mut req = GetCheckpointRequest::default();
+                        req.checkpoint_id = Some(CheckpointId::SequenceNumber(seq));
+                        req.read_mask = Some(FieldMask::from_str(CHECKPOINT_READ_MASK));
+                        match ledger.get_checkpoint(req).await {
+                            Ok(resp) => {
+                                if let Some(missed) = resp.into_inner().checkpoint {
+                                    self.process_checkpoint(&missed, seq).await;
+                                }
+                            }
+                            // tonic::Code::NotFound == 5 (tonic is only a dev-dependency
+                            // here). The node pruned it; nothing to replay.
+                            Err(status) if status.code() as i32 == 5 => {
+                                debug!("checkpoint {seq} no longer available; skipping");
+                            }
+                            // Anything else: leave the cursor where it is and let the
+                            // reconnect loop retry from the first unprocessed checkpoint.
+                            Err(status) => {
+                                return Err(format!("replaying checkpoint {seq}: {status}").into());
+                            }
+                        }
+                        self.last_cursor = Some(seq);
+                        self.membership_store.set_last_checkpoint_cursor(seq);
+                        if (seq - start + 1) % 5_000 == 0 {
+                            info!("Replayed {} / {} missed checkpoints", seq - start + 1, end - start);
+                        }
+                    }
                 }
             }
 
@@ -874,5 +962,42 @@ impl MembershipSyncService {
                 None
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod backfill_tests {
+    use super::*;
+
+    #[test]
+    fn nothing_is_replayed_when_the_stream_is_contiguous() {
+        assert_eq!(backfill_range(100, 101, 1_000), None);
+        assert_eq!(backfill_range(100, 100, 1_000), None);
+        assert_eq!(backfill_range(100, 50, 1_000), None);
+    }
+
+    #[test]
+    fn a_gap_is_replayed_up_to_but_not_including_the_streamed_checkpoint() {
+        assert_eq!(backfill_range(100, 105, 1_000), Some((101, 105, false)));
+        assert_eq!(backfill_range(100, 102, 1_000), Some((101, 102, false)));
+    }
+
+    #[test]
+    fn a_huge_gap_keeps_only_the_newest_checkpoints_and_says_so() {
+        assert_eq!(backfill_range(0, 10_001, 100), Some((9_901, 10_001, true)));
+        assert_eq!(backfill_range(0, 101, 100), Some((1, 101, false)));
+    }
+
+    #[test]
+    fn a_zero_limit_disables_replay() {
+        assert_eq!(backfill_range(100, 500, 0), None);
+    }
+
+    #[test]
+    fn the_backfill_limit_parses_and_falls_back() {
+        assert_eq!(backfill_limit(None), DEFAULT_BACKFILL_MAX_CHECKPOINTS);
+        assert_eq!(backfill_limit(Some("garbage")), DEFAULT_BACKFILL_MAX_CHECKPOINTS);
+        assert_eq!(backfill_limit(Some(" 250 ")), 250);
+        assert_eq!(backfill_limit(Some("0")), 0);
     }
 }

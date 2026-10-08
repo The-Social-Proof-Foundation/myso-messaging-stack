@@ -3,12 +3,15 @@ import type {Signer} from '@socialproof/myso/cryptography';
 import type {Transaction} from '@socialproof/myso/transactions';
 
 import {signAndExecuteTransactionAndWait} from '../sign-and-wait';
+import {zkLoginChainAddress} from '../zklogin-signin';
+import {executeAsHuman} from './execute';
 
 /** Minimal surface used from the messaging stack client (same shape the group flows use). */
 type GrantClient = ClientWithCoreApi & {
   messaging: {
     bcs: {
       MessagingSender: {name: string};
+      MessagingReader: {name: string};
     };
   };
   groups: {
@@ -89,9 +92,15 @@ export async function grantMessagingPermission(options: {
   groupId: string;
   member: string;
   permissionType: string;
+  /**
+   * Act as the human principal. In a zkLogin session the principal is the zkLogin account, not the
+   * ephemeral messaging key, so permission checks and the transaction must use that address.
+   */
+  asPrincipal?: boolean;
 }): Promise<void> {
-  const {client, signer, groupId, member, permissionType} = options;
-  const signerAddress = signer.toMySoAddress();
+  const {client, signer, groupId, member, permissionType, asPrincipal} = options;
+  const principalAddress = asPrincipal ? zkLoginChainAddress() : null;
+  const signerAddress = principalAddress ?? signer.toMySoAddress();
   const extensionAdminType = client.groups.bcs.ExtensionPermissionsAdmin.name;
   const signerHasExtensionAdmin = await readPermission(
     client,
@@ -132,7 +141,11 @@ export async function grantMessagingPermission(options: {
     });
   }
 
-  await signAndExecuteTransactionAndWait(client, signer, tx);
+  if (principalAddress) {
+    await executeAsHuman(client, signer, tx);
+  } else {
+    await signAndExecuteTransactionAndWait(client, signer, tx);
+  }
 }
 
 /** Already repaired this group in this session, so opening a chat does not re-check. */
@@ -155,22 +168,24 @@ export async function ensureAgentChatSendPermission(options: {
   member: string;
 }): Promise<boolean> {
   const {client, signer, groupId, member} = options;
-  const senderType = client.messaging.bcs.MessagingSender.name;
-  const alreadyCanSend = await readPermission(client, groupId, member, senderType);
-  if (alreadyCanSend === true) {
-    repairedGroups.add(groupId);
+  const key = `${groupId}:${member.toLowerCase()}`;
+  if (repairedGroups.has(key)) return false;
+
+  // The relayer authenticates `member` (the messaging address), so it needs Reader to load the
+  // chat as well as Sender to reply. The agent-group contract only grants the principal Reader.
+  const missing: string[] = [];
+  for (const type of [client.messaging.bcs.MessagingReader.name, client.messaging.bcs.MessagingSender.name]) {
+    if ((await readPermission(client, groupId, member, type)) !== true) missing.push(type);
+  }
+  if (missing.length === 0) {
+    repairedGroups.add(key);
     return false;
   }
-  if (repairedGroups.has(groupId)) return false;
 
-  await grantMessagingPermission({
-    client,
-    signer,
-    groupId,
-    member,
-    permissionType: senderType,
-  });
-  repairedGroups.add(groupId);
+  for (const permissionType of missing) {
+    await grantMessagingPermission({client, signer, groupId, member, permissionType, asPrincipal: true});
+  }
+  repairedGroups.add(key);
   return true;
 }
 
@@ -186,7 +201,6 @@ export function repairAgentChatSendPermissionOnce(options: {
   groupId: string;
   member: string;
 }): void {
-  if (repairedGroups.has(options.groupId)) return;
   void ensureAgentChatSendPermission(options).catch((error: unknown) => {
     console.warn('[chat-app] could not grant send permission on agent chat:', error);
   });

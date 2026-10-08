@@ -8,7 +8,10 @@ import {
   type AgentChartStatus,
 } from '@/lib/agents/agent-chart';
 import {AgentChartNodeCard} from './AgentChartNodeCard';
+import {useNewKeys} from '@/hooks/useNewKeys';
+import {useAgentStats, type AgentStats} from '@/hooks/agents/useAgentStats';
 import {AgentProfileDrawer} from './AgentProfileDrawer';
+import {AgentCreateCard} from '../agents/AgentCreateForm';
 import {
   AgentChartToolbar,
   statusFilterLabel,
@@ -26,6 +29,10 @@ interface AgentOrgChartProps {
   actions?: ReactNode;
   details?: ReactNode;
   onChat?: (agent: AgentChartNode) => void;
+  /** Replaces the built-in empty state (the inline create card). */
+  emptyState?: ReactNode;
+  /** Called after the inline create card registers an agent. */
+  onAgentCreated?: () => void;
 }
 
 function parentIds(nodes: AgentChartNode[]): string[] {
@@ -60,9 +67,16 @@ export function AgentOrgChart({
   actions,
   details,
   onChat,
+  emptyState,
+  onAgentCreated,
 }: Readonly<AgentOrgChartProps>) {
   const canvasRef = useRef<HTMLDivElement>(null);
   const agents = useMemo(() => flattenAgentChart(roots), [roots]);
+  const agentStats = useAgentStats(organizationId, agents);
+  const freshAgentIds = useNewKeys(
+    agents.map((agent) => agent.id),
+    organizationId ?? title,
+  );
   const [selectedId, setSelectedId] = useState<string | null>(roots[0]?.id ?? null);
   const [searchQuery, setSearchQuery] = useState('');
   const [filter, setFilter] = useState<AgentChartFilter>('all');
@@ -155,9 +169,15 @@ export function AgentOrgChart({
       <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
         <div ref={canvasRef} className="bg-chart-plus min-h-0 min-w-0 flex-1 overflow-auto">
           {roots.length === 0 ? (
-            <p className="px-4 py-10 text-center text-sm text-muted-foreground">
-              No agents in this organization yet.
-            </p>
+            emptyState ?? (
+              organizationId ? (
+                <AgentCreateCard organizationId={organizationId} onCreated={onAgentCreated} />
+              ) : (
+                <p className="px-4 py-10 text-center text-sm text-muted-foreground">
+                  No agents in this organization yet.
+                </p>
+              )
+            )
           ) : (
             <div
               className="flex w-max min-w-full justify-center px-6 py-8 transition-transform duration-200"
@@ -173,6 +193,8 @@ export function AgentOrgChart({
                     matchingIds={matchingIds}
                     searchQuery={searchQuery}
                     isDimmed={isDimmed}
+                    freshIds={freshAgentIds}
+                    statsById={agentStats}
                     onSelect={selectAgent}
                     onToggleExpand={toggleExpand}
                   />
@@ -216,6 +238,8 @@ function AgentChartBranch({
   matchingIds,
   searchQuery,
   isDimmed,
+  freshIds,
+  statsById,
   onSelect,
   onToggleExpand,
 }: Readonly<{
@@ -225,6 +249,8 @@ function AgentChartBranch({
   matchingIds: Set<string>;
   searchQuery: string;
   isDimmed: (node: AgentChartNode) => boolean;
+  freshIds: ReadonlySet<string>;
+  statsById: ReadonlyMap<string, AgentStats>;
   onSelect: (node: AgentChartNode) => void;
   onToggleExpand: (id: string) => void;
 }>) {
@@ -239,6 +265,8 @@ function AgentChartBranch({
         isHighlighted={searchQuery.trim().length > 0 && matchingIds.has(node.id)}
         isDimmed={isDimmed(node)}
         isExpanded={expanded}
+        isNew={freshIds.has(node.id)}
+        stats={statsById.get(node.id)}
         onSelect={onSelect}
         onToggleExpand={children.length > 0 ? onToggleExpand : undefined}
       />
@@ -267,6 +295,8 @@ function AgentChartBranch({
                   matchingIds={matchingIds}
                   searchQuery={searchQuery}
                   isDimmed={isDimmed}
+                  freshIds={freshIds}
+                  statsById={statsById}
                   onSelect={onSelect}
                   onToggleExpand={onToggleExpand}
                 />

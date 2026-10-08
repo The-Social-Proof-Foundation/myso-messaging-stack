@@ -70,8 +70,10 @@ export {
 	verifyMessageSender,
 	buildCanonicalMessage,
 	normalizeSharedPostAddress,
+	transferIdempotencyKey,
 	type VerifyMessageSenderParams,
 } from './verification.js';
+export * from './payments.js';
 export {
 	createAgentMessagingClient,
 	createPrincipalMessagingClient,

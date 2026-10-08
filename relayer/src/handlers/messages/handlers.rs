@@ -9,6 +9,10 @@ use uuid::Uuid;
 
 use crate::auth::signature::verify_signature;
 use crate::auth::AuthContext;
+use crate::models::payment_metadata::{
+    parse_payment_request_create, parse_token_transfer_create, payment_request_metadata,
+    token_transfer_metadata, PaymentRequestCreate, TokenTransferCreate,
+};
 use crate::models::{Attachment, Message, MessageAttribution, MessageKind};
 use crate::state::AppState;
 use crate::storage::StorageError;
@@ -93,7 +97,7 @@ pub async fn create_message(
     let kind_str = req.kind.as_deref().unwrap_or("text");
     let kind = MessageKind::parse_client_kind(kind_str).ok_or_else(|| {
         ApiError::BadRequest(format!(
-            "Invalid message kind '{}': expected text, post, request_payment, or poll",
+            "Invalid message kind '{}': expected text, post, request_payment, poll, or token_transfer",
             kind_str
         ))
     })?;
@@ -128,8 +132,39 @@ pub async fn create_message(
         None
     };
 
+    // 1:1 DM payment kinds: validate allowlisted cleartext metadata up front.
+    // Status / payer / recipient are derived by the relayer below, never trusted.
+    let mut transfer_create: Option<TokenTransferCreate> = if kind == MessageKind::TokenTransfer {
+        Some(
+            parse_token_transfer_create(
+                req.metadata.as_ref(),
+                idempotency_key.as_deref(),
+                &req.sender_address,
+            )
+            .map_err(|e| ApiError::BadRequest(e.to_string()))?,
+        )
+    } else {
+        None
+    };
+    let request_create: Option<PaymentRequestCreate> = if kind == MessageKind::RequestPayment {
+        Some(
+            parse_payment_request_create(req.metadata.as_ref(), idempotency_key.as_deref())
+                .map_err(|e| ApiError::BadRequest(e.to_string()))?,
+        )
+    } else {
+        None
+    };
+
+    // Per-message signature binds: post -> shared_post_address, token_transfer -> digest
+    // (so recipients can verify the digest independently of relayer-owned metadata).
+    let signed_bind: Option<&str> = match (&shared_post_address, &transfer_create) {
+        (Some(post), _) => Some(post.as_str()),
+        (None, Some(t)) => Some(t.digest.as_str()),
+        _ => None,
+    };
+
     // Verify per-message signature over canonical content (includes kind;
-    // post binds shared_post_address + idempotency_key).
+    // post / token_transfer bind a cleartext reference + idempotency_key).
     let signature = verify_message_signature(
         &req.message_signature,
         &req.group_id,
@@ -138,7 +173,7 @@ pub async fn create_message(
         &req.nonce,
         req.key_version,
         &auth,
-        shared_post_address.as_deref(),
+        signed_bind,
         idempotency_key.as_deref(),
     )?;
 
@@ -166,17 +201,58 @@ pub async fn create_message(
 
     // Resolve the 1:1 DM peer once (exactly one other member in the group's
     // on-chain-synced membership) — shared by the block check and paid-DM gate.
-    let dm_peer: Option<String> =
-        if state.block_check.is_enabled() || state.message_gate.is_enabled() {
-            let members = state.membership_store.list_member_addresses(&req.group_id);
-            let mut peers = members.into_iter().filter(|m| m != &req.sender_address);
-            match (peers.next(), peers.next()) {
-                (Some(peer), None) => Some(peer),
-                _ => None,
+    let dm_peer: Option<String> = if state.block_check.is_enabled()
+        || state.message_gate.is_enabled()
+        || kind.is_dm_payment_kind()
+    {
+        let members = state.membership_store.list_member_addresses(&req.group_id);
+        let mut peers = members.into_iter().filter(|m| m != &req.sender_address);
+        match (peers.next(), peers.next()) {
+            (Some(peer), None) => Some(peer),
+            _ => None,
+        }
+    } else {
+        None
+    };
+
+    // Payments exist only in 1:1 DMs: the counterpart (payer / recipient) is derived from
+    // membership, and agent senders cannot send payment messages.
+    let payment_peer: Option<String> = if kind.is_dm_payment_kind() {
+        if attribution.is_agent_message() {
+            return Err(ApiError::BadRequest(
+                "Payment messages cannot be sent by agents".to_string(),
+            ));
+        }
+        Some(dm_peer.clone().ok_or_else(|| {
+            ApiError::BadRequest(
+                "Payment messages are only available in 1:1 direct messages".to_string(),
+            )
+        })?)
+    } else {
+        None
+    };
+
+    // A transfer may settle a payment request. Keep the link only when the request is open,
+    // in this group, and addressed to the sender; otherwise the (already on-chain) transfer
+    // is still recorded, just unlinked.
+    if let Some(transfer) = transfer_create.as_mut() {
+        if let Some(request_id) = transfer.request_message_id {
+            let valid = crate::services::transfer_confirmation::request_link_is_valid(
+                &state,
+                &req.group_id,
+                &req.sender_address,
+                request_id,
+            )
+            .await;
+            if !valid {
+                tracing::warn!(
+                    request = %request_id,
+                    "payment request link rejected; recording transfer unlinked"
+                );
+                transfer.request_message_id = None;
             }
-        } else {
-            None
-        };
+        }
+    }
 
     // DM block check
     if state.block_check.is_enabled() {
@@ -246,6 +322,11 @@ pub async fn create_message(
         kind,
         idempotency_key.clone(),
     );
+    let message = match (&transfer_create, &request_create, payment_peer.as_deref()) {
+        (Some(t), _, Some(peer)) => message.with_metadata(token_transfer_metadata(t, peer)),
+        (_, Some(r), Some(peer)) => message.with_metadata(payment_request_metadata(r, peer)),
+        _ => message,
+    };
 
     // Store message — idempotent create returns existing row on key conflict.
     let created = match state.storage.create_message(message).await {
@@ -253,6 +334,9 @@ pub async fn create_message(
         Err(StorageError::DuplicateIdempotencyKey) => {
             if let Some(key) = idempotency_key.as_deref() {
                 if let Some(existing) = state.storage.get_message_by_idempotency_key(key).await? {
+                    if existing.sender_wallet_addr != sender_address {
+                        return Err(StorageError::DuplicateIdempotencyKey.into());
+                    }
                     return Ok((
                         StatusCode::OK,
                         Json(CreateMessageResponse {
@@ -265,6 +349,32 @@ pub async fn create_message(
         }
         Err(e) => return Err(e.into()),
     };
+
+    // Settle the linked payment request (open -> paid, CAS) before confirmation starts.
+    if let Some(transfer) = &transfer_create {
+        if let Some(request_id) = transfer.request_message_id {
+            crate::services::transfer_confirmation::mark_request_paid(
+                &state,
+                request_id,
+                created.id,
+                &transfer.digest,
+            )
+            .await;
+        }
+    }
+
+    // Token transfers: resolve the on-chain digest now (don't wait for the sweeper).
+    if created.kind == MessageKind::TokenTransfer {
+        let confirm_state = state.clone();
+        let confirm_msg = created.clone();
+        tokio::spawn(async move {
+            crate::services::transfer_confirmation::confirm_transfer_message(
+                &confirm_state,
+                confirm_msg,
+            )
+            .await;
+        });
+    }
 
     // Human tip wins over a pending invitee-join debounce.
     state.begin_chat_notify.cancel(&group_id);
@@ -420,6 +530,11 @@ pub async fn update_message(
             "Post share messages are immutable".to_string(),
         ));
     }
+    if existing_message.kind.is_dm_payment_kind() {
+        return Err(ApiError::BadRequest(
+            "Payment messages are immutable".to_string(),
+        ));
+    }
 
     // Only the original sender can edit their message (middleware-verified address)
     if existing_message.sender_wallet_addr != auth.sender_address {
@@ -516,6 +631,27 @@ pub async fn delete_message(
         ));
     }
 
+    match existing_message.kind {
+        MessageKind::TokenTransfer => {
+            return Err(ApiError::BadRequest(
+                "Token transfer messages cannot be deleted".to_string(),
+            ));
+        }
+        MessageKind::RequestPayment => {
+            let status = existing_message
+                .metadata
+                .as_ref()
+                .and_then(|m| m.get("status"))
+                .and_then(|v| v.as_str());
+            if status == Some("paid") {
+                return Err(ApiError::BadRequest(
+                    "A paid payment request cannot be deleted".to_string(),
+                ));
+            }
+        }
+        _ => {}
+    }
+
     let deleted = state.storage.delete_message(message_id).await?;
 
     // Open-thread tombstone fan-out (no activity bump / push).
@@ -595,7 +731,7 @@ fn message_content_canonical(
     idempotency_key: Option<&str>,
 ) -> String {
     let group_id = group_id.to_ascii_lowercase();
-    if kind == "post" {
+    if kind == "post" || kind == "token_transfer" {
         let post = shared_post_address.unwrap_or("");
         let idem = idempotency_key.unwrap_or("");
         format!(
@@ -665,6 +801,23 @@ mod shared_post_canonical_tests {
             let c = message_content_canonical(group, kind, "deadbeef", "00", 3, None, None);
             assert_eq!(c, format!("0xabcd:{kind}:deadbeef:00:3"));
         }
+    }
+
+    #[test]
+    fn token_transfer_canonical_binds_digest_and_idempotency_key() {
+        let c = message_content_canonical(
+            "0xGROUP",
+            "token_transfer",
+            "deadbeef",
+            "00",
+            2,
+            Some("DiGeSt1"),
+            Some("transfer:0xabc:DiGeSt1"),
+        );
+        assert_eq!(
+            c,
+            "0xgroup:token_transfer:DiGeSt1:transfer:0xabc:DiGeSt1:deadbeef:00:2"
+        );
     }
 
     #[test]

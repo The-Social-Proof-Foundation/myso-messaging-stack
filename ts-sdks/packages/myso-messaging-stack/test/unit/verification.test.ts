@@ -10,6 +10,7 @@ import {
 	buildCanonicalMessage,
 	normalizeSharedPostAddress,
 	signMessageContent,
+	transferIdempotencyKey,
 	verifyMessageSender,
 } from '../../src/verification.js';
 
@@ -310,5 +311,54 @@ describe('verifyMessageSender', () => {
 		});
 
 		expect(result).toBe(false);
+	});
+});
+
+describe('token_transfer canonical + signing', () => {
+	const DIGEST = '5Hs8kmZjK9v7E2f1cQ3tYpLwNx4RbUaVd6GhTeJ8CqMn';
+
+	it('matches the relayer canonical string (digest and key verbatim, group lowercased)', () => {
+		const bytes = buildCanonicalMessage({
+			groupId: '0xGROUP',
+			kind: 'token_transfer',
+			encryptedText: new Uint8Array([0xde, 0xad, 0xbe, 0xef]),
+			nonce: new Uint8Array([0x00]),
+			keyVersion: 2n,
+			transferDigest: 'DiGeSt1',
+			idempotencyKey: 'transfer:0xabc:DiGeSt1',
+		});
+		expect(new TextDecoder().decode(bytes)).toBe(
+			'0xgroup:token_transfer:DiGeSt1:transfer:0xabc:DiGeSt1:deadbeef:00:2',
+		);
+	});
+
+	it('idempotency key is sender-scoped and lowercases the sender only', () => {
+		expect(transferIdempotencyKey('0xABC', DIGEST)).toBe(`transfer:0xabc:${DIGEST}`);
+	});
+
+	it('sign-then-verify roundtrips and a different digest fails', async () => {
+		const keypair = Ed25519Keypair.generate();
+		const sender = keypair.toMySoAddress();
+		const params = {
+			...makeMessageParams(),
+			kind: 'token_transfer' as const,
+			transferDigest: DIGEST,
+			idempotencyKey: transferIdempotencyKey(sender, DIGEST),
+		};
+		const signature = await signMessageContent(keypair, params);
+		const publicKey = toHex(keypair.getPublicKey().toMySoBytes());
+
+		expect(await verifyMessageSender({ ...params, senderAddress: sender, signature, publicKey })).toBe(
+			true,
+		);
+		expect(
+			await verifyMessageSender({
+				...params,
+				transferDigest: 'differentDigest0000000000000000000000000',
+				senderAddress: sender,
+				signature,
+				publicKey,
+			}),
+		).toBe(false);
 	});
 });

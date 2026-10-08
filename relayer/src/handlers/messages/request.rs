@@ -74,10 +74,15 @@ pub struct CreateMessageRequest {
     /// Hex-encoded 64-byte signature over
     /// text: "{group_id}:{kind}:{encrypted_text}:{nonce}:{key_version}"
     /// post: "{group_id}:post:{shared_post_address}:{idempotency_key}:{encrypted_text}:{nonce}:{key_version}"
+    /// token_transfer: "{group_id}:token_transfer:{digest}:{idempotency_key}:{encrypted_text}:{nonce}:{key_version}"
     pub message_signature: String,
-    /// Timeline kind: `text` (default), `post`, `request_payment`, `poll`.
+    /// Timeline kind: `text` (default), `post`, `request_payment`, `poll`, `token_transfer`.
     #[serde(default)]
     pub kind: Option<String>,
+    /// Cleartext metadata for 1:1 DM payment kinds (`token_transfer`, `request_payment`).
+    /// Only allowlisted fields are read; status is always set by the relayer.
+    #[serde(default)]
+    pub metadata: Option<serde_json::Value>,
     /// Client idempotency key — duplicate POSTs return the existing message.
     #[serde(default)]
     pub idempotency_key: Option<String>,

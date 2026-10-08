@@ -98,6 +98,16 @@ pub struct FollowChangedEvent {
     pub following: bool,
 }
 
+/// P2P SPT transfer from `social_proof_tokens::TokenTransferredEvent`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TokenTransferredEvent {
+    pub pool_id: String,
+    pub from: String,
+    pub to: String,
+    /// Nano-SPT transferred.
+    pub amount: u64,
+}
+
 /// Spend approval lifecycle from `social_contracts::ai_credit` (social package).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AiCreditApprovalEvent {
@@ -535,6 +545,14 @@ struct BcsFollowChanged {
 }
 
 #[derive(Debug, Deserialize)]
+struct BcsTokenTransferred {
+    pool_id: [u8; 32],
+    from: [u8; 32],
+    to: [u8; 32],
+    amount: u64,
+}
+
+#[derive(Debug, Deserialize)]
 struct BcsAiCreditSpendApproved {
     balance_id: BcsMoveObjectId,
     agent_object_id: BcsMoveObjectId,
@@ -859,6 +877,35 @@ pub fn parse_follow_changed_event(
         follower: format_address(event_data.follower),
         followee: format_address(event_data.followee),
         following,
+    })
+}
+
+/// Parses `social_proof_tokens::TokenTransferredEvent` (social package).
+pub fn parse_token_transferred_event(
+    event: &Event,
+    social_package_id: &str,
+) -> Option<TokenTransferredEvent> {
+    let event_type = event.event_type.as_ref()?;
+    if !event_type.contains("::social_proof_tokens::TokenTransferredEvent") {
+        return None;
+    }
+    if !is_event_from_package(event_type, social_package_id) {
+        return None;
+    }
+    let contents = event.contents.as_ref()?;
+    let bcs_bytes = contents.value.as_ref()?;
+    parse_token_transferred_bcs(bcs_bytes)
+}
+
+pub fn parse_token_transferred_bcs(bcs_bytes: &[u8]) -> Option<TokenTransferredEvent> {
+    let data: BcsTokenTransferred = bcs::from_bytes(bcs_bytes)
+        .map_err(|e| warn!("Failed to parse TokenTransferredEvent BCS: {}", e))
+        .ok()?;
+    Some(TokenTransferredEvent {
+        pool_id: format_address(data.pool_id),
+        from: format_address(data.from),
+        to: format_address(data.to),
+        amount: data.amount,
     })
 }
 
@@ -1302,5 +1349,22 @@ mod tests {
         );
         assert_eq!(parsed.approval_nonce(), 1);
         assert_eq!(parsed.workflow_payload_patch()["max_amount_mist"], 1_000);
+    }
+    #[test]
+    fn parses_token_transferred_event() {
+        // Same layout as the Move struct: pool_id, from, to (32-byte addresses), amount (u64).
+        let bcs = bcs::to_bytes(&([1u8; 32], [2u8; 32], [3u8; 32], 5u64)).unwrap();
+        let mut bcs_msg = myso_rpc::proto::myso::rpc::v2::Bcs::default();
+        bcs_msg.value = Some(bcs.into());
+        let mut event = myso_rpc::proto::myso::rpc::v2::Event::default();
+        event.event_type =
+            Some("0x50c1::social_proof_tokens::TokenTransferredEvent".to_string());
+        event.contents = Some(bcs_msg);
+
+        let parsed = parse_token_transferred_event(&event, "0x50c1").expect("should parse");
+        assert_eq!(parsed.from, format!("0x{}", hex::encode([2u8; 32])));
+        assert_eq!(parsed.to, format!("0x{}", hex::encode([3u8; 32])));
+        assert_eq!(parsed.amount, 5);
+        assert!(parse_token_transferred_event(&event, "0xdead").is_none());
     }
 }

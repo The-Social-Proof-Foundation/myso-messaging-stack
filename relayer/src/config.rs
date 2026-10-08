@@ -422,8 +422,32 @@ impl Config {
             begin_chat_notify_debounce_secs,
         };
 
-        info!("Configuration loaded: {:?}", config);
+        info!("Configuration loaded: {}", config.redacted_debug());
         config
+    }
+
+    /// `Debug` output with every credential value replaced.
+    ///
+    /// The startup log used to print `{:?}` of the whole config, which put the R2
+    /// secret key and the internal sync secret into every log drain. Redacting by
+    /// value (rather than by field) means a credential added to `Config` later is
+    /// still covered once it is listed here, and the derive stays untouched.
+    pub fn redacted_debug(&self) -> String {
+        let mut dump = format!("{:?}", self);
+        let secrets = [
+            self.r2_access_key_id.as_deref(),
+            self.r2_secret_access_key.as_deref(),
+            self.internal_sync_secret.as_deref(),
+            self.apns_key_id.as_deref(),
+        ];
+        for secret in secrets.into_iter().flatten() {
+            // Very short values would shred unrelated text; none of the real
+            // credentials are this short.
+            if secret.len() >= 6 {
+                dump = dump.replace(secret, "<redacted>");
+            }
+        }
+        dump
     }
 }
 
@@ -512,6 +536,25 @@ mod tests {
         let config = Config::default();
         assert_eq!(config.port, 3000);
         assert_eq!(config.request_ttl_seconds, 900);
+    }
+
+    #[test]
+    fn startup_log_never_contains_credentials() {
+        let mut config = Config::default();
+        config.r2_access_key_id = Some("AKIA-test-access-key".into());
+        config.r2_secret_access_key = Some("super-secret-r2-value".into());
+        config.internal_sync_secret = Some("change-me-in-production".into());
+        let dump = config.redacted_debug();
+        for secret in [
+            "AKIA-test-access-key",
+            "super-secret-r2-value",
+            "change-me-in-production",
+        ] {
+            assert!(!dump.contains(secret), "{secret} leaked into: {dump}");
+        }
+        assert!(dump.contains("<redacted>"));
+        // Everything else is still there for debugging.
+        assert!(dump.contains("port:"));
     }
 
     #[test]

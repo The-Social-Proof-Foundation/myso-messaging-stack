@@ -2,6 +2,7 @@ import {useMemo} from 'react';
 import {ChevronLeft, ChevronRight, Plus} from 'lucide-react';
 
 import {agentCountLabel, graphqlNumber, type ProfileOrganization} from '../../lib/agents/profile-graphql';
+import {useNewKeys} from '../../hooks/useNewKeys';
 import {useProfileOverview} from '../../hooks/agents/useProfileOverview';
 import {Button} from '../Button';
 import {sidebarShellClass} from '../SidebarShell';
@@ -40,6 +41,12 @@ export function AgentListView({
   const organizations = useMemo(
     () => [...(overview.data?.organizations ?? [])].sort(compareOrganizations),
     [overview.data?.organizations],
+  );
+
+  const freshOrganizations = useNewKeys(
+    organizations.map((org) => org.organizationId.toLowerCase()),
+    'organizations',
+    !overview.isPending,
   );
 
   return (
@@ -91,7 +98,9 @@ export function AgentListView({
             return (
               <li
                 key={org.organizationId}
-                className="border-b border-secondary-200 dark:border-secondary-700"
+                className={`border-b border-secondary-200 dark:border-secondary-700 ${
+                  freshOrganizations.has(org.organizationId.toLowerCase()) ? 'created-row-in' : ''
+                }`}
               >
                 <button
                   type="button"

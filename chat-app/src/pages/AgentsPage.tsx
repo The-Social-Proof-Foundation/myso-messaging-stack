@@ -1,6 +1,7 @@
 import {useCallback} from 'react';
 import {Navigate, useSearchParams} from 'react-router-dom';
 
+import {AutomationPanel} from '../components/agents/AutomationPanel';
 import {CreditsPanel} from '../components/agents/CreditsPanel';
 import {OrganizationsPanel} from '../components/agents/OrganizationsPanel';
 import {chipClass, pageTitleClass} from '../components/agents/chrome';
@@ -89,7 +90,12 @@ export function AgentsPage() {
           ))}
         </div>
 
-        {tab === 'overview' ? <CreditsPanel /> : null}
+        {tab === 'overview' ? (
+          <>
+            <CreditsPanel />
+            <AutomationPanel />
+          </>
+        ) : null}
         {organizationsTab ? <OrganizationsPanel /> : null}
       </div>
     </main>

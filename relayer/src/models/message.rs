@@ -217,6 +217,12 @@ impl Message {
         self.kind.is_system()
     }
 
+    /// Attaches relayer-validated cleartext metadata (payment kinds).
+    pub fn with_metadata(mut self, metadata: serde_json::Value) -> Self {
+        self.metadata = Some(metadata);
+        self
+    }
+
     /// Sets the order field (called by storage layer after determining next order)
     pub fn set_order(&mut self, order: i64) {
         self.order = Some(order);

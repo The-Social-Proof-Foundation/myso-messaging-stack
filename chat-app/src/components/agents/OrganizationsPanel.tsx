@@ -313,6 +313,7 @@ function OrganizationDetail({organizationId}: Readonly<{organizationId: string}>
           title={row.name || 'Untitled'}
           roots={chartRoots}
           organizationId={organizationId}
+          onAgentCreated={() => void agents.refetch()}
         />
       )}
       {!agents.complete && !agents.isLoading && !agents.isError ? (

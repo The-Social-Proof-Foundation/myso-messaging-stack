@@ -57,6 +57,9 @@ interface DecryptedMessage {
   syncStatus?: SyncStatus;         // File Storage sync state (when relayer archives)
   attachments: AttachmentHandle[]; // lazy-download handles
   senderVerified: boolean;         // per-message signature verified
+  kind?: MessageKind;              // 'text' | 'system' | 'post' | 'request_payment' | 'poll' | 'token_transfer'
+  paymentMetadata?: PaymentMetadata; // relayer-confirmed payment state (1:1 DMs only)
+  payment?: PaymentPayload;        // decrypted amount / asset / note (undefined if malformed)
 }
 ```
 
@@ -205,6 +208,47 @@ Soft-delete a message. Only the original sender can delete.
 | `signer` | `Signer` | Yes | Must be the original sender |
 | `groupRef` | `GroupRef` | Yes | Target group |
 | `messageId` | `string` | Yes | Message to delete |
+
+**Returns:** `void`
+
+### `sendTokenTransfer(options)`
+
+Post a `token_transfer` message for an **already-submitted** on-chain transfer. **1:1 DMs only** (the relayer rejects groups with more than two members and agent senders). The amount, asset and note are encrypted; the relayer verifies the digest on-chain and owns the status (`pending` → `success` | `failed`), pushing `message.edited` to subscribers. Posting is idempotent per `(sender, digest)`.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `signer` | `Signer` | Yes | Messaging signer |
+| `groupRef` | `GroupRef` | Yes | The DM |
+| `digest` | `string` | Yes | Digest of the executed transfer |
+| `payload` | `TokenTransferPayload` | Yes | `{ v: 1, amount (base units), asset, to, note? }` |
+| `requestMessageId` | `string` | No | Payment request this transfer settles |
+| `senderWallet` | `string` | No | Funded wallet when it differs from the messaging key (web zkLogin) |
+
+**Returns:** `{ messageId: string }`
+
+### `sendPaymentRequest(options)`
+
+Ask the DM counterpart to pay (`kind: 'request_payment'`, idempotency key `request:<id>`). 1:1 DMs only.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `signer` | `Signer` | Yes | Requester |
+| `groupRef` | `GroupRef` | Yes | The DM |
+| `payload` | `PaymentRequestPayload` | Yes | `{ v: 1, amount (base units), asset, description? }` |
+| `requestId` | `string` | No | Client request id (default: random UUID) |
+
+**Returns:** `{ messageId: string }`
+
+### `respondToPaymentRequest(options)`
+
+Reject (payer) or cancel (requester) an open payment request. The relayer enforces who may act and that the request is still `open`. Confirming is a `sendTokenTransfer` with `requestMessageId`.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `signer` | `Signer` | Yes | Payer (`reject`) or requester (`cancel`) |
+| `groupRef` | `GroupRef` | Yes | The DM |
+| `messageId` | `string` | Yes | The `request_payment` message |
+| `action` | `'reject' \| 'cancel'` | Yes | |
 
 **Returns:** `void`
 

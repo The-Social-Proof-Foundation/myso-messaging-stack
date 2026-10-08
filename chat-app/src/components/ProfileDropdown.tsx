@@ -8,6 +8,15 @@ import { getMySocialProfileUrl } from '../lib/wallet-profile';
 import { HoldSignOutButton } from './HoldSignOutButton';
 import { ReservationNavAvatar } from './ReservationNavAvatar';
 
+/**
+ * One-off size bump for the header (opt-in, this component only): the nav
+ * trigger and the profile row in the panel read a touch small at the shared
+ * `md` (36px) / `navDropdown` (48px) presets. Numeric sizes are deliberate so
+ * the shared presets keep their mysocial parity for every other avatar.
+ */
+const NAV_TRIGGER_AVATAR_SIZE = 44;
+const DROPDOWN_PROFILE_AVATAR_SIZE = 56;
+
 export function ProfileDropdown() {
   const { session, connectedAddress, logout } = useMySocialAuth();
   const { profile, showRing, ringPercent } = useOwnWalletProfile();
@@ -41,7 +50,7 @@ export function ProfileDropdown() {
           <ReservationNavAvatar
             address={connectedAddress}
             imageSrc={profile?.profile_photo}
-            size="md"
+            size={NAV_TRIGGER_AVATAR_SIZE}
             showRing={showRing}
             ringPercent={ringPercent}
             interactive
@@ -67,7 +76,7 @@ export function ProfileDropdown() {
               <ReservationNavAvatar
                 address={connectedAddress}
                 imageSrc={profile?.profile_photo}
-                size="navDropdown"
+                size={DROPDOWN_PROFILE_AVATAR_SIZE}
                 showRing={showRing}
                 ringPercent={ringPercent}
               />

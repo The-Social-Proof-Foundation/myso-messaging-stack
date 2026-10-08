@@ -6,6 +6,7 @@ import type { RelayerTransport } from './transport.js';
 import type {
 	CheckDmGateParams,
 	DeleteMessageParams,
+	RespondToPaymentRequestParams,
 	DeletePushTokenParams,
 	DmGateResult,
 	FetchMessageParams,
@@ -109,6 +110,10 @@ export class HybridRelayerTransport implements RelayerTransport {
 
 	deleteMessage(params: DeleteMessageParams): Promise<void> {
 		return this.#http.deleteMessage(params);
+	}
+
+	respondToPaymentRequest(params: RespondToPaymentRequestParams): Promise<RelayerMessage> {
+		return this.#http.respondToPaymentRequest(params);
 	}
 
 	async *subscribe(params: SubscribeParams): AsyncIterable<RelayerSubscriptionEvent> {

@@ -34,7 +34,11 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   });
 }
 
-function isRelayerMembershipPending(err: unknown): boolean {
+/**
+ * True for the relayer's "not a member yet" 403: the on-chain grant exists (or is landing) but
+ * the relayer's checkpoint sync has not caught up. Transient, unlike any other failure.
+ */
+export function isRelayerMembershipPending(err: unknown): boolean {
   if (err instanceof RelayerTransportError) {
     return err.code === 'NOT_GROUP_MEMBER' || err.status === 403;
   }
@@ -44,11 +48,27 @@ function isRelayerMembershipPending(err: unknown): boolean {
   return false;
 }
 
+const MAX_INTERVAL_MS = 4_000;
+/** One wait per group: concurrent openers share it instead of each polling the relayer. */
+const inFlight = new Map<string, Promise<void>>();
+
 /**
  * Waits until the relayer membership cache allows reading the group (MessagingReader).
- * Probes via getMessages; NOT_GROUP_MEMBER means sync is still in progress.
+ * Probes via getMessages; NOT_GROUP_MEMBER means sync is still in progress. Probes back off
+ * (500ms growing to 4s) so a group that never syncs costs about a dozen requests, not sixty.
  */
-export async function waitForRelayerMembership(
+export function waitForRelayerMembership(
+  options: WaitForRelayerMembershipOptions,
+): Promise<void> {
+  const key = `${options.uuid}:${options.signer.toMySoAddress().toLowerCase()}`;
+  const existing = inFlight.get(key);
+  if (existing) return existing;
+  const run = probeRelayerMembership(options).finally(() => inFlight.delete(key));
+  inFlight.set(key, run);
+  return run;
+}
+
+async function probeRelayerMembership(
   options: WaitForRelayerMembershipOptions,
 ): Promise<void> {
   const {
@@ -61,6 +81,7 @@ export async function waitForRelayerMembership(
   } = options;
 
   const deadline = Date.now() + timeoutMs;
+  let delay = intervalMs;
 
   while (Date.now() < deadline) {
     if (signal?.aborted) {
@@ -81,11 +102,12 @@ export async function waitForRelayerMembership(
       }
     }
 
-    await sleep(intervalMs, signal);
+    await sleep(delay, signal);
+    delay = Math.min(Math.round(delay * 1.6), MAX_INTERVAL_MS);
   }
 
   throw new Error(
-    'Timed out waiting for the relayer to sync group membership. Restart the relayer or retry in a moment.',
+    'This chat is not readable yet: the relayer has not recognized your access to the group. Try again in a moment.',
   );
 }
 

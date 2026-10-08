@@ -29,8 +29,10 @@ export interface CachedMessage {
   isAgentMessage?: boolean;
   principalOwner?: string;
   subAgentId?: string;
-  kind?: 'text' | 'system';
+  kind?: 'text' | 'system' | 'post' | 'request_payment' | 'poll' | 'token_transfer';
   system?: { type: string; member: string; actor?: string | null };
+  paymentMetadata?: unknown;
+  payment?: unknown;
 }
 
 export type CachedReactions = Map<number, RelayerReactionEntry[]>;

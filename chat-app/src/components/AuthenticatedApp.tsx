@@ -5,6 +5,7 @@ import {Sidebar} from './Sidebar';
 import {ChatArea} from './ChatArea';
 import {CreateGroupModal} from './CreateGroupModal';
 import {AgentChatEmptyState} from './agents/AgentChatEmptyState';
+import {useProfileOverview} from '../hooks/agents/useProfileOverview';
 import {AgentListView} from './agents/AgentListView';
 import {CreateAgentDialog} from './agents/CreateAgentDialog';
 import {CreateOrganizationDialog} from './agents/CreateOrganizationDialog';
@@ -24,8 +25,21 @@ import {findAgentChatRef, useAgentChatIndex} from '../hooks/agents/useAgentChats
 import {useMemoryAccount} from '../hooks/agents/useMemoryAccount';
 import type {SubAgentRow} from '../lib/agents/social-api';
 import {writeSelectedAgent} from '../lib/agents/selected-agent-store';
-import {getSelectedGroupKey, setSelectedGroupKey} from '../lib/group-store';
+import {
+  getSelectedGroupKey,
+  getSelectedOrganizationId,
+  setSelectedGroupKey,
+  setSelectedOrganizationId as persistSelectedOrganizationId,
+} from '../lib/group-store';
 import {CHAT_LIST_WIDTH_PX} from '../lib/chat-layout';
+import {
+  failChatProgress,
+  finishChatProgress,
+  startChatProgress,
+  updateChatProgress,
+} from '../lib/agents/chat-progress';
+import {classifyAgentChatError} from '../lib/agents/format-agent-chat-error';
+import {AGENT_CHAT_STAGE_LABEL} from '../hooks/agents/useAgentChatActions';
 
 interface AuthenticatedAppProps {
   isUsingDevMessengerSigner: boolean;
@@ -80,8 +94,15 @@ export function AuthenticatedApp({
   useRegisterCreateMessageHandler(openCreateModal);
 
   // --- Agents view state ---------------------------------------------------
-  const [listView, setListView] = useState<ListView>('chats');
-  const [selectedOrganizationId, setSelectedOrganizationId] = useState<string | null>(null);
+  // Reload returns to what was open: the last chat, or else the last organization.
+  const restoredOrganizationId = () =>
+    getSelectedGroupKey(address) ? null : getSelectedOrganizationId(address);
+  const [listView, setListView] = useState<ListView>(() =>
+    restoredOrganizationId() ? 'agents' : 'chats',
+  );
+  const [selectedOrganizationId, setSelectedOrganizationId] = useState<string | null>(
+    restoredOrganizationId,
+  );
   const [showNewOrganization, setShowNewOrganization] = useState(false);
   const [selectedAgentObjectId, setSelectedAgentObjectId] = useState<string | null>(null);
   const [showNewAgent, setShowNewAgent] = useState(false);
@@ -130,10 +151,17 @@ export function AuthenticatedApp({
     [address],
   );
 
+  // Show the create flow's current step on the Chat button that started it.
+  useEffect(() => {
+    if (create.stage) updateChatProgress(AGENT_CHAT_STAGE_LABEL[create.stage]);
+  }, [create.stage]);
+
   const startAgentChat = useCallback(
     async (agent: SubAgentRow) => {
+      startChatProgress(agent.agent_object_id, 'Opening chat…');
       try {
         const existing = await findAgentChatRef(agent, chatIndex.refs);
+        if (existing) updateChatProgress('Checking chat access…');
         const hydrated = existing
           ? await openChat(existing)
           : await create.createChat(agent);
@@ -149,7 +177,9 @@ export function AuthenticatedApp({
         refreshGroups();
         chatIndex.refresh();
         selectGroup(hydrated.uuid);
-      } catch {
+        finishChatProgress();
+      } catch (error) {
+        failChatProgress(agent.agent_object_id, classifyAgentChatError(error).message);
         setSelectedOrganizationId(null);
         setSelectedAgentObjectId(agent.agent_object_id);
       }
@@ -199,12 +229,36 @@ export function AuthenticatedApp({
   // Re-hydrate the open conversation when the wallet address becomes available.
   // A restored agent must not take over the center pane.
   useEffect(() => {
-    setSelectedUuid(getSelectedGroupKey(address));
+    const storedChat = getSelectedGroupKey(address);
+    const storedOrganization = storedChat ? null : getSelectedOrganizationId(address);
+    setSelectedUuid(storedChat);
     const requested = (locationStateRef.current as {openAgentObjectId?: string} | null)
       ?.openAgentObjectId;
     if (!requested) setSelectedAgentObjectId(null);
-    setSelectedOrganizationId(null);
+    setSelectedOrganizationId(storedOrganization);
+    restoredOrgCheckRef.current = storedOrganization;
+    if (storedOrganization) setListView('agents');
   }, [address]);
+
+  // A restored organization that no longer exists must not open an empty chart
+  // (which would offer to create an agent with no organization behind it).
+  const profileOverview = useProfileOverview();
+  const restoredOrgCheckRef = useRef<string | null>(selectedOrganizationId);
+  useEffect(() => {
+    if (!selectedOrganizationId || !profileOverview.isSuccess) return;
+    const restored = restoredOrgCheckRef.current;
+    if (restored?.toLowerCase() !== selectedOrganizationId.toLowerCase()) return;
+    restoredOrgCheckRef.current = null;
+    const exists = profileOverview.data.organizations.some(
+      (org) => org.organizationId.toLowerCase() === selectedOrganizationId.toLowerCase(),
+    );
+    if (!exists) setSelectedOrganizationId(null);
+  }, [address, selectedOrganizationId, profileOverview.isSuccess, profileOverview.data]);
+
+  // Remember the open organization (declared after the restore above so it never erases it first).
+  useEffect(() => {
+    if (address) persistSelectedOrganizationId(address, selectedOrganizationId);
+  }, [address, selectedOrganizationId]);
 
   const selectedGroup =
     groups.find(

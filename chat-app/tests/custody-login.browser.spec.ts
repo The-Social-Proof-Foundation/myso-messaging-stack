@@ -58,11 +58,14 @@ test('login-tier custody: setup, encrypted backup, and recovery with no passkey'
   expect(joined).not.toContain(created.seed);
   expect(joined).not.toContain(await page.evaluate(()=> (window as any).loginSeedHex));
   expect(joined).not.toContain('"prf"');
-  // Reload: no passkey ceremony is possible here, so the tier is detected from the stored wrap.
+  // Reload with WebAuthn removed: the login holder is the default, so a device that cannot do a
+  // passkey ceremony at all must still unlock, with no tier choice and no "unsupported" state.
+  await page.addInitScript(()=>{Object.defineProperty(window,'PublicKeyCredential',{value:undefined,configurable:true});});
   await page.reload();
   await page.getByRole('button',{name:'Unlock test vault'}).click();
   await expect(page.locator('#status')).toHaveText('ready');
   expect(await page.evaluate(()=> (window as any).vault.activeMethod)).toBe('zklogin-root-v1');
+  expect(await page.evaluate(()=> (window as any).vault.status)).toBe('ready');
   expect(await page.evaluate(address=>(window as any).recoverAgent(address),created.address)).toBe(created.seed);
   await page.evaluate(()=> (window as any).vault.lock());
   await expect(page.evaluate(address=>(window as any).recoverAgent(address),created.address)).rejects.toThrow('Unlock');
