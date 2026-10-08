@@ -7,6 +7,7 @@ import {
 } from './capabilities';
 import {truncateAddress} from './format';
 import type {SubAgentRow} from './social-api';
+import {automationDelegateName, isAutomationDelegateLabel} from './automation-delegate';
 
 export type AgentChartStatus = 'active' | 'inactive' | 'revoked';
 
@@ -33,6 +34,19 @@ export interface AgentChartNode {
   /** 0 is the organization root. Each child is one deeper. */
   depth: number;
   children?: AgentChartNode[];
+  /**
+   * Automation delegates this agent runs scheduled jobs through. They are registered as children
+   * on chain, but they are tools of the agent, not teammates, so the chart shows them as a badge
+   * on their parent instead of as cards.
+   */
+  automations?: AgentChartAutomation[];
+}
+
+export interface AgentChartAutomation {
+  id: string;
+  /** The name the owner chose, without the "Automation: " prefix. */
+  name: string;
+  status: AgentChartStatus;
 }
 
 export function agentChartStatus(
@@ -57,8 +71,14 @@ export function agentInitials(label: string): string {
   return `${first.charAt(0)}${second.charAt(0)}`.toUpperCase();
 }
 
+const isDelegate = (node: AgentTreeNode) => isAutomationDelegateLabel(node.agent.label);
+
+function teammates(node: AgentTreeNode): AgentTreeNode[] {
+  return node.children.filter((child) => !isDelegate(child));
+}
+
 function descendantCount(node: AgentTreeNode): number {
-  return node.children.reduce((total, child) => total + 1 + descendantCount(child), 0);
+  return teammates(node).reduce((total, child) => total + 1 + descendantCount(child), 0);
 }
 
 function toChartNode(
@@ -75,7 +95,7 @@ function toChartNode(
     fullAddress: agent.derived_address,
     initials: agentInitials(agent.label),
     status: agentChartStatus(agent),
-    reportsCount: node.children.length,
+    reportsCount: teammates(node).length,
     teamHeadcount: descendantCount(node),
     capabilities: capabilityNames(agent.capabilities).map((name) => CAPABILITY_LABELS[name]),
     parentId: parent?.id,
@@ -84,10 +104,20 @@ function toChartNode(
     depth,
   };
 
-  if (node.children.length > 0) {
-    chart.children = node.children.map((child) =>
+  const team = teammates(node);
+  if (team.length > 0) {
+    chart.children = team.map((child) =>
       toChartNode(child, {id: chart.id, name: chart.name, role: chart.role}, depth + 1),
     );
+  }
+
+  const delegates = node.children.filter(isDelegate);
+  if (delegates.length > 0) {
+    chart.automations = delegates.map((child) => ({
+      id: child.agent.agent_object_id,
+      name: automationDelegateName(child.agent.label),
+      status: agentChartStatus(child.agent),
+    }));
   }
 
   return chart;

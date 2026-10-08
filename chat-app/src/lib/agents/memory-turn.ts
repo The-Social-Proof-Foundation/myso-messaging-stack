@@ -86,6 +86,13 @@ const DURABLE_FACT = [
   /\bcall me\b/i,
 ];
 
+/**
+ * "remember that I like pie", "can you please remember the fact that I like pie?". Checked before
+ * the question filter because a polite request to remember is phrased as a question.
+ */
+const EXPLICIT_REMEMBER =
+  /^(?:(?:hey|hi|ok|okay)\b[^,.!?]{0,30}[,.!]?\s+)?(?:(?:can|could|would|will) you\s+)?(?:please\s+)?(?:remember|save|note|store|keep in mind)\b(?:\s+the fact)?(?:\s+(?:that|this))?[:\s]+(.+?)[\s?.!]*$/is;
+
 export interface RememberDecision {
   /** Facts to persist this turn. Usually empty: most turns are not durable. */
   facts: string[];
@@ -110,6 +117,9 @@ export function decideRemember(text: string): RememberDecision {
       ? {facts: [explicit], reason: 'explicit-remember'}
       : {facts: [], reason: 'nothing-durable'}
   }
+
+  const explicitRequest = EXPLICIT_REMEMBER.exec(trimmed)?.[1]?.trim();
+  if (explicitRequest) return {facts: [explicitRequest], reason: 'explicit-remember'};
 
   if (QUESTION_START.test(trimmed)) return {facts: [], reason: 'nothing-durable'};
   if (DURABLE_FACT.some((pattern) => pattern.test(trimmed))) {

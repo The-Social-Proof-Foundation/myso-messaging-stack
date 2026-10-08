@@ -19,6 +19,7 @@ import {
 import {assertAgentAccountBinding, CrossAccountMemoryError} from '../../lib/agents/account-isolation';
 import {decideRecall, decideRemember, turnIdempotencyKey} from '../../lib/agents/memory-turn';
 import {fetchSubAgentByObjectId} from '../../lib/agents/social-api';
+import {isTransientMyDataError, withMyDataRetry} from '../../lib/format-relayer-error';
 import {useAgentChatPlatform} from './useAgentChatPlatform';
 import {useMemoryAccount} from './useMemoryAccount';
 import {useSubAgents} from './useSubAgents';
@@ -44,6 +45,9 @@ function metadataRecord(parsed: unknown): GroupMetadataLike {
 
 function replyError(error: unknown): string {
   if (error instanceof CrossAccountMemoryError) return error.message;
+  if (isTransientMyDataError(error)) {
+    return 'Encryption keys are temporarily unavailable, so the agent reply could not be posted. Try again.';
+  }
   if (!(error instanceof MemoryClientError)) {
     return error instanceof Error ? error.message : 'This agent could not answer.';
   }
@@ -207,10 +211,13 @@ export function useAgentMemoryReply(
             platformId: joined.platformId,
           },
         });
-        await agentClient.sendMessage({
-          groupRef: {uuid: groupUuid},
-          text: answer,
-        });
+        // The answer is already generated and billed — retry key-server blips so it lands.
+        await withMyDataRetry(() =>
+          agentClient.sendMessage({
+            groupRef: {uuid: groupUuid},
+            text: answer,
+          }),
+        );
       } catch (err) {
         setError(replyError(err));
       } finally {

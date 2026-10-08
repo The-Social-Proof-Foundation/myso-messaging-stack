@@ -177,6 +177,7 @@ function OrganizationDetail({organizationId}: Readonly<{organizationId: string}>
     invitations,
     approvals,
     spendBreakdown,
+    auditLogs,
   ].some((list) => isForbidden(list.error));
 
   const orgAgents = useMemo(
@@ -277,7 +278,8 @@ function OrganizationDetail({organizationId}: Readonly<{organizationId: string}>
           </h3>
           <p className="mt-1 text-xs text-amber-900 dark:text-amber-100">
             The dashboard lists read the organization&apos;s granted permissions, and this wallet
-            does not hold Dashboard viewer yet. Granting it once fixes every section below.
+            does not hold Dashboard viewer or Auditor yet, so nothing is granted implicitly, not even to the
+            owner. Granting them once fixes every section below, including each agent's audit log.
           </p>
           <Button
             size="sm"

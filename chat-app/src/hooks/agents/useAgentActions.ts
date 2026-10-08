@@ -7,6 +7,7 @@ import {generateAgentKey, type AgentKeyEnvelopeV1, type AgentRegistrationIntent}
 import type {AutomationClient} from '../../lib/agents/automation-client';
 import {
   DELEGATE_CAPABILITIES,
+  automationDelegateLabel,
   DelegateError,
   configuredMyDataKey,
   delegateKeyRef,
@@ -407,6 +408,8 @@ export function useAgentActions() {
     async registerAutomationDelegate(args: {
       accountId: string;
       organizationId: string;
+      /** The agent this delegate works for; it registers the delegate on chain. */
+      parent: SubAgentRow;
       name: string;
       expiresAtMs: number;
       /** Spend cap in MIST, as a decimal string. */
@@ -432,22 +435,44 @@ export function useAgentActions() {
       const key = await generateAgentKey();
       try {
         args.onStep?.('Registering the delegate on chain…');
-        const register = registerSubAgentTx(ids, {
+        // An organization has exactly one root, so a delegate is a CHILD of the agent it works
+        // for, registered by that agent's own key (the owner's browser holds it in the vault).
+        if (!vault) throw new DelegateError('Agent key custody is not enabled.');
+        const parentKey = await vault.getAgent(args.parent);
+        const parentPolicy = await readAgentPolicy(args.parent.agent_object_id);
+        if (registrationGrant(
+          {capabilities: parentPolicy.capabilities, delegatableCaps: parentPolicy.delegatableCaps},
+          DELEGATE_CAPABILITIES,
+        )) {
+          throw new DelegateError(
+            `"${args.parent.label}" is not allowed to create delegates yet. Open its permissions and ` +
+              'allow it to register agents and to delegate read and write memory, then try again.',
+          );
+        }
+        if (parentPolicy.maxActionSpend != null && BigInt(args.maxActionSpendMist) > BigInt(parentPolicy.maxActionSpend)) {
+          throw new DelegateError(
+            `A delegate cannot spend more than its parent agent's limit (${parentPolicy.maxActionSpend} MIST).`,
+          );
+        }
+        const expiresAtMs =
+          parentPolicy.expiresAt == null ? args.expiresAtMs : Math.min(args.expiresAtMs, parentPolicy.expiresAt);
+        const register = registerSubAgentDelegatedTx(ids, {
           accountId: args.accountId,
-          organizationId: args.organizationId,
+          parentAgentObjectId: args.parent.agent_object_id,
           publicKey: key.publicKey,
           derivedAddress: key.address,
-          label: `Automation: ${args.name}`,
+          label: automationDelegateLabel(args.name),
           capabilities: DELEGATE_CAPABILITIES,
           // Cannot mint children, and acts without an owner co-sign.
           delegatableCaps: 0,
           approvalRequiredCaps: 0,
           maxActionSpend: args.maxActionSpendMist,
-          expiresAtMs: args.expiresAtMs,
+          expiresAtMs,
+          platformScope: parentPolicy.platformScope,
         });
         const agentObjectId = await requireCreatedObjectId(
           rpc,
-          await executeAsHuman(rpc, human, register),
+          await executeAsAgent(rpc, parentKey.keypair, human, register, parentKey.signal),
           'SubAgent',
         );
 

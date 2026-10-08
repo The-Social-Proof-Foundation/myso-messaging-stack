@@ -1,6 +1,7 @@
 import { Navigate, Route, Routes } from 'react-router-dom';
 import { AppHeader } from './components/AppHeader';
 import { useMobileChatNav } from './contexts/MobileChatNavContext';
+import { AgentsPage } from './pages/AgentsPage';
 import { HomePage } from './pages/HomePage';
 import { SettingsPage } from './pages/SettingsPage';
 
@@ -13,6 +14,7 @@ function App() {
       <Routes>
         <Route path="/" element={<HomePage />} />
         <Route path="/agents" element={<Navigate to="/?view=organizations" replace />} />
+        <Route path="/automation" element={<AgentsPage />} />
         <Route path="/settings" element={<SettingsPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

@@ -681,7 +681,17 @@ function ChatView({
     [timelineMessages, displayLabelFor, humanMemberAddresses],
   );
 
-  const typingTypers = typingMembers.map((address) => {
+  // The agent answers from this client, so no typing event arrives for it: show it as typing while
+  // its reply is in flight.
+  const agentReplyAddresses = memoryReply.replying
+    ? memberAddresses.filter((a) => agentAddress(a) && !sameAddress(a, myAddress))
+    : [];
+  const typingAddresses = [
+    ...typingMembers,
+    ...agentReplyAddresses.filter((a) => !typingMembers.some((t) => sameAddress(t, a))),
+  ];
+
+  const typingTypers = typingAddresses.map((address) => {
     const ring = ringFor(address);
     return {
       address,
@@ -1276,16 +1286,13 @@ function ChatView({
               Claiming escrow…
             </p>
           )}
-          {memoryReply.replying && (
-            <p className="border-t border-secondary-200 px-4 py-1 text-center text-xs text-secondary-500 dark:border-secondary-700 dark:text-secondary-400">
-              Asking this agent's memory…
-            </p>
-          )}
           <MessageInput
             onSend={async (text, files) => {
-              await sendMessage(text, files);
+              const sent = await sendMessage(text, files);
               paidGate.refresh();
-              if (text.trim()) await memoryReply.reply(text);
+              // Only ask the agent once the user's turn is actually in the thread;
+              // otherwise it answers (and bills credits) for a message nobody sees.
+              if (sent && text.trim()) await memoryReply.reply(text);
             }}
             onTyping={sendTyping}
             sending={sending || claiming || memoryReply.replying}

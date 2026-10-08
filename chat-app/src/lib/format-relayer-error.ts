@@ -4,7 +4,33 @@ import {
   RelayerTransportError,
 } from '@socialproof/myso-messaging-stack';
 
+import { GeneralError, InternalError } from '@socialproof/mydata';
+
 import { mistToMyso } from './mys-coin';
+
+/**
+ * MyData key-server hiccup (500 "caller should retry", 5xx, or a dropped fetch).
+ * Encrypting a message needs the group DEK, which comes from the key server, so a
+ * blip there fails the send even though nothing is wrong with the message.
+ */
+export function isTransientMyDataError(err: unknown): boolean {
+  if (err instanceof InternalError) return true;
+  if (err instanceof GeneralError) return (err.status ?? 0) >= 500;
+  if (err instanceof TypeError && /fetch/i.test(err.message)) return true;
+  return err instanceof Error && err.message.includes('caller should retry');
+}
+
+/** Retry `run` on transient MyData failures with linear backoff. */
+export async function withMyDataRetry<T>(run: () => Promise<T>, attempts = 3): Promise<T> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await run();
+    } catch (err) {
+      if (!isTransientMyDataError(err) || attempt >= attempts - 1) throw err;
+      await new Promise((resolve) => setTimeout(resolve, 600 * (attempt + 1)));
+    }
+  }
+}
 
 export function isNotGroupMemberError(err: unknown): boolean {
   if (err instanceof RelayerTransportError) {

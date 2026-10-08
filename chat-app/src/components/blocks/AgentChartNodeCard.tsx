@@ -1,5 +1,5 @@
 import {useState} from 'react';
-import {Check, ChevronDown, ChevronRight, Copy} from 'lucide-react';
+import {Check, ChevronDown, ChevronRight, Copy, Zap} from 'lucide-react';
 
 import {cn} from '@/lib/utils';
 import {AgentOrb} from '@/components/agents/AgentOrb';
@@ -122,6 +122,16 @@ export function AgentChartNodeCard({
           <CardStat label="Balance" value={stats?.balanceMist} />
           <CardStat label="AI spent" value={stats?.spentMist} />
         </dl>
+
+        {node.automations?.length ? (
+          <p
+            className="flex items-center gap-1.5 rounded-lg bg-amber-400/10 px-2 py-1.5 text-xs font-medium text-amber-600 dark:text-amber-300"
+            title={node.automations.map((item) => item.name).join(', ')}
+          >
+            <Zap className="size-3.5 shrink-0" strokeWidth={2} aria-hidden />
+            {node.automations.length} automation{node.automations.length === 1 ? '' : 's'}
+          </p>
+        ) : null}
 
         {childCount > 0 && onToggleExpand ? (
           <Button

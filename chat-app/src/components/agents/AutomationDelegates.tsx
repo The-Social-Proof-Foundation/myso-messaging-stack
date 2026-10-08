@@ -1,4 +1,5 @@
 import {useState} from 'react';
+import {Zap} from 'lucide-react';
 import {useQueryClient} from '@tanstack/react-query';
 
 import {buttonClass, fieldClass} from './chrome';
@@ -66,6 +67,7 @@ export function AutomationDelegates({agent}: Readonly<{agent: SubAgentRow}>) {
       await actions.registerAutomationDelegate({
         accountId,
         organizationId,
+        parent: agent,
         name,
         expiresAtMs: Date.now() + days * DAY_MS,
         maxActionSpendMist: limit,
@@ -122,16 +124,29 @@ export function AutomationDelegates({agent}: Readonly<{agent: SubAgentRow}>) {
       ) : !query.data || query.data.length === 0 ? (
         <p className="px-4 py-3 text-sm text-secondary-500">No delegates yet.</p>
       ) : (
-        <ul className="divide-y divide-secondary-100 dark:divide-secondary-800">
+        <ul className="flex flex-col gap-2 px-4 py-3">
           {query.data.map((row) => (
-            <li key={row.delegate_ref} className="flex items-center justify-between gap-3 px-4 py-2">
-              <div className="min-w-0">
-                <p className="truncate text-sm text-secondary-800 dark:text-secondary-100">
-                  {row.delegate_ref}
-                </p>
-                <p className="text-xs text-secondary-500">
-                  Use as <code>{delegateKeyRef(row.delegate_ref)}</code> · added{' '}
-                  {formatWhen(row.created_at)}
+            <li
+              key={row.delegate_ref}
+              className="flex items-center gap-3 rounded-xl border border-secondary-200 bg-secondary-50/60 px-3 py-2.5 dark:border-secondary-700 dark:bg-secondary-800/40"
+            >
+              <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-amber-400/15 text-amber-600 dark:text-amber-300">
+                <Zap className="size-4" strokeWidth={2} aria-hidden />
+              </span>
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2">
+                  <p className="truncate text-sm font-medium text-secondary-900 dark:text-secondary-50">
+                    {row.delegate_ref}
+                  </p>
+                  <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] font-medium text-emerald-600 dark:text-emerald-300">
+                    Active
+                  </span>
+                </div>
+                <p className="mt-0.5 truncate text-xs text-secondary-500">
+                  <code className="rounded bg-secondary-200/60 px-1 py-0.5 dark:bg-secondary-700/60">
+                    {delegateKeyRef(row.delegate_ref)}
+                  </code>{' '}
+                  · added {formatWhen(row.created_at)}
                 </p>
               </div>
               <button

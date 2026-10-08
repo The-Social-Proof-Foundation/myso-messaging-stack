@@ -1,7 +1,7 @@
 import {useEffect, useMemo, useState, type ReactNode} from 'react';
 import {useQuery, useQueryClient} from '@tanstack/react-query';
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
-import {Check, ChevronDown, ChevronLeft, Copy, MessageSquare, ScrollText, X} from 'lucide-react';
+import {Check, ChevronDown, ChevronLeft, Copy, ScrollText, X, Zap} from 'lucide-react';
 
 import {Badge} from '@/components/ui/badge';
 import {LegacyAgentBackup} from '@/components/agents/LegacyAgentBackup';
@@ -15,7 +15,10 @@ import {AgentOrb} from '@/components/agents/AgentOrb';
 import {AgentModelLabel} from '@/components/agents/AgentModelLabel';
 import {ErrorNotice} from '@/components/agents/ErrorNotice';
 import {useAgentChatProgress} from '@/lib/agents/chat-progress';
-import {useAgentActions, useMemoryAccount, useOrgAuditLogs} from '@/hooks/agents';
+import {useAgentActions, useMemoryAccount, useOrganization, useOrgAuditLogs} from '@/hooks/agents';
+import {useAuthenticatedAddress} from '@/contexts/MySocialAuthContext';
+import {MultiBubbleIcon} from '@/components/icons/MultiBubbleIcon';
+import {auditRowMentionsAgent} from '@/lib/agents/audit';
 import {useAgentStats} from '@/hooks/agents/useAgentStats';
 import {useDerivedAgentKey} from '@/hooks/agents/useDerivedAgentKey';
 import {useAllSubAgents} from '@/hooks/agents/useSubAgents';
@@ -76,8 +79,8 @@ export function AgentProfileDrawer({
   const accountId = account.data?.account_id ?? null;
   const canPickModel = ownsAgent(accountId, row);
   const auditRows = useMemo(
-    () => audit.items.filter((row) => sameId(row.target_id, agent.id)),
-    [audit.items, agent.id],
+    () => audit.items.filter((row) => auditRowMentionsAgent(row, [agent.id, agent.fullAddress])),
+    [audit.items, agent.id, agent.fullAddress],
   );
 
   function copyAddress() {
@@ -113,7 +116,7 @@ export function AgentProfileDrawer({
       <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
         {view === 'audit' ? (
           <div className="p-4">
-            <AuditLogList audit={audit} rows={auditRows} />
+            <AuditLogList audit={audit} rows={auditRows} organizationId={organizationId} />
           </div>
         ) : (
           <>
@@ -179,7 +182,7 @@ export function AgentProfileDrawer({
                   className="size-3.5 animate-spin rounded-full border-2 border-current/30 border-t-current"
                 />
               ) : (
-                <MessageSquare data-icon="inline-start" strokeWidth={2} aria-hidden />
+                <MultiBubbleIcon data-icon="inline-start" strokeWidth={2} aria-hidden />
               )}
               Chat
             </Button>
@@ -192,6 +195,32 @@ export function AgentProfileDrawer({
         ) : null}
         {chat.error ? <ErrorNotice>{chat.error}</ErrorNotice> : null}
         </div>
+
+        {agent.automations?.length ? (
+          <>
+            <Separator />
+            <div className="p-4">
+              <p className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
+                Automations
+              </p>
+              <ul className="mt-2 flex flex-col gap-1.5">
+                {agent.automations.map((item) => (
+                  <li
+                    key={item.id}
+                    className="flex items-center gap-2 rounded-lg bg-muted/60 px-2.5 py-2"
+                  >
+                    <Zap className="size-3.5 shrink-0 text-amber-500" strokeWidth={2} aria-hidden />
+                    <span className="min-w-0 flex-1 truncate text-sm text-foreground">{item.name}</span>
+                    <span className="text-[10px] text-muted-foreground uppercase">{item.status}</span>
+                  </li>
+                ))}
+              </ul>
+              <p className="mt-2 text-xs text-muted-foreground">
+                Scheduled jobs run through these. Manage them under Automation.
+              </p>
+            </div>
+          </>
+        ) : null}
 
         <Separator />
 
@@ -527,27 +556,84 @@ function CapabilityControls({
   );
 }
 
+/**
+ * The social server never grants Auditor implicitly, not even to the organization owner. This lets
+ * the owner grant it to themselves in place, with one signature, instead of hunting for a screen.
+ */
+function GrantAuditAccess({organizationId}: Readonly<{organizationId: string | null}>) {
+  const account = useMemoryAccount();
+  const org = useOrganization(organizationId);
+  const owner = useAuthenticatedAddress() ?? '';
+  const actions = useAgentActions();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const groupId = org.data?.org_memory_group_id;
+  const accountId = account.data?.account_id;
+
+  if (!organizationId) return null;
+
+  async function grant() {
+    if (!groupId || !accountId) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await actions.grantOwnerOrgPermissions({
+        accountId,
+        organizationId: organizationId!,
+        orgMemoryGroupId: groupId,
+        ownerAddress: owner,
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not grant access.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="flex flex-col gap-2">
+      <p className="text-xs text-muted-foreground">
+        Audit logs need the Auditor permission. It is not granted automatically, even to the
+        organization owner. Grant it to your wallet once to see every agent&apos;s log.
+      </p>
+      <Button size="sm" disabled={busy || !groupId || !accountId} onClick={() => void grant()}>
+        {busy ? 'Granting…' : 'Grant audit access'}
+      </Button>
+      {!groupId && org.data ? (
+        <p className="text-xs text-muted-foreground">
+          Enable shared memory for this organization first (Organizations tab).
+        </p>
+      ) : null}
+      {error ? <p className="text-xs text-destructive">{error}</p> : null}
+    </div>
+  );
+}
+
 function AuditLogList({
   audit,
   rows,
+  organizationId,
 }: Readonly<{
   audit: ReturnType<typeof useOrgAuditLogs>;
   rows: ReturnType<typeof useOrgAuditLogs>['items'];
+  organizationId: string | null;
 }>) {
   if (audit.isInitialLoading) {
     return <p className="text-xs text-muted-foreground">Loading audit log…</p>;
   }
   if (audit.isError && isForbidden(audit.error)) {
-    return <p className="text-xs text-muted-foreground">Audit logs need auditor access.</p>;
+    return <GrantAuditAccess organizationId={organizationId} />;
   }
   if (audit.isError) {
     return <p className="text-xs text-destructive">Could not load the audit log.</p>;
   }
-  if (rows.length === 0) {
-    return <p className="text-xs text-muted-foreground">No audit entries for this agent.</p>;
-  }
   return (
     <div>
+      {rows.length === 0 ? (
+        <p className="text-xs text-muted-foreground">
+          No audit entries for this agent{audit.hasNextPage ? ' in the entries loaded so far.' : '.'}
+        </p>
+      ) : null}
       <ul className="flex flex-col gap-3">
         {rows.map((entry) => (
           <li key={entry.id}>

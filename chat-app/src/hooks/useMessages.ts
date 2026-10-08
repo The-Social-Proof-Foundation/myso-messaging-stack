@@ -51,6 +51,7 @@ import {
   formatRelayerError,
   isNotGroupMemberError,
   isPaymentRequiredError,
+  isTransientMyDataError,
 } from '../lib/format-relayer-error';
 import { isMessageRecoveryEnabled } from '../lib/messaging-client-factory';
 import { signAndExecuteTransactionAndWait } from '../lib/sign-and-wait';
@@ -171,7 +172,8 @@ export interface UseMessagesResult {
    * `order > initialReadUpto` are unread for initial scroll positioning.
    */
   initialReadUpto: number;
-  sendMessage: (text: string, files?: AttachmentFile[]) => Promise<void>;
+  /** Resolves `true` once the relayer accepted the message. */
+  sendMessage: (text: string, files?: AttachmentFile[]) => Promise<boolean>;
   editMessage: (messageId: string, text: string) => Promise<void>;
   deleteMessage: (messageId: string) => Promise<void>;
   toggleReaction: (order: number, emoji: string) => Promise<void>;
@@ -1386,7 +1388,10 @@ export function useMessages(
             break;
           } catch (err) {
             lastErr = err;
-            if (isNotGroupMemberError(err) && attempt < maxAttempts - 1) {
+            if (
+              (isNotGroupMemberError(err) || isTransientMyDataError(err)) &&
+              attempt < maxAttempts - 1
+            ) {
               await new Promise((resolve) =>
                 setTimeout(resolve, 500 * (attempt + 1)),
               );
@@ -1436,14 +1441,14 @@ export function useMessages(
     async (text: string, files?: AttachmentFile[]) => {
       const trimmed = text.trim();
       const hasFiles = files && files.length > 0;
-      if (!trimmed && !hasFiles) return;
+      if (!trimmed && !hasFiles) return false;
 
       if (claimPendingRef.current) {
         if (trimmed.length < minReplyChars) {
           setError(
             `Reply with at least ${minReplyChars} characters to claim the escrow.`,
           );
-          return;
+          return false;
         }
       }
 
@@ -1475,11 +1480,12 @@ export function useMessages(
         }
 
         await performSend(trimmed, hasFiles ? files : undefined);
+        return true;
       } catch (err) {
         if (claimPendingRef.current && !claimCompleted) {
           console.error('Failed to claim paid DM escrow:', err);
           setError(formatPaidClaimError(err, minReplyChars));
-          return;
+          return false;
         }
         if (isPaymentRequiredError(err)) {
           // Paid-DM gate: stash the message and open the payment dialog.
@@ -1492,7 +1498,7 @@ export function useMessages(
             recipient: err.paymentRecipient ?? null,
           });
           setPaymentError(null);
-          return;
+          return false;
         }
         console.error('Failed to send message:', err);
         if (err instanceof BlockedMessagingError) {
@@ -1502,11 +1508,14 @@ export function useMessages(
           isNotGroupMemberError(err)
         ) {
           setError(formatRelayerError(err));
+        } else if (isTransientMyDataError(err)) {
+          setError('Encryption keys are temporarily unavailable. Your message was not sent — try again.');
         } else {
           setError(
             err instanceof Error ? err.message : 'Failed to send message.',
           );
         }
+        return false;
       } finally {
         setClaiming(false);
         setSending(false);

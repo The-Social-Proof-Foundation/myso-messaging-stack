@@ -66,6 +66,7 @@ function previewFromSessionCache(uuid: string): PreviewEntry | null {
   return {
     text: formatPreview(last),
     order: last.order,
+    at: last.createdAt,
     // Session cache can lag the true tip until the open thread finishes loading.
     verified: false,
   };
@@ -76,7 +77,11 @@ function applyPreview(groupId: string, next: PreviewEntry): boolean {
   if (prev) {
     if (next.order < prev.order) return false;
     if (next.order === prev.order) {
-      if (prev.text === next.text && prev.verified === next.verified) {
+      if (
+        prev.text === next.text &&
+        prev.verified === next.verified &&
+        (next.at === undefined || prev.at === next.at)
+      ) {
         return false;
       }
       // Don't let an unverified seed clobber a verified tip at the same order.
@@ -95,6 +100,7 @@ export function publishSidebarMessagePreview(
   groupId: string,
   message: {
     order: number;
+    createdAt?: number;
     text?: string;
     kind?: string | null;
     isDeleted?: boolean;
@@ -105,6 +111,7 @@ export function publishSidebarMessagePreview(
   const changed = applyPreview(groupId, {
     text: formatPreview(message),
     order: message.order,
+    at: message.createdAt,
     verified: true,
   });
   if (changed) {
@@ -112,6 +119,11 @@ export function publishSidebarMessagePreview(
     if (hydratedWallet) persistPreviews(hydratedWallet);
     notifyPreviewListeners();
   }
+}
+
+/** Last-message time for a group (0 when unknown) — drives most-recent-first sidebar order. */
+export function sidebarPreviewActivityTime(groupId: string): number {
+  return previewCache.get(groupId)?.at ?? 0;
 }
 
 /**
@@ -221,6 +233,7 @@ export function useSidebarMessagePreviews(
             applyPreview(group.groupId, {
               text: formatPreview(last),
               order: last.order,
+              at: last.createdAt,
               verified: true,
             });
             // Delivered ✓ while peer stays on inbox (not only open thread).

@@ -2,6 +2,7 @@ import {useEffect, useState} from 'react';
 
 import {buttonClass, cardClass, fieldClass, sectionTitleClass} from './chrome';
 import {AutomationDelegates} from './AutomationDelegates';
+import {AutomationJobForm} from './AutomationJobForm';
 import {ListError} from './ListStates';
 import type {SubAgentRow} from '../../lib/agents/social-api';
 import type {AutomationJob, AutomationRun} from '../../lib/agents/automation-client';
@@ -15,11 +16,9 @@ import {
 /**
  * Scheduled and event-triggered work for one agent.
  *
- * Jobs are read-only here. Job creation is a trusted-service operation that stamps
- * ownership from the caller's signature, and there is deliberately no job form until
- * the full create flow (trigger builder, budget) exists — a half-built form that
- * silently produced an inert job would be worse than none. Delegates, the scoped keys
- * a job signs with, can be created and revoked below.
+ * Lists the jobs, lets the owner schedule a new one (`AutomationJobForm`; ownership is stamped
+ * from the caller's signature, never the form), and manages delegates, the scoped keys a job
+ * signs with.
  */
 
 function jobSchedule(job: AutomationJob): string {
@@ -238,6 +237,7 @@ export function AutomationPanel({agent: fixedAgent}: Readonly<{agent?: SubAgentR
         </ul>
       )}
 
+      {health.error ? null : <AutomationJobForm agent={agent} />}
       {health.error ? null : <AutomationDelegates agent={agent} />}
     </section>
   );

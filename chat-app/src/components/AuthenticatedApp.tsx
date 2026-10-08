@@ -355,7 +355,6 @@ export function AuthenticatedApp({
                 latestOrders={activity.latestOrders}
                 paidDmGroupIds={paidDmGroupIds}
                 onSelectGroup={selectGroup}
-                onOpenAgentView={() => setListView('agents')}
                 loading={discoveryLoading}
                 agentCreatorActors={agentCreatorActors}
               />

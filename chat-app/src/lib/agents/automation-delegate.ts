@@ -53,6 +53,20 @@ export function isValidDelegateName(name: string): boolean {
 }
 
 /** The `target_agent_key_ref` a job uses to select a delegate. */
+/** Every delegate's on-chain label starts with this, which is how the UI tells it from a real agent. */
+export const AUTOMATION_LABEL_PREFIX = 'Automation: ';
+
+export const automationDelegateLabel = (name: string): string => `${AUTOMATION_LABEL_PREFIX}${name}`;
+
+export function isAutomationDelegateLabel(label: string): boolean {
+  return label.startsWith(AUTOMATION_LABEL_PREFIX);
+}
+
+/** "Automation: nightly" becomes "nightly". */
+export function automationDelegateName(label: string): string {
+  return isAutomationDelegateLabel(label) ? label.slice(AUTOMATION_LABEL_PREFIX.length) : label;
+}
+
 export function delegateKeyRef(name: string): string {
   return `delegate:${name}`;
 }

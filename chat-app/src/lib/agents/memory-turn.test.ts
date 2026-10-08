@@ -56,6 +56,23 @@ describe('decideRemember', () => {
   });
 });
 
+describe('decideRemember explicit requests', () => {
+  it('stores the fact from a polite remember request', () => {
+    expect(decideRemember('can you remember the fact that I like key lime pie.')).toEqual({
+      facts: ['I like key lime pie'],
+      reason: 'explicit-remember',
+    });
+    expect(decideRemember('please remember my dog is called Rex').facts).toEqual([
+      'my dog is called Rex',
+    ]);
+  });
+
+  it('does not store a question about memory', () => {
+    expect(decideRemember('do you remember what I like?').facts).toEqual([]);
+    expect(decideRemember('can you remember?').facts).toEqual([]);
+  });
+});
+
 describe('turnIdempotencyKey', () => {
   it('is stable for the same turn and differs across turns', async () => {
     const first = await turnIdempotencyKey('group-1', 'hello');

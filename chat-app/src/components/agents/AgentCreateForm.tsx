@@ -1,4 +1,5 @@
 import {useEffect, useMemo, useState} from 'react';
+import {useQueryClient} from '@tanstack/react-query';
 
 import {CAP, CAPABILITY_LABELS, CAPABILITY_NAMES, CAPABILITY_PRESETS, presetForMask, registrationGrant} from '../../lib/agents/capabilities';
 import {parseMysoToMist} from '../../lib/agents/format';
@@ -46,6 +47,7 @@ export function AgentCreateForm({
   enabled = true,
 }: Readonly<AgentCreateFormProps>) {
   const account = useMemoryAccount();
+  const queryClient = useQueryClient();
   const orgs = useOrganizations(true, {enabled});
   const agents = useAllSubAgents({enabled});
   const credit = useAiCreditBalance();
@@ -83,11 +85,11 @@ export function AgentCreateForm({
     [orgAgents],
   );
   const presetId = presetForMask(mask);
+  const parent = parents.find((agent) => agent.agent_object_id === parentId);
   const parentGrant = parent
     ? registrationGrant({capabilities: parent.capabilities, delegatableCaps: parent.delegatable_caps}, mask)
     : null;
   const needsParentGrant = Boolean(parentGrant);
-  const parent = parents.find((agent) => agent.agent_object_id === parentId);
 
   useEffect(() => {
     if (!enabled || kind !== 'child' || parents.length !== 1) return;
@@ -138,6 +140,20 @@ export function AgentCreateForm({
     return Date.now() + days * 24 * 60 * 60 * 1000;
   }
 
+  /**
+   * A new agent changes the org chart, agent lists, credit balances, chats and the wallet. Refetch
+   * all of them now, and once more shortly after because the indexer can trail the chain by a beat.
+   */
+  async function hydrateAfterCreate() {
+    const refresh = () =>
+      Promise.all([
+        queryClient.invalidateQueries({queryKey: ['agents']}),
+        queryClient.invalidateQueries({queryKey: ['myso-wallet-balance']}),
+      ]);
+    await refresh();
+    setTimeout(() => void refresh(), 2500);
+  }
+
   async function submit(approveParentGrant = false) {
     if (!account.data) {
       setError('A memory account is required. Create a MySocial profile first.');
@@ -168,6 +184,7 @@ export function AgentCreateForm({
           budget: budgetArgs(),
           onStep: setStep,
         });
+        await hydrateAfterCreate();
         onCreated?.(created.agentObjectId);
       } else {
         const selectedParent: SubAgentRow | undefined = parents.find(
@@ -186,6 +203,7 @@ export function AgentCreateForm({
           budget: budgetArgs(),
           onStep: setStep,
         });
+        await hydrateAfterCreate();
         onCreated?.(created.agentObjectId);
       }
       onClose?.();
@@ -365,7 +383,6 @@ export function AgentCreateForm({
           parent={parent}
           agents={agents.items}
           childLabel={label.trim() || 'Child agent'}
-          childCapabilities={mask}
           grant={parentGrant}
           onCancel={() => setGrantDialogOpen(false)}
           onApprove={() => {

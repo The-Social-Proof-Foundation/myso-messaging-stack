@@ -11,6 +11,8 @@ export type StoredSidebarPreview = {
   text: string;
   order: number;
   verified: boolean;
+  /** Last message `createdAt` — orders are per-group, so cross-group sorting needs time. */
+  at?: number;
 };
 
 export type StoredSidebarProfile = {
@@ -72,6 +74,7 @@ export function loadSidebarPreviews(
       text: typeof entry.text === 'string' ? entry.text : '',
       order: entry.order,
       verified: Boolean(entry.verified),
+      ...(typeof entry.at === 'number' ? { at: entry.at } : {}),
     });
   }
   return out;

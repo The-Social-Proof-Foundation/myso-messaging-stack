@@ -147,6 +147,21 @@ export function ProfileDropdown() {
 
           <DropdownMenu.Item asChild>
             <Link
+              to="/automation"
+              onClick={() => setOpen(false)}
+              className="group flex w-full cursor-pointer select-none items-center gap-2 px-2 py-2 text-sm text-secondary-500 outline-none transition-colors hover:bg-secondary-50 hover:text-secondary-900 focus:bg-secondary-50 focus:text-secondary-900 dark:text-secondary-400 dark:hover:bg-secondary-800 dark:hover:text-secondary-50 dark:focus:bg-secondary-800 dark:focus:text-secondary-50"
+            
+            >
+              <Bot className="mx-2 h-4 w-4 shrink-0" />
+              <span>Automation</span>
+              <ChevronRight className="ml-auto h-4 w-4 shrink-0 opacity-0 transition-opacity group-hover:opacity-100 group-focus:opacity-100" />
+            </Link>
+          </DropdownMenu.Item>
+
+          <div className="border-t border-secondary-200 dark:border-secondary-700" />
+
+          <DropdownMenu.Item asChild>
+            <Link
               to="/settings"
               onClick={() => setOpen(false)}
               className="group flex w-full cursor-pointer select-none items-center gap-2 px-2 py-2 text-sm text-secondary-500 outline-none transition-colors hover:bg-secondary-50 hover:text-secondary-900 focus:bg-secondary-50 focus:text-secondary-900 dark:text-secondary-400 dark:hover:bg-secondary-800 dark:hover:text-secondary-50 dark:focus:bg-secondary-800 dark:focus:text-secondary-50"

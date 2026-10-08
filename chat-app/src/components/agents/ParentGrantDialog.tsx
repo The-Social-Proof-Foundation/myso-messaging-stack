@@ -17,7 +17,6 @@ interface ParentGrantDialogProps {
   /** Every agent we know about, used to draw the chain above the parent. */
   agents: readonly SubAgentRow[];
   childLabel: string;
-  childCapabilities: number;
   /** Capabilities the parent holds after the grant. */
   grant: {capabilities: number; delegatableCaps: number};
   onApprove: () => void;
@@ -104,7 +103,6 @@ export function ParentGrantDialog({
   parent,
   agents,
   childLabel,
-  childCapabilities,
   grant,
   onApprove,
   onCancel,
@@ -130,7 +128,6 @@ export function ParentGrantDialog({
   const addedDelegation = capabilityNames(grant.delegatableCaps).filter(
     (name) => !hasCapability(parent.delegatable_caps, name),
   );
-  const held = capabilityNames(parent.capabilities);
   const childDepth = ancestors.length + 1;
 
   return (
@@ -165,9 +162,8 @@ export function ParentGrantDialog({
                 {parent.label} needs your OK
               </h2>
               <p className="mt-1 text-sm text-secondary-500 dark:text-secondary-400">
-                To create <strong>{childLabel}</strong>, {parent.label} must first be given
-                {added.length ? ' a few extra permissions' : ' permission to pass these on'}. An
-                agent can only hand a child permissions it holds itself.
+                To create <strong>{childLabel}</strong>, {parent.label} needs{' '}
+                {added.length ? 'these extra permissions' : 'permission to delegate these'}.
               </p>
             </div>
           </div>
@@ -185,36 +181,18 @@ export function ParentGrantDialog({
             <Node
               orbKey={parent.derived_address}
               label={parent.label}
-              role="Parent · gets update"
+              role="Parent"
               depth={ancestors.length}
               highlight
             >
               <div className="mt-2 flex flex-wrap gap-1">
-                {held.map((name) => (
-                  <Chip key={name} name={name} />
-                ))}
-                {added.map((name) => (
+                {(added.length ? added : addedDelegation).map((name) => (
                   <Chip key={name} name={name} added />
                 ))}
               </div>
-              {addedDelegation.length ? (
-                <p className="mt-2 text-[11px] text-secondary-400">
-                  Newly delegatable: {addedDelegation.map((n) => CAPABILITY_LABELS[n]).join(', ')}
-                </p>
-              ) : null}
             </Node>
-            <Node label={childLabel} role="New agent" depth={childDepth}>
-              <div className="mt-2 flex flex-wrap gap-1">
-                {capabilityNames(childCapabilities).map((name) => (
-                  <Chip key={name} name={name} />
-                ))}
-              </div>
-            </Node>
+            <Node label={childLabel} role="New agent" depth={childDepth} />
           </div>
-
-          <p className="text-xs text-secondary-500 dark:text-secondary-400">
-            You'll approve this once. We update {parent.label} first, then create {childLabel} right away.
-          </p>
 
           <div className="flex justify-end gap-2">
             <Button variant="ghost" onClick={onCancel}>

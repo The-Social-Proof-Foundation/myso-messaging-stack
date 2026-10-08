@@ -81,3 +81,29 @@ describe('agentRoleLabel', () => {
     expect(agentRoleLabel(0)).toBe('Custom');
   });
 });
+
+describe('automation delegates in the chart', () => {
+  it('shows delegates as a badge on their parent, not as teammates', () => {
+    const [root] = agentForestToChart(
+      buildAgentTree([
+        row('root', null, {label: 'Lead'}),
+        row('mate', 'root', {label: 'Field scout'}),
+        row('d1', 'root', {label: 'Automation: nightly'}),
+        row('d2', 'root', {label: 'Automation: weekly', revoked_at_ms: 5}),
+      ]),
+    );
+    expect(root?.children?.map((child) => child.name)).toEqual(['Field scout']);
+    expect(root?.reportsCount).toBe(1);
+    expect(root?.teamHeadcount).toBe(1);
+    expect(root?.automations).toEqual([
+      {id: 'd1', name: 'nightly', status: 'active'},
+      {id: 'd2', name: 'weekly', status: 'revoked'},
+    ]);
+  });
+
+  it('leaves agents without delegates untouched', () => {
+    const [root] = agentForestToChart(buildAgentTree([row('root', null)]));
+    expect(root?.automations).toBeUndefined();
+    expect(root?.children).toBeUndefined();
+  });
+});

@@ -5,7 +5,7 @@ import { useAuthenticatedAddress } from '../contexts/MySocialAuthContext';
 import { useMessagingMemberAddress } from '../contexts/MessagingClientContext';
 import { useOwnWalletProfile } from '../hooks/useOwnWalletProfile';
 import { useSidebarGroupMembers } from '../hooks/useSidebarGroupMembers';
-import { useSidebarMessagePreviews } from '../hooks/useSidebarMessagePreviews';
+import { sidebarPreviewActivityTime, useSidebarMessagePreviews } from '../hooks/useSidebarMessagePreviews';
 import { useWalletAvatarMap } from '../hooks/useWalletAvatarMap';
 import { useAgentNamesByAddress } from '../hooks/agents/useSubAgents';
 import { conversationPeerLabel, isKnownAgentAddress, knownAgentAddressSet } from '../lib/agents/agent-display-name';
@@ -16,7 +16,6 @@ import {
 } from '../lib/wallet-profile';
 import { ConversationAvatar } from './ConversationAvatar';
 import { SidebarPromo } from './SidebarPromo';
-import { AgentViewToggle } from './agents/AgentViewToggle';
 import { sidebarShellClass } from './SidebarShell';
 
 interface SidebarProps {
@@ -28,8 +27,6 @@ interface SidebarProps {
   /** Groups whose unread messages are paid-DM requests (reply claims escrow). */
   paidDmGroupIds?: Set<string>;
   onSelectGroup: (uuid: string) => void;
-  /** Swaps the sidebar into the organizations-and-agents view. */
-  onOpenAgentView: () => void;
   loading?: boolean;
   /** Agent-chat creator addresses, so foreign agents still get an orb. */
   agentCreatorActors?: readonly (string | null | undefined)[];
@@ -42,7 +39,6 @@ export function Sidebar({
   latestOrders = {},
   paidDmGroupIds,
   onSelectGroup,
-  onOpenAgentView,
   loading = false,
   agentCreatorActors = [],
 }: Readonly<SidebarProps>) {
@@ -61,6 +57,21 @@ export function Sidebar({
   const groupIds = useMemo(() => groups.map((g) => g.groupId), [groups]);
   const membersByGroup = useSidebarGroupMembers(groupIds);
   const previews = useSidebarMessagePreviews(groups, latestOrders);
+  // Most recent message first; groups without a known time keep their incoming order.
+  const orderedGroups = useMemo(
+    () =>
+      groups
+        .map((group, index) => ({
+          group,
+          index,
+          at: sidebarPreviewActivityTime(group.groupId),
+        }))
+        .sort((a, b) => b.at - a.at || a.index - b.index)
+        .map((entry) => entry.group),
+    // previews changes whenever the preview cache (and its times) does
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [groups, previews],
+  );
   // membersByGroup is seeded from persisted peers before getMembers returns.
   const profileAddresses = useMemo(() => {
     const addrs = new Set<string>();
@@ -87,8 +98,6 @@ export function Sidebar({
 
   return (
     <aside className={sidebarShellClass}>
-      <AgentViewToggle onOpen={onOpenAgentView} />
-
       {/* Group list */}
       <div className="flex-1 overflow-y-auto">
         {groups.length === 0 ? (
@@ -103,7 +112,7 @@ export function Sidebar({
           </div>
         ) : (
           <ul>
-            {groups.map((group) => {
+            {orderedGroups.map((group) => {
               const unread = unreadCounts[group.groupId] ?? 0;
               const isPaidRequest = paidDmGroupIds?.has(group.groupId) ?? false;
               const selected =
