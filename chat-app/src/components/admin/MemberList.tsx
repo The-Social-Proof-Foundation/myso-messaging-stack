@@ -14,6 +14,9 @@ interface PermType {
   value: string;
 }
 
+/** Placeholder name-bar widths for the 3-row loading shimmer (ragged, not uniform). */
+const MEMBER_ROW_SKELETON_LABEL_WIDTHS = ['w-28', 'w-20', 'w-24'];
+
 interface MemberListProps {
   members: MemberWithPermissions[];
   loading: boolean;
@@ -63,8 +66,28 @@ export function MemberList({
       </h4>
 
       {loading && members.length === 0 && (
-        <div className="flex items-center justify-center py-6">
-          <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-primary-500 border-t-transparent" />
+        <div aria-busy="true">
+          <p className="sr-only">Loading members…</p>
+          <ul
+            aria-hidden
+            className="overflow-hidden rounded-xl border border-secondary-200 bg-secondary-100 dark:border-secondary-700 dark:bg-secondary-800"
+          >
+            {MEMBER_ROW_SKELETON_LABEL_WIDTHS.map((labelWidth, index) => (
+              <li
+                key={labelWidth}
+                className="flex items-center gap-2 border-b border-secondary-200 px-3 py-1.5 last:border-b-0 dark:border-secondary-700"
+              >
+                {/* h-6 avatar box matches MemberItem / Add Member row heights. */}
+                <span className="flex h-6 w-6 shrink-0 items-center justify-center">
+                  <span className="h-6 w-6 animate-pulse rounded-full bg-secondary-200 dark:bg-secondary-700" />
+                </span>
+                <span
+                  className={`h-3 animate-pulse rounded-full bg-secondary-200 dark:bg-secondary-700 ${labelWidth}`}
+                  style={{ animationDelay: `${index * 120}ms` }}
+                />
+              </li>
+            ))}
+          </ul>
         </div>
       )}
 

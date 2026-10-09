@@ -1,6 +1,6 @@
 import {describe, expect, it} from 'vitest';
 
-import {decideRecall, decideRemember, turnIdempotencyKey} from './memory-turn';
+import {decideRecall, decideRemember, parseAgentCommand, turnIdempotencyKey} from './memory-turn';
 
 describe('decideRecall', () => {
   it('skips memory for small talk', () => {
@@ -8,8 +8,9 @@ describe('decideRecall', () => {
     expect(decideRecall('thanks!').reason).toBe('small-talk');
   });
 
-  it('skips memory for a self-contained question with no history', () => {
-    expect(decideRecall('what is 2+2?').recall).toBe(false);
+  it('recalls for any real question, even without cue words', () => {
+    expect(decideRecall('Hello, who do you report to?').recall).toBe(true);
+    expect(decideRecall('what is 2+2?').recall).toBe(true);
   });
 
   it('recalls when the turn refers to stored facts', () => {
@@ -22,7 +23,6 @@ describe('decideRecall', () => {
 
   it('treats a short follow-up as needing prior context', () => {
     expect(decideRecall('and the other one?', 4).recall).toBe(true);
-    expect(decideRecall('and the other one?', 0).recall).toBe(false);
   });
 
   it('never recalls on an empty turn', () => {
@@ -79,5 +79,18 @@ describe('turnIdempotencyKey', () => {
     expect(await turnIdempotencyKey('group-1', 'hello')).toBe(first);
     expect(await turnIdempotencyKey('group-1', 'hello!')).not.toBe(first);
     expect(await turnIdempotencyKey('group-2', 'hello')).not.toBe(first);
+  });
+});
+
+describe('parseAgentCommand', () => {
+  it('parses known commands and their arguments', () => {
+    expect(parseAgentCommand('/help')).toEqual({name: 'help', args: ''});
+    expect(parseAgentCommand('/Recall my pie')).toEqual({name: 'recall', args: 'my pie'});
+    expect(parseAgentCommand('/remember I like pie')).toEqual({name: 'remember', args: 'I like pie'});
+  });
+  it('leaves other text for the model', () => {
+    expect(parseAgentCommand('/unknown thing')).toBeNull();
+    expect(parseAgentCommand('what does /help do?')).toBeNull();
+    expect(parseAgentCommand('/helpful')).toBeNull();
   });
 });

@@ -1,3 +1,4 @@
+import { useRef } from 'react';
 import type { WalletProfileBits } from '../hooks/useWalletAvatarMap';
 import {
   ReservationNavAvatar,
@@ -66,6 +67,26 @@ export function ConversationAvatar({
   const others = memberAddresses.filter(
     (a) => !selves.some((self) => sameAddress(a, self as string | null | undefined)),
   );
+
+  // Every conversation the viewer can see contains them, so a non-empty roster that
+  // matches none of their identities means an unrecognised address of their own is
+  // rendering as another member — the shape that makes a 1:1 chat draw two faces.
+  // Logged once per roster per mount so the next occurrence names its own addresses.
+  const diagnosedRef = useRef<string | null>(null);
+  if (import.meta.env.DEV && memberAddresses.length > 0) {
+    const matchedSelf = memberAddresses.some((a) =>
+      selves.some((self) => sameAddress(a, self as string | null | undefined)),
+    );
+    const signature = memberAddresses.join(',');
+    if (!matchedSelf && diagnosedRef.current !== signature) {
+      diagnosedRef.current = signature;
+      console.warn(
+        '[sidebar] no self identity found in this conversation’s member list; ' +
+          'an unrecognised address of your own will render as an extra face.',
+        { memberAddresses, selfAddresses: selves.filter(Boolean) },
+      );
+    }
+  }
 
   // Unknown membership yet, or empty — default avatar.
   if (others.length === 0) {

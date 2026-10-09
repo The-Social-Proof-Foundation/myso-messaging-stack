@@ -46,7 +46,11 @@ import {
   type AgentBudgetArgs,
 } from '../../lib/agents/tx';
 import type {SubAgentRow} from '../../lib/agents/social-api';
-import {fetchOrganization, fetchSubAgentByObjectId} from '../../lib/agents/social-api';
+import {
+  fetchOrganization,
+  fetchOrganizationAuditLogs,
+  fetchSubAgentByObjectId,
+} from '../../lib/agents/social-api';
 import {ORG_OWNER_MASK} from '../../lib/agents/org-permissions';
 import {
   fetchProfileOverview,
@@ -149,6 +153,23 @@ export function useAgentActions() {
   const queryClient = useQueryClient();
   const invalidate = useInvalidateAgents();
   const seedCreatedSubAgent = useSeedCreatedSubAgent();
+
+  /**
+   * The social server reads permissions from its index, which trails the chain. Refetching right
+   * after the grant lands would just 403 again, so wait until the gated route accepts the wallet.
+   */
+  async function waitForAuditorAccess(organizationId: string, {timeoutMs = 20_000, intervalMs = 1000} = {}) {
+    if (!keypair) return;
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      try {
+        await fetchOrganizationAuditLogs(organizationId, keypair, {limit: 1, offset: 0});
+        return;
+      } catch {
+        await new Promise((resolve) => setTimeout(resolve, intervalMs));
+      }
+    }
+  }
 
   function publishCreditBalance(deltaMist: bigint) {
     if (!address) return;
@@ -841,6 +862,7 @@ export function useAgentActions() {
           permissionsMask: ORG_OWNER_MASK,
         }),
       );
+      await waitForAuditorAccess(args.organizationId);
       await invalidate(args.organizationId);
     },
 

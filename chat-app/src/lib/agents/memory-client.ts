@@ -374,6 +374,11 @@ export async function recallAgentMemories(
  * secret and the reservation, and `idempotencyKey` is what makes a retry of one
  * logical turn safe to bill.
  */
+export interface AskHistoryTurn {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
 export async function askAgent(
   memory: Memory,
   args: {
@@ -384,6 +389,10 @@ export async function askAgent(
     recall?: boolean;
     idempotencyKey?: string;
     modelId?: string;
+    /** Recent thread turns, oldest first, so a follow-up has its antecedent. */
+    history?: AskHistoryTurn[];
+    /** Who the agent is: name, organization, and who it reports to / who reports to it. */
+    agentProfile?: string;
   },
 ): Promise<AskResult> {
   const send = () =>
@@ -400,6 +409,8 @@ export async function askAgent(
       ...(args.recall === undefined ? {} : {recall: args.recall}),
       ...(args.idempotencyKey ? {idempotency_key: args.idempotencyKey} : {}),
       ...(args.modelId ? {model_id: args.modelId} : {}),
+      ...(args.history?.length ? {history: args.history} : {}),
+      ...(args.agentProfile ? {agent_profile: args.agentProfile} : {}),
     });
 
   // A retry without an idempotency key could reserve and bill twice, so an

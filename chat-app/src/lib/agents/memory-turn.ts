@@ -7,7 +7,7 @@
  * of MYDATA decrypts — plus a larger prompt — for facts the turn never used.
  *
  * So memory is opt-in per turn:
- *  - recall only when the turn actually refers to stored facts, and
+ *  - recall on every turn except pleasantries, and
  *  - write only when the turn states a durable fact worth keeping.
  *
  * Everything here is a pure function of the message text so it can be unit
@@ -51,24 +51,18 @@ export interface RecallDecision {
 /**
  * Decide whether this turn should pull stored memories into the prompt.
  *
- * `historyLength` is the number of earlier turns in the thread. A bare pronoun
- * or a short follow-up only needs memory when there is something to follow up on.
+ * Agent chats exist to answer from memory, and a question like "who do you report to?" or
+ * "what's our plan?" has no cue word yet still depends on what the agent knows. So recall is the
+ * default and only pleasantries skip it. `historyLength` is kept for callers that pass it.
  */
-export function decideRecall(text: string, historyLength = 0): RecallDecision {
+export function decideRecall(text: string, _historyLength = 0): RecallDecision {
   const trimmed = text.trim();
   if (!trimmed) return {recall: false, reason: 'self-contained'};
   if (SMALL_TALK.test(trimmed)) return {recall: false, reason: 'small-talk'};
-
   for (const cue of RECALL_CUES) {
     if (cue.test(trimmed)) return {recall: true, reason: 'refers-to-prior-context'};
   }
-
-  // A short question with prior turns behind it is almost always a follow-up.
-  if (historyLength > 0 && trimmed.length <= 80 && trimmed.includes('?')) {
-    return {recall: true, reason: 'refers-to-prior-context'};
-  }
-
-  return {recall: false, reason: 'self-contained'};
+  return {recall: true, reason: 'self-contained'};
 }
 
 /** Statements that carry a durable fact worth storing, instead of every turn. */
@@ -147,4 +141,37 @@ export async function turnIdempotencyKey(
     byte.toString(16).padStart(2, '0'),
   ).join('');
   return `chat-turn-${hex}`;
+}
+
+
+/** Told to the model so it explains memory accurately instead of claiming it has no way to save. */
+export const AGENT_MEMORY_NOTE =
+  'Memory: you do not call a memory tool. The chat saves durable facts for you automatically when ' +
+  'the user states one ("my name is…", "I prefer…") or asks you to remember something ' +
+  '("remember that…", "/remember …"), and it recalls stored facts before you answer. ' +
+  'Never say you cannot save memories; if asked, explain this. ' +
+  'Users can also type /help to see local commands.';
+
+export type AgentCommandName = 'help' | 'whoami' | 'recall' | 'remember';
+
+export interface AgentCommand {
+  name: AgentCommandName;
+  args: string;
+}
+
+/** Local commands: answered by the chat itself, with no model call and no AI-credit spend. */
+export const AGENT_COMMAND_HELP = [
+  '/help — list these commands',
+  '/whoami — my name, organization, manager, reports and peers',
+  '/recall <topic> — show what I have stored about a topic (no AI credits used)',
+  '/remember <fact> — save a fact to my memory',
+].join('\n');
+
+const COMMAND_RE = /^\/(help|whoami|recall|remember)\b[:\s]*(.*)$/is;
+
+/** `null` for anything that is not a known command, so it goes to the model as normal text. */
+export function parseAgentCommand(text: string): AgentCommand | null {
+  const match = COMMAND_RE.exec(text.trim());
+  if (!match) return null;
+  return {name: match[1].toLowerCase() as AgentCommandName, args: match[2].trim()};
 }

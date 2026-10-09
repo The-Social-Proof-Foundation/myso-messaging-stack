@@ -571,6 +571,10 @@ function ChatView({
   });
   const memoryReply = useAgentMemoryReply(group.groupId, group.uuid, {
     historyLength: messages.length,
+    thread: messages
+      .filter((m) => m.kind !== 'system' && !m.isDeleted)
+      .slice(-14)
+      .map((m) => ({senderAddress: m.senderAddress, text: m.text})),
   });
   const composerError = memoryReply.error ?? error;
 
