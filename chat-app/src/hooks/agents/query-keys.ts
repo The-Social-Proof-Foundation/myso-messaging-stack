@@ -28,6 +28,18 @@ export const agentKeys = {
   organizationMessagingGroups: (id: string, filters?: ListFilters) =>
     ['agents', 'organization-messaging-groups', id, filters ?? null] as const,
 
+  agentRooms: (principal: string) => ['agents', 'rooms', principal] as const,
+  organizationRooms: (id: string) => ['agents', 'organization-rooms', id] as const,
+  groupDigests: (groupId: string) => ['agents', 'group-digests', groupId] as const,
+
+  myTasks: (address: string, side: 'buyer' | 'seller') => ['agents', 'tasks', address, side] as const,
+  task: (taskId: string) => ['agents', 'task', taskId] as const,
+  agentReceipts: (agentObjectId: string) => ['agents', 'receipts', agentObjectId] as const,
+  taskConfig: () => ['agents', 'task-config'] as const,
+  agentReputation: (agentObjectId: string) => ['agents', 'reputation', agentObjectId] as const,
+  principalReputation: (address: string) => ['agents', 'principal-reputation', address] as const,
+  anyPlatform: () => ['agents', 'any-platform'] as const,
+
   organizationDashboard: (id: string) => ['agents', 'organization-dashboard', id] as const,
   organizationMemoryPermissions: (id: string, filters?: ListFilters) =>
     ['agents', 'organization-dashboard', id, 'memory-permissions', filters ?? null] as const,

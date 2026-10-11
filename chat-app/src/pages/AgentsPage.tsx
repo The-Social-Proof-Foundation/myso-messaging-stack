@@ -4,17 +4,20 @@ import {Navigate, useSearchParams} from 'react-router-dom';
 import {AutomationPanel} from '../components/agents/AutomationPanel';
 import {CreditsPanel} from '../components/agents/CreditsPanel';
 import {OrganizationsPanel} from '../components/agents/OrganizationsPanel';
+import {TasksPanel} from '../components/agents/TasksPanel';
 import {chipClass, pageTitleClass} from '../components/agents/chrome';
 import {useMySocialAuth} from '../contexts/MySocialAuthContext';
 
-type AgentsTab = 'overview' | 'organizations';
+type AgentsTab = 'overview' | 'organizations' | 'tasks';
 
 const TABS: {id: AgentsTab; label: string}[] = [
   {id: 'overview', label: 'Overview'},
   {id: 'organizations', label: 'Organizations'},
+  {id: 'tasks', label: 'Tasks'},
 ];
 
 function parseTab(value: string | null): AgentsTab {
+  if (value === 'tasks') return 'tasks';
   return value === 'organizations' || value === 'agents' ? 'organizations' : 'overview';
 }
 
@@ -53,7 +56,8 @@ export function AgentsPage() {
     return <Navigate to="/" replace />;
   }
 
-  const organizationsTab = tab === 'organizations';
+  // Both tabs scroll their own lists inside a fixed-height pane.
+  const organizationsTab = tab === 'organizations' || tab === 'tasks';
 
   return (
     <main
@@ -73,7 +77,7 @@ export function AgentsPage() {
         <div className="shrink-0">
           <h1 className={pageTitleClass}>Agents &amp; Organizations</h1>
           <p className="mt-1 text-sm text-secondary-500 dark:text-secondary-400">
-            Fund AI credits and manage organizations. Chats live in the home conversation list.
+            Fund AI credits, manage organizations and trade tasks. Chats live in the home conversation list.
           </p>
         </div>
 
@@ -96,7 +100,8 @@ export function AgentsPage() {
             <AutomationPanel />
           </>
         ) : null}
-        {organizationsTab ? <OrganizationsPanel /> : null}
+        {tab === 'organizations' ? <OrganizationsPanel /> : null}
+        {tab === 'tasks' ? <TasksPanel /> : null}
       </div>
     </main>
   );

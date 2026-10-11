@@ -191,7 +191,23 @@ export interface CreateAgentGroupCallOptions extends CreateGroupCallOptions {
 	 * when all initial members are humans or same-principal agents.
 	 */
 	crossPrincipalPeerMemoryAccountId: string;
+	/**
+	 * Tags the group as an agent room (`messaging::room_kind_agent_room()` is `1`) and optionally
+	 * binds it to a task object id. Omit for an ordinary agent chat.
+	 */
+	room?: AgentRoomOptions;
 }
+
+/** Room tagging applied by `create_agent_group` when `kind` is set. */
+export interface AgentRoomOptions {
+	/** Room kind code; only `1` (agent room) exists on-chain. */
+	kind: number;
+	/** Opaque task object id this room is bound to. Requires `kind`. */
+	taskId?: string;
+}
+
+/** Room kind code for an agent room. */
+export const AGENT_ROOM_KIND = 1;
 
 /**
  * Options for rotating the encryption key.

@@ -8,10 +8,16 @@ import {
   hkdfSync,
 } from 'node:crypto';
 
+import {CAP} from './capabilities';
 import {
   DELEGATE_CAPABILITIES,
+  DELEGATE_CLASS_LABELS,
   DELEGATE_MAX_TTL_MS,
   DelegateError,
+  TASK_ACTION_IDS,
+  TASK_WORKER_CAPABILITIES,
+  delegateActionIds,
+  delegateCapabilities,
   delegateKeyRef,
   isValidDelegateName,
   parseMyDataKey,
@@ -163,5 +169,28 @@ describe('delegate identity', () => {
   it('builds the ref a job selects it by', () => {
     expect(delegateKeyRef('nightly')).toBe('delegate:nightly');
     expect(isValidDelegateName('nightly')).toBe(true);
+  });
+});
+
+describe('delegate classes', () => {
+  it('a task worker adds exactly the task market capability to memory', () => {
+    expect(TASK_WORKER_CAPABILITIES).toBe(DELEGATE_CAPABILITIES | CAP.TASK_TRADE);
+    expect(delegateCapabilities('memory')).toBe(7);
+    expect(delegateCapabilities('task_worker')).toBe(7 | 131072);
+    // Nothing else: no posting, messaging, trading, spending or agent management.
+    const extra = delegateCapabilities('task_worker') & ~DELEGATE_CAPABILITIES;
+    expect(extra).toBe(CAP.TASK_TRADE);
+  });
+
+  it('a memory delegate may run no chain action; a worker may run every task action', () => {
+    expect(delegateActionIds('memory')).toEqual([]);
+    expect(delegateActionIds('task_worker')).toEqual(TASK_ACTION_IDS);
+    expect(TASK_ACTION_IDS).toHaveLength(14);
+    expect(new Set(TASK_ACTION_IDS).size).toBe(14);
+    expect(TASK_ACTION_IDS.every((id) => /^task\.[a-z_]+\.v1$/.test(id))).toBe(true);
+  });
+
+  it('labels each class', () => {
+    expect(Object.keys(DELEGATE_CLASS_LABELS).sort()).toEqual(['memory', 'task_worker']);
   });
 });

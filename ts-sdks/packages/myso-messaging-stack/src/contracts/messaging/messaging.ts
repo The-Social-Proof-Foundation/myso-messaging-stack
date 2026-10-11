@@ -395,6 +395,8 @@ export interface CreateAgentGroupArguments {
 	uuid: RawTransactionArgument<string>;
 	initialEncryptedDek: RawTransactionArgument<number[]>;
 	initialMembers: RawTransactionArgument<string>;
+	roomKind: RawTransactionArgument<number | null>;
+	roomTaskId: RawTransactionArgument<string | null>;
 }
 export interface CreateAgentGroupOptions {
 	package?: string;
@@ -414,6 +416,8 @@ export interface CreateAgentGroupOptions {
 				uuid: RawTransactionArgument<string>,
 				initialEncryptedDek: RawTransactionArgument<number[]>,
 				initialMembers: RawTransactionArgument<string>,
+				roomKind: RawTransactionArgument<number | null>,
+				roomTaskId: RawTransactionArgument<string | null>,
 		  ];
 }
 /**
@@ -444,6 +448,8 @@ export function createAgentGroup(options: CreateAgentGroupOptions) {
 		'0x1::string::String',
 		'vector<u8>',
 		null,
+		'0x1::option::Option<u8>',
+		'0x1::option::Option<0x2::object::ID>',
 		'0x2::clock::Clock',
 	] satisfies (string | null)[];
 	const parameterNames = [
@@ -460,6 +466,8 @@ export function createAgentGroup(options: CreateAgentGroupOptions) {
 		'uuid',
 		'initialEncryptedDek',
 		'initialMembers',
+		'roomKind',
+		'roomTaskId',
 	];
 	return (tx: Transaction) =>
 		tx.moveCall({
@@ -483,6 +491,8 @@ export interface CreateAgentAndShareGroupArguments {
 	uuid: RawTransactionArgument<string>;
 	initialEncryptedDek: RawTransactionArgument<number[]>;
 	initialMembers: RawTransactionArgument<string[]>;
+	roomKind: RawTransactionArgument<number | null>;
+	roomTaskId: RawTransactionArgument<string | null>;
 }
 export interface CreateAgentAndShareGroupOptions {
 	package?: string;
@@ -502,6 +512,8 @@ export interface CreateAgentAndShareGroupOptions {
 				uuid: RawTransactionArgument<string>,
 				initialEncryptedDek: RawTransactionArgument<number[]>,
 				initialMembers: RawTransactionArgument<string[]>,
+				roomKind: RawTransactionArgument<number | null>,
+				roomTaskId: RawTransactionArgument<string | null>,
 		  ];
 }
 /** Entry point: create and share an agent-associated messaging group. */
@@ -521,6 +533,8 @@ export function createAgentAndShareGroup(options: CreateAgentAndShareGroupOption
 		'0x1::string::String',
 		'vector<u8>',
 		'vector<address>',
+		'0x1::option::Option<u8>',
+		'0x1::option::Option<0x2::object::ID>',
 		'0x2::clock::Clock',
 	] satisfies (string | null)[];
 	const parameterNames = [
@@ -537,6 +551,8 @@ export function createAgentAndShareGroup(options: CreateAgentAndShareGroupOption
 		'uuid',
 		'initialEncryptedDek',
 		'initialMembers',
+		'roomKind',
+		'roomTaskId',
 	];
 	return (tx: Transaction) =>
 		tx.moveCall({

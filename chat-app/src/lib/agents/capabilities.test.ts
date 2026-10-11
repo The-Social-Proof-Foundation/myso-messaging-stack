@@ -29,6 +29,14 @@ describe('capability bits', () => {
     expect(CAP.AGENT_REGISTER).toBe(8192);
     expect(CAP.AI_SPEND).toBe(16384);
     expect(CAP.BUDGET_MANAGE).toBe(32768);
+    expect(CAP.SOCIAL_GRAPH).toBe(65536);
+    expect(CAP.TASK_TRADE).toBe(131072);
+  });
+
+  it('keeps every bit unique so a mask decodes unambiguously', () => {
+    const bits = Object.values(CAP);
+    expect(new Set(bits).size).toBe(bits.length);
+    for (const bit of bits) expect(bit & (bit - 1)).toBe(0);
   });
 });
 

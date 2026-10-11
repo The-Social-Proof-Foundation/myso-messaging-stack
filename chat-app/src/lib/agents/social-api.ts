@@ -230,6 +230,210 @@ export interface MessagingAgentGroupInfo {
   transactionId: string;
 }
 
+/** `GET /agents/rooms` and `GET /organizations/:id/rooms` (camelCase, like the agent-group route). */
+export interface AgentRoomInfo {
+  groupId: string;
+  /** `messaging::room_kind_agent_room()` is `1`. */
+  roomKind: number;
+  taskId: string | null;
+  creatorActor: string;
+  creatorPrincipal: string;
+  organizationId: string | null;
+  /** `null` until the matching `AgentGroupCreated` row is indexed. */
+  groupName: string | null;
+  groupUuid: string | null;
+  createdAtMs: number;
+  transactionId: string;
+}
+
+/** `GET /groups/:groupId/digests`: one chain-anchored `MessageDigestSent` per message. */
+export interface GroupDigestInfo {
+  groupId: string;
+  seq: number;
+  sender: string;
+  recipient: string;
+  /** Lowercase hex of the 32-byte content digest, no `0x`. */
+  contentDigest: string;
+  contentUri: string;
+  createdAtMs: number;
+  transactionId: string;
+}
+
+/** `GET /tasks`, `GET /tasks/:id` (camelCase). Status: 0 offered .. 5 cancelled. */
+export interface AgentTaskInfo {
+  taskId: string;
+  buyerPrincipal: string;
+  buyerAgentId: string | null;
+  buyerMemoryAccountId: string;
+  sellerPrincipal: string;
+  sellerAgentId: string;
+  sellerMemoryAccountId: string;
+  organizationId: string | null;
+  roomGroupId: string | null;
+  platformId: string | null;
+  title: string;
+  /** Lowercase hex, no `0x`. */
+  scopeDigest: string;
+  amountMist: number;
+  acceptWindowMs: number;
+  deliveryWindowMs: number;
+  settleWindowMs: number;
+  platformFeeBps: number;
+  ecosystemFeeBps: number;
+  termsDigest: string;
+  status: number;
+  closeKind: number | null;
+  settlementKind: number | null;
+  refundKind: number | null;
+  createdAtMs: number;
+  acceptDeadlineMs: number;
+  acceptedAtMs: number | null;
+  deliveryDeadlineMs: number | null;
+  deliveredAtMs: number | null;
+  settleDeadlineMs: number | null;
+  settledAtMs: number | null;
+  refundedAtMs: number | null;
+  cancelledAtMs: number | null;
+  reviewDeadlineMs: number | null;
+  deliverableDigest: string | null;
+  deliverableUri: string | null;
+  platformFeeMist: number | null;
+  ecosystemFeeMist: number | null;
+  netAmountMist: number | null;
+  /** 0 none, 1 buyer, 2 seller. */
+  refundProposer: number;
+  refundProposedAtMs: number | null;
+  buyerCredibilityBps: number | null;
+  sellerCredibilityBps: number | null;
+  buyerReviewStars: number | null;
+  sellerReviewStars: number | null;
+  transactionId: string;
+}
+
+export interface TaskReviewInfo {
+  taskId: string;
+  /** 1 buyer reviewed the seller, 2 seller reviewed the buyer. */
+  raterRole: number;
+  raterPrincipal: string;
+  raterAgentId: string | null;
+  revieweePrincipal: string;
+  revieweeAgentId: string | null;
+  stars: number;
+  raterCredibilityBps: number;
+  valueWeightBps: number;
+  baseWeightBps: number;
+  priorPairReviews: number;
+  weightBps: number;
+  reviewedAtMs: number;
+  transactionId: string;
+}
+
+export interface TaskDetailInfo extends AgentTaskInfo {
+  reviews: TaskReviewInfo[];
+}
+
+export interface TaskReceiptInfo {
+  taskId: string;
+  receiptId: string;
+  buyerPrincipal: string;
+  buyerAgentId: string | null;
+  sellerPrincipal: string;
+  sellerAgentId: string;
+  organizationId: string | null;
+  roomGroupId: string | null;
+  settlementKind: number;
+  amountMist: number;
+  platformFeeMist: number;
+  ecosystemFeeMist: number;
+  netAmountMist: number;
+  deliverableDigest: string | null;
+  deliverableUri: string | null;
+  buyerCredibilityBps: number;
+  sellerCredibilityBps: number;
+  settleDeadlineMs: number;
+  reviewDeadlineMs: number;
+  settledAtMs: number;
+  transactionId: string;
+}
+
+/** `GET /task/config`: the latest `TaskConfigUpdated`. */
+export interface TaskConfigInfo {
+  updatedBy: string;
+  platformFeeBps: number;
+  ecosystemFeeBps: number;
+  ecosystemFeeRecipient: string;
+  minEscrowMist: number;
+  acceptWindowMinMs: number;
+  acceptWindowDefaultMs: number;
+  acceptWindowMaxMs: number;
+  deliveryWindowMinMs: number;
+  deliveryWindowMaxMs: number;
+  settleWindowMinMs: number;
+  settleWindowMaxMs: number;
+  releaseGraceMs: number;
+  reviewWindowMs: number;
+  maxTitleBytes: number;
+  maxUriBytes: number;
+  active: boolean;
+  priorMeanMilli: number;
+  priorWeightBps: number;
+  valueRefMist: number;
+  minValueWeightBps: number;
+  maxValueWeightBps: number;
+  credBaseBps: number;
+  credStepBps: number;
+  credCapN: number;
+  credMaxBps: number;
+  overallSellerWeightBps: number;
+  overallBuyerWeightBps: number;
+  timestampMs: number;
+  transactionId: string;
+}
+
+/** One role's reputation, derived server-side from on-chain sums with the current prior. */
+export interface ReputationScoreInfo {
+  reviewCount: number;
+  /** Counts of 1 through 5 star reviews. */
+  histogram: [number, number, number, number, number];
+  scoreMilli: number;
+  /** `scoreMilli / 1000`. */
+  score: number;
+  confidenceBps: number;
+  lastReceiptId: string | null;
+  updatedAtMs: number | null;
+}
+
+export interface OverallScoreInfo {
+  scoreMilli: number;
+  score: number;
+  confidenceBps: number;
+}
+
+export interface CredibilityInfo {
+  accountId: string;
+  settledCount: number;
+  volumeMist: string;
+  credibilityBps: number;
+}
+
+/** `GET /agents/:id/reputation`: the agent's own scores; credibility is its principal's. */
+export interface AgentReputationInfo {
+  agentObjectId: string;
+  asSeller: ReputationScoreInfo;
+  asBuyer: ReputationScoreInfo;
+  overall: OverallScoreInfo;
+  credibility: CredibilityInfo | null;
+}
+
+/** `GET /principals/:address/reputation`: a principal that buys directly. */
+export interface PrincipalReputationInfo {
+  principal: string;
+  accountId: string | null;
+  asHumanBuyer: ReputationScoreInfo;
+  overall: OverallScoreInfo;
+  credibility: CredibilityInfo | null;
+}
+
 export type OrgStatsWindow = 'days7' | 'days30' | 'days180' | 'days365' | 'all';
 
 export class SocialServerNotConfiguredError extends Error {
@@ -569,6 +773,101 @@ export async function fetchOrganizationMessagingGroups(
     {limit, offset, signal},
   );
   return arrayPage(json, pagingSupported);
+}
+
+/** Rooms created by agents under `principal` (the social server requires a principal filter). */
+export async function fetchAgentRooms(
+  principal: string,
+  {limit, offset, signal}: PageArgs,
+): Promise<PageResult<AgentRoomInfo>> {
+  const {json, pagingSupported} = await getPagedJson<AgentRoomInfo[]>('/agents/rooms', {
+    principal,
+    limit,
+    offset,
+    signal,
+  });
+  return arrayPage(json, pagingSupported);
+}
+
+export async function fetchOrganizationRooms(
+  organizationId: string,
+  {limit, offset, signal}: PageArgs,
+): Promise<PageResult<AgentRoomInfo>> {
+  const {json, pagingSupported} = await getPagedJson<AgentRoomInfo[]>(
+    `/organizations/${enc(organizationId)}/rooms`,
+    {limit, offset, signal},
+  );
+  return arrayPage(json, pagingSupported);
+}
+
+export async function fetchGroupDigests(
+  groupId: string,
+  {limit, offset, signal}: PageArgs,
+): Promise<PageResult<GroupDigestInfo>> {
+  const {json, pagingSupported} = await getPagedJson<GroupDigestInfo[]>(
+    `/groups/${enc(groupId)}/digests`,
+    {limit, offset, signal},
+  );
+  return arrayPage(json, pagingSupported);
+}
+
+export interface TaskListFilters {
+  buyerPrincipal?: string;
+  buyerAgentId?: string;
+  sellerPrincipal?: string;
+  sellerAgentId?: string;
+  organizationId?: string;
+  roomGroupId?: string;
+  /** Task status codes, e.g. `[0, 1]` for open work. */
+  statuses?: number[];
+}
+
+/** Tasks scoped to a party; the server rejects an unscoped listing. */
+export async function fetchTasks(
+  filters: TaskListFilters,
+  {limit, offset, signal}: PageArgs,
+): Promise<PageResult<AgentTaskInfo>> {
+  const {json, pagingSupported} = await getPagedJson<AgentTaskInfo[]>('/tasks', {
+    buyer_principal: filters.buyerPrincipal,
+    buyer_agent_id: filters.buyerAgentId,
+    seller_principal: filters.sellerPrincipal,
+    seller_agent_id: filters.sellerAgentId,
+    organization_id: filters.organizationId,
+    room_group_id: filters.roomGroupId,
+    status: filters.statuses?.length ? filters.statuses.join(',') : undefined,
+    limit,
+    offset,
+    signal,
+  });
+  return arrayPage(json, pagingSupported);
+}
+
+export function fetchTask(taskId: string): Promise<TaskDetailInfo | null> {
+  return getJsonOrNull(`/tasks/${enc(taskId)}`);
+}
+
+export async function fetchAgentReceipts(
+  agentObjectId: string,
+  {limit, offset, signal}: PageArgs,
+): Promise<PageResult<TaskReceiptInfo>> {
+  const {json, pagingSupported} = await getPagedJson<TaskReceiptInfo[]>(
+    `/agents/${enc(agentObjectId)}/receipts`,
+    {limit, offset, signal},
+  );
+  return arrayPage(json, pagingSupported);
+}
+
+export function fetchTaskConfig(): Promise<TaskConfigInfo | null> {
+  return getJsonOrNull('/task/config');
+}
+
+/** `null` when the agent is unknown to the indexer. A new agent returns the prior, not null. */
+export function fetchAgentReputation(agentObjectId: string): Promise<AgentReputationInfo | null> {
+  return getJsonOrNull(`/agents/${enc(agentObjectId)}/reputation`);
+}
+
+export function fetchPrincipalReputation(address: string): Promise<PrincipalReputationInfo | null> {
+  return getJsonOrNull(`/principals/${enc(address)}/reputation`);
 }
 
 export interface AuditLogFilters {

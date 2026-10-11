@@ -227,6 +227,8 @@ export class MySoMessagingStackCall {
 						uuid,
 						initialEncryptedDek: Array.from(encryptedDek),
 						initialMembers,
+						roomKind: options.room?.kind ?? null,
+						roomTaskId: options.room?.taskId ?? null,
 					},
 				}),
 			);
@@ -260,6 +262,8 @@ export class MySoMessagingStackCall {
 						uuid,
 						initialEncryptedDek: Array.from(encryptedDek),
 						initialMembers: options?.initialMembers ?? [],
+						roomKind: options.room?.kind ?? null,
+						roomTaskId: options.room?.taskId ?? null,
 					},
 				}),
 			);

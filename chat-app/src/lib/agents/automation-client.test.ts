@@ -213,6 +213,71 @@ describe('ownership is server-stamped', () => {
   });
 });
 
+describe('task automation payloads', () => {
+  it('sends a registered action job with its policy and templates untouched', async () => {
+    const input: CreateJobInput = {
+      name: 'accept',
+      trigger_set: {
+        match_mode: 'any',
+        evaluation_window_ms: 0,
+        triggers: [{ kind: 'event', event_family: 'task', event_type: 'offered' }],
+      },
+      target_agent_object_id: '0xagent',
+      target_agent_key_ref: 'delegate:worker',
+      action: {
+        kind: 'registered_action',
+        config: {
+          action_id: 'task.accept.v1',
+          params: { taskId: '{{event.payload.task_id}}' },
+          policy: { max_amount_mist: '5000000000' },
+        },
+      },
+    };
+    await client().createJob(input);
+    const body = JSON.parse(captured[0]!.body) as CreateJobInput & Record<string, unknown>;
+    expect(body.action).toEqual(input.action);
+    expect(body.trigger_set.triggers[0]).toMatchObject({ event_family: 'task', event_type: 'offered' });
+    expect(body.account_id).toBeUndefined();
+  });
+
+  it('PUTs a delegate class and action allowlist only when asked to', async () => {
+    respond = () => new Response(null, { status: 204 });
+    await client().putDelegate('worker', {
+      agent_object_id: '0xagent',
+      mydata_key_id: 'k1',
+      encrypted_key: 'CIPHERTEXT',
+      delegate_class: 'task_worker',
+      allowed_action_ids: ['task.accept.v1', 'task.deliver.v1'],
+    });
+    expect(JSON.parse(captured[0]!.body)).toEqual({
+      agent_object_id: '0xagent',
+      mydata_key_id: 'k1',
+      encrypted_key: 'CIPHERTEXT',
+      delegate_class: 'task_worker',
+      allowed_action_ids: ['task.accept.v1', 'task.deliver.v1'],
+    });
+  });
+
+  it('lists delegates with their class, and a webhook job without its secret', async () => {
+    respond = (init) =>
+      new Response(
+        JSON.stringify(
+          init.url.includes('/delegates')
+            ? [{ delegate_ref: 'w', agent_object_id: '0xa', mydata_key_id: 'k', delegate_class: 'task_worker', allowed_action_ids: ['task.accept.v1'], created_at: 'now' }]
+            : [{ id: 'j', action: { kind: 'webhook', config: { url: 'https://w.example.com/', secret_set: true, allowed_hosts: ['w.example.com'], allowed_action_ids: ['task.deliver.v1'] } } }],
+        ),
+        { status: 200 },
+      );
+    const delegates = await client().listDelegates();
+    expect(delegates[0]?.delegate_class).toBe('task_worker');
+    const jobs = await client().listJobs();
+    const action = jobs[0]!.action;
+    expect(action.kind).toBe('webhook');
+    expect(action.kind === 'webhook' && action.config.secret).toBeUndefined();
+    expect(action.kind === 'webhook' && action.config.secret_set).toBe(true);
+  });
+});
+
 describe('error classification', () => {
   it('maps 401 to a non-retryable unauthorized error', async () => {
     respond = () => new Response(JSON.stringify({ error: 'unauthorized' }), { status: 401 });

@@ -3,6 +3,7 @@ import {useEffect, useState} from 'react';
 import {buttonClass, cardClass, fieldClass, sectionTitleClass} from './chrome';
 import {AutomationDelegates} from './AutomationDelegates';
 import {AutomationJobForm} from './AutomationJobForm';
+import {TaskAutomationForm} from './TaskAutomationForm';
 import {ListError} from './ListStates';
 import type {SubAgentRow} from '../../lib/agents/social-api';
 import type {AutomationJob, AutomationRun} from '../../lib/agents/automation-client';
@@ -39,6 +40,18 @@ function jobSchedule(job: AutomationJob): string {
     .join(', ');
 }
 
+/** What a job does, in a line. Memory jobs show their query; task jobs show the action they run. */
+function jobAction(job: AutomationJob): string | null {
+  const {action} = job;
+  if (action.kind === 'memory_relayer_call') {
+    const {operation, query} = action.config;
+    return operation ? `${operation}${query ? `: ${query}` : ''}` : null;
+  }
+  if (action.kind === 'registered_action') return action.config.action_id;
+  const host = action.config.allowed_hosts[0] ?? 'endpoint';
+  return `${host} → ${action.config.allowed_action_ids.join(', ')}`;
+}
+
 function runTone(status: AutomationRun['status']): string {
   switch (status) {
     case 'succeeded':
@@ -66,7 +79,7 @@ function formatWhen(value: string | undefined): string {
  */
 function runDetail(run: AutomationRun): string | null {
   if (run.error) return run.error;
-  if (run.status === 'skipped') return 'Skipped by preflight or budget';
+  if (run.status === 'skipped') return 'Skipped: the job’s rules, a deadline, or the chain state did not allow it';
   return null;
 }
 
@@ -214,11 +227,8 @@ export function AutomationPanel({agent: fixedAgent}: Readonly<{agent?: SubAgentR
                         ? ` · cap ${job.max_mist_per_run} mist/run`
                         : ''}
                     </p>
-                    {job.action.config?.operation ? (
-                      <p className="mt-0.5 text-xs text-secondary-400">
-                        {job.action.config.operation}
-                        {job.action.config.query ? `: ${job.action.config.query}` : ''}
-                      </p>
+                    {jobAction(job) ? (
+                      <p className="mt-0.5 break-words text-xs text-secondary-400">{jobAction(job)}</p>
                     ) : null}
                   </div>
                   <button
@@ -238,6 +248,7 @@ export function AutomationPanel({agent: fixedAgent}: Readonly<{agent?: SubAgentR
       )}
 
       {health.error ? null : <AutomationJobForm agent={agent} />}
+      {health.error ? null : <TaskAutomationForm agent={agent} />}
       {health.error ? null : <AutomationDelegates agent={agent} />}
     </section>
   );

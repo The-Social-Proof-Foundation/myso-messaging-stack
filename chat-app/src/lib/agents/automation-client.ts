@@ -70,13 +70,59 @@ export interface MemoryActionConfig {
     wait?: boolean;
 }
 
+/** Selection criteria a job checks against the triggering task event before it acts. */
+export interface TaskActionPolicy {
+    min_amount_mist?: string;
+    max_amount_mist?: string;
+    min_delivery_window_ms?: string;
+    max_open_tasks?: string;
+    min_buyer_score_milli?: string;
+    min_buyer_credibility_bps?: string;
+    min_seller_score_milli?: string;
+    min_seller_credibility_bps?: string;
+    allowed_buyer_principals?: string[];
+    scope_digest_allowlist?: string[];
+}
+
+/**
+ * `action.config` for a `registered_action` job. String params may carry
+ * `{{event.payload.field}}` templates that the engine fills from the triggering event.
+ */
+export interface RegisteredActionConfig {
+    action_id: string;
+    params: Record<string, unknown>;
+    policy?: TaskActionPolicy;
+}
+
+/** `action.config` for a `webhook` job. The endpoint answers with the action to run. */
+export interface WebhookActionConfig {
+    url: string;
+    /** Write-only: the relayer never returns it, only `secret_set: true`. */
+    secret?: string;
+    secret_set?: boolean;
+    allowed_hosts: string[];
+    allowed_action_ids: string[];
+    policy?: TaskActionPolicy;
+}
+
+export type DelegateClass = 'memory' | 'task_worker';
+
 /** A stored delegate, as listed. The encrypted key is never returned. */
 export interface AutomationDelegate {
     delegate_ref: string;
     agent_object_id: string;
     mydata_key_id: string;
+    /** Absent on an engine that predates delegate classes, which means `memory`. */
+    delegate_class?: DelegateClass;
+    allowed_action_ids?: string[];
     created_at: string;
 }
+
+/** What a job does. Memory work and task market work are different kinds of action. */
+export type AutomationAction =
+    | {kind: 'memory_relayer_call'; config: MemoryActionConfig}
+    | {kind: 'registered_action'; config: RegisteredActionConfig}
+    | {kind: 'webhook'; config: WebhookActionConfig};
 
 export interface AutomationJob {
     id: string;
@@ -87,10 +133,7 @@ export interface AutomationJob {
     trigger_set: AutomationTriggerSet;
     target_agent_object_id: string;
     target_agent_key_ref: string;
-    action: {
-        kind: 'memory_relayer_call' | 'social_action' | 'webhook';
-        config: MemoryActionConfig;
-    };
+    action: AutomationAction;
     memory_scope: string;
     max_mist_per_run: number;
     retry_policy: { max_attempts: number; jitter_ms: number };
@@ -120,7 +163,7 @@ export interface CreateJobInput {
     trigger_set: AutomationTriggerSet;
     target_agent_object_id: string;
     target_agent_key_ref: string;
-    action: { kind: 'memory_relayer_call'; config: MemoryActionConfig };
+    action: AutomationAction;
     memory_scope?: string;
     max_mist_per_run?: number;
     retry_policy?: { max_attempts: number; jitter_ms: number };
@@ -380,13 +423,23 @@ export class AutomationClient {
      */
     async putDelegate(
         name: string,
-        input: {agent_object_id: string; mydata_key_id: string; encrypted_key: string},
+        input: {
+            agent_object_id: string;
+            mydata_key_id: string;
+            encrypted_key: string;
+            /** Defaults to `memory`. A `task_worker` also needs `allowed_action_ids`. */
+            delegate_class?: DelegateClass;
+            allowed_action_ids?: string[];
+        },
     ): Promise<void> {
-        await this.request<void>('PUT', `/api/automation/delegates/${encodeURIComponent(name)}`, {
+        const body: Record<string, unknown> = {
             agent_object_id: input.agent_object_id,
             mydata_key_id: input.mydata_key_id,
             encrypted_key: input.encrypted_key,
-        });
+        };
+        if (input.delegate_class !== undefined) body.delegate_class = input.delegate_class;
+        if (input.allowed_action_ids !== undefined) body.allowed_action_ids = input.allowed_action_ids;
+        await this.request<void>('PUT', `/api/automation/delegates/${encodeURIComponent(name)}`, body);
     }
 
     /**

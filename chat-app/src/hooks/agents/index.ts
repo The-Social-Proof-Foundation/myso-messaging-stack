@@ -22,6 +22,18 @@ export {
   useProfileAuditLogs,
   useProfileSpendApprovals,
 } from './useEnterpriseReads';
+export {useAgentRooms, useGroupDigests} from './useAgentRooms';
+export {
+  useAgentReceipts,
+  useAgentReputation,
+  useAnyPlatformId,
+  useMyTasks,
+  usePrincipalReputation,
+  useTask,
+  useTaskConfig,
+  useTaskViewer,
+} from './useTasks';
+export {useTaskActions} from './useTaskActions';
 export {useOrganizationCategories} from './useOrganizationCategories';
 export {useAgentActions} from './useAgentActions';
 export {useDerivedAgentKey} from './useDerivedAgentKey';

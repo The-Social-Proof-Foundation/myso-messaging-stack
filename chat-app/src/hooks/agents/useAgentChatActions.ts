@@ -1,5 +1,6 @@
 import {useCallback, useEffect, useRef, useState} from 'react';
 import type {ClientWithCoreApi} from '@socialproof/myso/client';
+import type {AgentRoomOptions} from '@socialproof/myso-messaging-stack';
 import type {Ed25519Keypair} from '@socialproof/myso/keypairs/ed25519';
 import {useQueryClient} from '@tanstack/react-query';
 
@@ -161,9 +162,22 @@ export function useOpenAgentChat() {
   );
 }
 
+export interface CreateAgentChatOptions {
+  /** Group name; defaults to "<agent label> chat". */
+  name?: string;
+  /** Tags the group as an agent room (optionally bound to a task) at creation. */
+  room?: AgentRoomOptions;
+}
+
+/** Distinguishes concurrent creations for one agent so a room never reuses a plain chat's request. */
+function inFlightKey(agent: SubAgentRow, options?: CreateAgentChatOptions): string {
+  if (!options?.room) return agent.agent_object_id;
+  return `${agent.agent_object_id}:room:${options.room.taskId ?? ''}:${options.name ?? ''}`;
+}
+
 export interface CreateAgentChatState {
-  /** Creates (or reuses) the agent's messaging group and returns it hydrated and opened. */
-  createChat: (agent: SubAgentRow) => Promise<HydratedAgentChat>;
+  /** Creates the agent's messaging group (or room) and returns it hydrated and opened. */
+  createChat: (agent: SubAgentRow, options?: CreateAgentChatOptions) => Promise<HydratedAgentChat>;
   stage: AgentChatStage | null;
   error: AgentChatErrorInfo | null;
   clearError: () => void;
@@ -237,7 +251,7 @@ export function useCreateAgentChat(): CreateAgentChatState {
   );
 
   const runCreate = useCallback(
-    async (agent: SubAgentRow): Promise<HydratedAgentChat> => {
+    async (agent: SubAgentRow, options?: CreateAgentChatOptions): Promise<HydratedAgentChat> => {
       if (!client || !keypair) {
         throw new Error('Sign in and wait for the messaging client before starting an agent chat.');
       }
@@ -266,10 +280,11 @@ export function useCreateAgentChat(): CreateAgentChatState {
       const derived = await vault.getAgent(agent);
       vault.assertCurrent(epoch);
       const uuid = crypto.randomUUID();
-      const name = `${agent.label.trim() || 'Agent'} chat`;
+      const name = options?.name?.trim() || `${agent.label.trim() || 'Agent'} chat`;
       const tx = client.messaging.tx.createAgentAndShareGroup({uuid, name,
         platformId: targetPlatform.platformId, creatorMemoryAccountId: memoryAccount.account_id,
-        crossPrincipalPeerMemoryAccountId: memoryAccount.account_id, initialMembers: []});
+        crossPrincipalPeerMemoryAccountId: memoryAccount.account_id, initialMembers: [],
+        room: options?.room});
       const groupId = client.messaging.derive.groupId({uuid});
       setStage('signing');
       await executeAsAgent(
@@ -333,24 +348,25 @@ export function useCreateAgentChat(): CreateAgentChatState {
   );
 
   const createChat = useCallback(
-    async (agent: SubAgentRow): Promise<HydratedAgentChat> => {
-      const existing = inFlight.get(agent.agent_object_id);
+    async (agent: SubAgentRow, options?: CreateAgentChatOptions): Promise<HydratedAgentChat> => {
+      const key = inFlightKey(agent, options);
+      const existing = inFlight.get(key);
       if (existing) return existing;
 
       setError(null);
       const task = (async () => {
         try {
-          return await runCreate(agent);
+          return await runCreate(agent, options);
         } catch (err) {
           setError(classifyAgentChatError(err));
           throw err;
         } finally {
           setStage(null);
-          inFlight.delete(agent.agent_object_id);
+          inFlight.delete(key);
         }
       })();
 
-      inFlight.set(agent.agent_object_id, task);
+      inFlight.set(key, task);
       return task;
     },
     [runCreate],

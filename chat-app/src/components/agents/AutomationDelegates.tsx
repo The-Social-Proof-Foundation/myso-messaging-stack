@@ -9,7 +9,9 @@ import {useAgentActions} from '../../hooks/agents/useAgentActions';
 import {useAutomationDelegates} from '../../hooks/agents/useAutomationJobs';
 import {agentKeys} from '../../hooks/agents/query-keys';
 import {
+  DELEGATE_CLASS_LABELS,
   DELEGATE_MAX_TTL_MS,
+  type DelegateClass,
   configuredMyDataKey,
   delegateKeyRef,
   isValidDelegateName,
@@ -47,6 +49,7 @@ export function AutomationDelegates({agent}: Readonly<{agent: SubAgentRow}>) {
   const [name, setName] = useState('');
   const [days, setDays] = useState<(typeof LIFETIMES)[number]>(30);
   const [limit, setLimit] = useState('');
+  const [delegateClass, setDelegateClass] = useState<DelegateClass>('memory');
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [step, setStep] = useState<string | null>(null);
@@ -71,6 +74,7 @@ export function AutomationDelegates({agent}: Readonly<{agent: SubAgentRow}>) {
         name,
         expiresAtMs: Date.now() + days * DAY_MS,
         maxActionSpendMist: limit,
+        delegateClass,
         client,
         onStep: setStep,
       });
@@ -111,9 +115,9 @@ export function AutomationDelegates({agent}: Readonly<{agent: SubAgentRow}>) {
           Automation delegates
         </h3>
         <p className="mt-1 text-xs text-secondary-500">
-          Scheduled jobs sign as a delegate, never as your own agents. A delegate can only read
-          and write memory, can spend no more than its limit, expires on its own, and stops
-          working the moment you revoke it.
+          Scheduled jobs sign as a delegate, never as your own agents. A delegate can only do what
+          its type allows: read and write memory, or also run task market actions. It can spend no
+          more than its limit, expires on its own, and stops working the moment you revoke it.
         </p>
       </div>
 
@@ -141,6 +145,11 @@ export function AutomationDelegates({agent}: Readonly<{agent: SubAgentRow}>) {
                   <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] font-medium text-emerald-600 dark:text-emerald-300">
                     Active
                   </span>
+                  {row.delegate_class === 'task_worker' ? (
+                    <span className="rounded-full bg-sky-500/15 px-2 py-0.5 text-[10px] font-medium text-sky-600 dark:text-sky-300">
+                      Task worker
+                    </span>
+                  ) : null}
                 </div>
                 <p className="mt-0.5 truncate text-xs text-secondary-500">
                   <code className="rounded bg-secondary-200/60 px-1 py-0.5 dark:bg-secondary-700/60">
@@ -170,6 +179,18 @@ export function AutomationDelegates({agent}: Readonly<{agent: SubAgentRow}>) {
           onChange={(event) => setName(event.target.value.trim())}
           aria-label="Delegate name"
         />
+        <select
+          className={fieldClass}
+          value={delegateClass}
+          onChange={(event) => setDelegateClass(event.target.value as DelegateClass)}
+          aria-label="Delegate type"
+        >
+          {(Object.keys(DELEGATE_CLASS_LABELS) as DelegateClass[]).map((value) => (
+            <option key={value} value={value}>
+              {DELEGATE_CLASS_LABELS[value]}
+            </option>
+          ))}
+        </select>
         <select
           className={fieldClass}
           value={days}

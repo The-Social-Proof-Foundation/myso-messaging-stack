@@ -19,6 +19,7 @@ import {useAgentActions, useMemoryAccount, useOrganization, useOrgAuditLogs} fro
 import {useAuthenticatedAddress} from '@/contexts/MySocialAuthContext';
 import {MultiBubbleIcon} from '@/components/icons/MultiBubbleIcon';
 import {auditRowMentionsAgent} from '@/lib/agents/audit';
+import {ReputationBadge} from '@/components/agents/ReputationBadge';
 import {useAgentStats} from '@/hooks/agents/useAgentStats';
 import {useDerivedAgentKey} from '@/hooks/agents/useDerivedAgentKey';
 import {useAllSubAgents} from '@/hooks/agents/useSubAgents';
@@ -225,6 +226,10 @@ export function AgentProfileDrawer({
         <Separator />
 
         <div className="p-4">
+          <p className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
+            Reputation
+          </p>
+          <ReputationBadge agentObjectId={agent.id} variant="detailed" className="mt-2 mb-4" />
           <p className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
             Stats
           </p>

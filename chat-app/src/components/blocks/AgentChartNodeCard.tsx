@@ -6,6 +6,7 @@ import {AgentOrb} from '@/components/agents/AgentOrb';
 import {AgentModelLabel} from '@/components/agents/AgentModelLabel';
 import {Button} from '@/components/ui/button';
 import {AgentStatusDot} from '@/components/blocks/AgentStatusMark';
+import {ReputationBadge} from '@/components/agents/ReputationBadge';
 import {type AgentChartNode} from '@/lib/agents/agent-chart';
 import {formatMistAmount} from '@/lib/agents/format';
 import type {AgentStats} from '@/hooks/agents/useAgentStats';
@@ -115,6 +116,7 @@ export function AgentChartNodeCard({
             <p className="mt-0.5 truncate text-xs text-muted-foreground">
               <AgentModelLabel agentId={node.id} fallback={node.role} />
             </p>
+            <ReputationBadge agentObjectId={node.id} className="mt-1" />
           </div>
         </div>
 

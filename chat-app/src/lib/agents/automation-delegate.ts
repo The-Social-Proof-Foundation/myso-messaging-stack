@@ -27,6 +27,49 @@ import {CAP} from './capabilities';
 /** Memory read + write + MYDATA read: what recall and remember actually need. */
 export const DELEGATE_CAPABILITIES = CAP.MEMORY_READ | CAP.MEMORY_WRITE | CAP.MYDATA_READ;
 
+/**
+ * What a delegate is for. A `memory` delegate reads and writes memory. A `task_worker` can also
+ * run task market actions (offer, accept, deliver, settle, review) and nothing else: no posting,
+ * trading, spending or agent management. The bridge and the chain enforce the same limit.
+ */
+export type DelegateClass = 'memory' | 'task_worker';
+
+export const TASK_WORKER_CAPABILITIES = DELEGATE_CAPABILITIES | CAP.TASK_TRADE;
+
+/** Every task market action a worker can be allowed to run, as the relayer's registered-action ids. */
+export const TASK_ACTION_IDS = [
+  'task.create.v1',
+  'task.accept.v1',
+  'task.decline.v1',
+  'task.cancel_offer.v1',
+  'task.deliver.v1',
+  'task.settle.v1',
+  'task.refund.v1',
+  'task.release.v1',
+  'task.expire_offer.v1',
+  'task.propose_refund.v1',
+  'task.accept_refund.v1',
+  'task.reject_refund.v1',
+  'task.withdraw_refund.v1',
+  'task.review.v1',
+] as const;
+
+export type TaskActionId = (typeof TASK_ACTION_IDS)[number];
+
+export function delegateCapabilities(delegateClass: DelegateClass): number {
+  return delegateClass === 'task_worker' ? TASK_WORKER_CAPABILITIES : DELEGATE_CAPABILITIES;
+}
+
+/** The actions a delegate of this class is registered to run. Memory delegates run none. */
+export function delegateActionIds(delegateClass: DelegateClass): readonly TaskActionId[] {
+  return delegateClass === 'task_worker' ? TASK_ACTION_IDS : [];
+}
+
+export const DELEGATE_CLASS_LABELS: Record<DelegateClass, string> = {
+  memory: 'Memory only',
+  task_worker: 'Task worker (memory and the task market)',
+};
+
 /** Longest a delegate may live. Renewing is one gesture; a leaked key is not forever. */
 export const DELEGATE_MAX_TTL_MS = 90 * 24 * 60 * 60 * 1000;
 export const DELEGATE_MIN_TTL_MS = 60 * 60 * 1000;

@@ -7,6 +7,9 @@ import {CreateGroupModal} from './CreateGroupModal';
 import {AgentChatEmptyState} from './agents/AgentChatEmptyState';
 import {useProfileOverview} from '../hooks/agents/useProfileOverview';
 import {AgentListView} from './agents/AgentListView';
+import {CreateRoomDialog, type CreateRoomRequest} from './agents/CreateRoomDialog';
+import {RoomVerifyPanel} from './agents/RoomVerifyPanel';
+import {RoomsPanel} from './agents/RoomsPanel';
 import {CreateAgentDialog} from './agents/CreateAgentDialog';
 import {CreateOrganizationDialog} from './agents/CreateOrganizationDialog';
 import {OrganizationChartPane} from './agents/OrganizationChartPane';
@@ -23,7 +26,8 @@ import {useSubAgentByObjectId, useSubAgents} from '../hooks/agents/useSubAgents'
 import {useCreateAgentChat, useOpenAgentChat} from '../hooks/agents/useAgentChatActions';
 import {findAgentChatRef, useAgentChatIndex} from '../hooks/agents/useAgentChats';
 import {useMemoryAccount} from '../hooks/agents/useMemoryAccount';
-import type {SubAgentRow} from '../lib/agents/social-api';
+import type {AgentRoomInfo, SubAgentRow} from '../lib/agents/social-api';
+import {AGENT_ROOM_KIND} from '../lib/agents/rooms';
 import {writeSelectedAgent} from '../lib/agents/selected-agent-store';
 import {
   getSelectedGroupKey,
@@ -45,7 +49,7 @@ interface AuthenticatedAppProps {
   isUsingDevMessengerSigner: boolean;
 }
 
-type ListView = 'chats' | 'agents';
+type ListView = 'chats' | 'agents' | 'rooms';
 
 export function AuthenticatedApp({
   isUsingDevMessengerSigner,
@@ -104,6 +108,7 @@ export function AuthenticatedApp({
     restoredOrganizationId,
   );
   const [showNewOrganization, setShowNewOrganization] = useState(false);
+  const [showNewRoom, setShowNewRoom] = useState(false);
   const [selectedAgentObjectId, setSelectedAgentObjectId] = useState<string | null>(null);
   const [showNewAgent, setShowNewAgent] = useState(false);
   useEffect(()=>{
@@ -187,8 +192,58 @@ export function AuthenticatedApp({
     [chatIndex, create, memoryAccount.data?.account_id, openChat, refreshGroups, selectGroup],
   );
 
+  const openRoom = useCallback(
+    async (room: AgentRoomInfo) => {
+      // An un-indexed room has no uuid yet, so there is nothing to open.
+      if (!room.groupUuid) return;
+      try {
+        const hydrated = await openChat({
+          groupId: room.groupId,
+          uuid: room.groupUuid,
+          name: room.groupName,
+          agentObjectId: null,
+          creatorActor: room.creatorActor,
+          creatorPrincipal: room.creatorPrincipal,
+          organizationId: room.organizationId,
+          createdAt: room.createdAtMs,
+          source: 'chain',
+        });
+        refreshGroups();
+        chatIndex.refresh();
+        selectGroup(hydrated.uuid);
+      } catch (error) {
+        console.warn('[chat-app] could not open room:', error);
+      }
+    },
+    [chatIndex, openChat, refreshGroups, selectGroup],
+  );
+
+  const createRoom = useCallback(
+    async (request: CreateRoomRequest) => {
+      const hydrated = await create.createChat(request.agent, {
+        name: request.name,
+        room: {kind: AGENT_ROOM_KIND, taskId: request.taskId},
+      });
+      refreshGroups();
+      chatIndex.refresh();
+      setListView('rooms');
+      selectGroup(hydrated.uuid);
+    },
+    [chatIndex, create, refreshGroups, selectGroup],
+  );
+
   useEffect(() => {
     const params = new URLSearchParams(location.search);
+    if (params.get('view') === 'rooms') {
+      setListView('rooms');
+      params.delete('view');
+      const nextRooms = params.toString();
+      navigate(
+        {pathname: location.pathname, search: nextRooms ? `?${nextRooms}` : ''},
+        {replace: true},
+      );
+      return;
+    }
     if (params.get('view') !== 'organizations') return;
     setListView('agents');
     params.delete('view');
@@ -340,7 +395,14 @@ export function AuthenticatedApp({
               isMobileNav ? undefined : { width: CHAT_LIST_WIDTH_PX }
             }
           >
-            {listView === 'agents' ? (
+            {listView === 'rooms' ? (
+              <RoomsPanel
+                selectedGroupId={selectedGroup?.groupId ?? null}
+                onBack={() => setListView('chats')}
+                onSelectRoom={(room) => void openRoom(room)}
+                onNewRoom={() => setShowNewRoom(true)}
+              />
+            ) : listView === 'agents' ? (
               <AgentListView
                 selectedOrganizationId={selectedOrganizationId}
                 onBack={() => setListView('chats')}
@@ -400,6 +462,14 @@ export function AuthenticatedApp({
                 isMobileNav ? () => selectGroup(null) : undefined
               }
               agentCreatorActors={agentCreatorActors}
+              roomVerifier={
+                selectedGroup &&
+                chatIndex.refs.some((ref) => ref.groupId === selectedGroup.groupId)
+                  ? (messages) => (
+                      <RoomVerifyPanel groupId={selectedGroup.groupId} messages={messages} />
+                    )
+                  : undefined
+              }
               devAgentPanel={
                 keypair && selectedGroup ? (
                   <AgentDevSendPanel
@@ -426,6 +496,13 @@ export function AuthenticatedApp({
           setListView('agents');
           selectOrganization(organizationId);
         }}
+      />
+      <CreateRoomDialog
+        open={showNewRoom}
+        onClose={() => setShowNewRoom(false)}
+        onCreate={createRoom}
+        stage={create.stage}
+        error={create.error}
       />
       <CreateAgentDialog
         key={selectedOrganizationId ?? 'none'}

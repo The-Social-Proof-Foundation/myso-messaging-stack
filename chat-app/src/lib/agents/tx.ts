@@ -1,4 +1,4 @@
-import { Transaction } from '@socialproof/myso/transactions';
+import { Transaction, coinWithBalance } from '@socialproof/myso/transactions';
 import { MYSO_CLOCK_OBJECT_ID } from '@socialproof/myso/utils';
 
 import type { AgentChainIds } from './chain-ids';
@@ -572,6 +572,331 @@ export function joinPlatformTx(
       tx.object(ids.platformRegistryId),
       tx.object(ids.blockListRegistryId),
       tx.object(args.platformId),
+      tx.object(MYSO_CLOCK_OBJECT_ID),
+    ],
+  });
+  return tx;
+}
+
+// ============================================================
+// Task market (`social_contracts::agent_task`)
+//
+// Argument order mirrors the Move entrypoints exactly. Escrow is paid from an explicit MYSO
+// coin (never the gas coin, which belongs to the sponsor under sponsored gas).
+// ============================================================
+
+type TaskIds = Pick<AgentChainIds, 'socialPackageId' | 'memoryConfigId' | 'taskConfigId'>;
+
+function taskTarget(ids: Ids, fn: string): `${string}::${string}::${string}` {
+  return `${ids.socialPackageId}::agent_task::${fn}`;
+}
+
+export interface CreateTaskArgs {
+  buyerAccountId: string;
+  sellerAccountId: string;
+  sellerAgentId: string;
+  amountMist: bigint | number;
+  /** Exactly 32 bytes (sha256 of the scope document). */
+  scopeDigest: Uint8Array;
+  title: string;
+  acceptWindowMs: number;
+  deliveryWindowMs: number;
+  settleWindowMs: number;
+  roomGroupId: string | null;
+  /** Platform whose treasury receives the platform fee; `null` folds it into the ecosystem fee. */
+  platformId: string | null;
+  /** MYSO coin that pays the escrow. Omit to split exactly `amountMist` from the sender's coins. */
+  paymentCoinId?: string;
+}
+
+export function createTaskTx(
+  ids: TaskIds,
+  args: CreateTaskArgs,
+  tx = new Transaction(),
+): Transaction {
+  const payment = args.paymentCoinId
+    ? tx.object(args.paymentCoinId)
+    : tx.add(coinWithBalance({balance: BigInt(args.amountMist), useGasCoin: false}));
+  tx.moveCall({
+    target: taskTarget(ids, 'create_task'),
+    arguments: [
+      tx.object(ids.taskConfigId),
+      tx.object(ids.memoryConfigId),
+      tx.object(args.buyerAccountId),
+      tx.object(args.sellerAccountId),
+      tx.object(args.sellerAgentId),
+      payment,
+      tx.pure.u64(args.amountMist),
+      tx.pure.vector('u8', Array.from(args.scopeDigest)),
+      tx.pure.string(args.title),
+      tx.pure.u64(args.acceptWindowMs),
+      tx.pure.u64(args.deliveryWindowMs),
+      tx.pure.u64(args.settleWindowMs),
+      tx.pure.option('address', args.roomGroupId),
+      tx.pure.option('address', args.platformId),
+      tx.object(MYSO_CLOCK_OBJECT_ID),
+    ],
+  });
+  return tx;
+}
+
+export interface TaskSellerArgs {
+  taskId: string;
+  sellerAccountId: string;
+  sellerAgentId: string;
+}
+
+export function acceptTaskTx(
+  ids: TaskIds,
+  args: TaskSellerArgs & {termsDigest: Uint8Array},
+  tx = new Transaction(),
+): Transaction {
+  tx.moveCall({
+    target: taskTarget(ids, 'accept_task'),
+    arguments: [
+      tx.object(ids.taskConfigId),
+      tx.object(args.taskId),
+      tx.object(ids.memoryConfigId),
+      tx.object(args.sellerAccountId),
+      tx.object(args.sellerAgentId),
+      tx.pure.vector('u8', Array.from(args.termsDigest)),
+      tx.object(MYSO_CLOCK_OBJECT_ID),
+    ],
+  });
+  return tx;
+}
+
+export function declineTaskTx(
+  ids: TaskIds,
+  args: TaskSellerArgs,
+  tx = new Transaction(),
+): Transaction {
+  tx.moveCall({
+    target: taskTarget(ids, 'decline_task'),
+    arguments: [
+      tx.object(args.taskId),
+      tx.object(ids.memoryConfigId),
+      tx.object(args.sellerAccountId),
+      tx.object(args.sellerAgentId),
+      tx.object(MYSO_CLOCK_OBJECT_ID),
+    ],
+  });
+  return tx;
+}
+
+export function cancelOfferTx(
+  ids: TaskIds,
+  args: {taskId: string; buyerAccountId: string},
+  tx = new Transaction(),
+): Transaction {
+  tx.moveCall({
+    target: taskTarget(ids, 'cancel_offer'),
+    arguments: [
+      tx.object(args.taskId),
+      tx.object(ids.memoryConfigId),
+      tx.object(args.buyerAccountId),
+      tx.object(MYSO_CLOCK_OBJECT_ID),
+    ],
+  });
+  return tx;
+}
+
+/** Permissionless: returns an unanswered offer's escrow once the accept deadline passed. */
+export function expireOfferTx(
+  ids: Ids,
+  args: {taskId: string},
+  tx = new Transaction(),
+): Transaction {
+  tx.moveCall({
+    target: taskTarget(ids, 'expire_offer'),
+    arguments: [tx.object(args.taskId), tx.object(MYSO_CLOCK_OBJECT_ID)],
+  });
+  return tx;
+}
+
+export function markTaskDeliveredTx(
+  ids: TaskIds,
+  args: {taskId: string; sellerAgentId: string; digest: Uint8Array; uri: string},
+  tx = new Transaction(),
+): Transaction {
+  tx.moveCall({
+    target: taskTarget(ids, 'mark_delivered'),
+    arguments: [
+      tx.object(ids.taskConfigId),
+      tx.object(args.taskId),
+      tx.object(args.sellerAgentId),
+      tx.pure.vector('u8', Array.from(args.digest)),
+      tx.pure.string(args.uri),
+      tx.object(MYSO_CLOCK_OBJECT_ID),
+    ],
+  });
+  return tx;
+}
+
+export interface SettleTaskArgs {
+  taskId: string;
+  buyerAccountId: string;
+  sellerAccountId: string;
+  /** Any `Platform` object when the task has no platform; the contract ignores it then. */
+  platformObjectId: string;
+}
+
+export function settleTaskTx(
+  ids: TaskIds,
+  args: SettleTaskArgs,
+  tx = new Transaction(),
+): Transaction {
+  tx.moveCall({
+    target: taskTarget(ids, 'settle_task'),
+    arguments: [
+      tx.object(ids.taskConfigId),
+      tx.object(args.taskId),
+      tx.object(ids.memoryConfigId),
+      tx.object(args.buyerAccountId),
+      tx.object(args.sellerAccountId),
+      tx.object(args.platformObjectId),
+      tx.object(MYSO_CLOCK_OBJECT_ID),
+    ],
+  });
+  return tx;
+}
+
+/** Permissionless once `settle_deadline + release_grace` has passed on a delivered task. */
+export function releaseTaskTx(
+  ids: TaskIds,
+  args: SettleTaskArgs,
+  tx = new Transaction(),
+): Transaction {
+  tx.moveCall({
+    target: taskTarget(ids, 'release_task'),
+    arguments: [
+      tx.object(ids.taskConfigId),
+      tx.object(args.taskId),
+      tx.object(args.buyerAccountId),
+      tx.object(args.sellerAccountId),
+      tx.object(args.platformObjectId),
+      tx.object(MYSO_CLOCK_OBJECT_ID),
+    ],
+  });
+  return tx;
+}
+
+/** Permissionless refund of an accepted task whose seller missed the delivery deadline. */
+export function refundTaskTx(
+  ids: Ids,
+  args: {taskId: string},
+  tx = new Transaction(),
+): Transaction {
+  tx.moveCall({
+    target: taskTarget(ids, 'refund_task'),
+    arguments: [tx.object(args.taskId), tx.object(MYSO_CLOCK_OBJECT_ID)],
+  });
+  return tx;
+}
+
+export interface RefundProposalArgs {
+  taskId: string;
+  buyerAccountId: string;
+  sellerAgentId: string;
+}
+
+function refundProposalTx(
+  fn: 'propose_refund' | 'accept_refund' | 'reject_refund' | 'withdraw_refund',
+  ids: TaskIds,
+  args: RefundProposalArgs,
+  tx: Transaction,
+): Transaction {
+  tx.moveCall({
+    target: taskTarget(ids, fn),
+    arguments: [
+      tx.object(args.taskId),
+      tx.object(ids.memoryConfigId),
+      tx.object(args.buyerAccountId),
+      tx.object(args.sellerAgentId),
+      tx.object(MYSO_CLOCK_OBJECT_ID),
+    ],
+  });
+  return tx;
+}
+
+export const proposeRefundTx = (ids: TaskIds, args: RefundProposalArgs, tx = new Transaction()) =>
+  refundProposalTx('propose_refund', ids, args, tx);
+export const acceptRefundTx = (ids: TaskIds, args: RefundProposalArgs, tx = new Transaction()) =>
+  refundProposalTx('accept_refund', ids, args, tx);
+export const rejectRefundTx = (ids: TaskIds, args: RefundProposalArgs, tx = new Transaction()) =>
+  refundProposalTx('reject_refund', ids, args, tx);
+export const withdrawRefundTx = (ids: TaskIds, args: RefundProposalArgs, tx = new Transaction()) =>
+  refundProposalTx('withdraw_refund', ids, args, tx);
+
+/** The buyer rates the seller agent. Can be appended to the settle transaction. */
+export function reviewSellerTx(
+  ids: TaskIds,
+  args: {
+    taskId: string;
+    buyerAccountId: string;
+    sellerAccountId: string;
+    sellerAgentId: string;
+    stars: number;
+  },
+  tx = new Transaction(),
+): Transaction {
+  tx.moveCall({
+    target: taskTarget(ids, 'review_seller'),
+    arguments: [
+      tx.object(ids.taskConfigId),
+      tx.object(args.taskId),
+      tx.object(ids.memoryConfigId),
+      tx.object(args.buyerAccountId),
+      tx.object(args.sellerAccountId),
+      tx.object(args.sellerAgentId),
+      tx.pure.u8(args.stars),
+      tx.object(MYSO_CLOCK_OBJECT_ID),
+    ],
+  });
+  return tx;
+}
+
+/** The seller rates a buyer **agent**. */
+export function reviewBuyerAgentTx(
+  ids: TaskIds,
+  args: {
+    taskId: string;
+    buyerAccountId: string;
+    buyerAgentId: string;
+    sellerAgentId: string;
+    stars: number;
+  },
+  tx = new Transaction(),
+): Transaction {
+  tx.moveCall({
+    target: taskTarget(ids, 'review_buyer_agent'),
+    arguments: [
+      tx.object(ids.taskConfigId),
+      tx.object(args.taskId),
+      tx.object(args.buyerAccountId),
+      tx.object(args.buyerAgentId),
+      tx.object(args.sellerAgentId),
+      tx.pure.u8(args.stars),
+      tx.object(MYSO_CLOCK_OBJECT_ID),
+    ],
+  });
+  return tx;
+}
+
+/** The seller rates a principal that bought directly (no buyer agent). */
+export function reviewBuyerPrincipalTx(
+  ids: TaskIds,
+  args: {taskId: string; buyerAccountId: string; sellerAgentId: string; stars: number},
+  tx = new Transaction(),
+): Transaction {
+  tx.moveCall({
+    target: taskTarget(ids, 'review_buyer_principal'),
+    arguments: [
+      tx.object(ids.taskConfigId),
+      tx.object(args.taskId),
+      tx.object(args.buyerAccountId),
+      tx.object(args.sellerAgentId),
+      tx.pure.u8(args.stars),
       tx.object(MYSO_CLOCK_OBJECT_ID),
     ],
   });

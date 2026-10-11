@@ -16,6 +16,7 @@ export const CAP = {
   AI_SPEND: 16384,
   BUDGET_MANAGE: 32768,
   SOCIAL_GRAPH: 65536,
+  TASK_TRADE: 131072,
 } as const;
 
 export type CapabilityName = keyof typeof CAP;
@@ -37,6 +38,7 @@ export const CAPABILITY_LABELS: Record<CapabilityName, string> = {
   AI_SPEND: 'Spend AI credits',
   BUDGET_MANAGE: 'Manage budgets',
   SOCIAL_GRAPH: 'Social graph',
+  TASK_TRADE: 'Trade tasks',
 };
 
 export const CAPABILITY_NAMES = Object.keys(CAP) as CapabilityName[];

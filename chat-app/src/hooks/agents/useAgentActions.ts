@@ -6,10 +6,12 @@ import {useAgentVault, findRegisteredDraft, readAgentPolicy} from '../../context
 import {generateAgentKey, type AgentKeyEnvelopeV1, type AgentRegistrationIntent} from '@socialproof/memory';
 import type {AutomationClient} from '../../lib/agents/automation-client';
 import {
-  DELEGATE_CAPABILITIES,
+  type DelegateClass,
   automationDelegateLabel,
   DelegateError,
   configuredMyDataKey,
+  delegateActionIds,
+  delegateCapabilities,
   delegateKeyRef,
   encryptDelegateSeed,
   validateDelegatePolicy,
@@ -435,9 +437,13 @@ export function useAgentActions() {
       expiresAtMs: number;
       /** Spend cap in MIST, as a decimal string. */
       maxActionSpendMist: string;
+      /** Defaults to a memory-only delegate. */
+      delegateClass?: DelegateClass;
       client: AutomationClient;
       onStep?: (step: string) => void;
     }) {
+      const delegateClass: DelegateClass = args.delegateClass ?? 'memory';
+      const capabilities = delegateCapabilities(delegateClass);
       const myDataKey = configuredMyDataKey();
       if (!myDataKey) {
         throw new DelegateError(
@@ -463,11 +469,13 @@ export function useAgentActions() {
         const parentPolicy = await readAgentPolicy(args.parent.agent_object_id);
         if (registrationGrant(
           {capabilities: parentPolicy.capabilities, delegatableCaps: parentPolicy.delegatableCaps},
-          DELEGATE_CAPABILITIES,
+          capabilities,
         )) {
           throw new DelegateError(
             `"${args.parent.label}" is not allowed to create delegates yet. Open its permissions and ` +
-              'allow it to register agents and to delegate read and write memory, then try again.',
+              (delegateClass === 'task_worker'
+                ? 'allow it to register agents and to delegate memory and task trading, then try again.'
+                : 'allow it to register agents and to delegate read and write memory, then try again.'),
           );
         }
         if (parentPolicy.maxActionSpend != null && BigInt(args.maxActionSpendMist) > BigInt(parentPolicy.maxActionSpend)) {
@@ -483,7 +491,7 @@ export function useAgentActions() {
           publicKey: key.publicKey,
           derivedAddress: key.address,
           label: automationDelegateLabel(args.name),
-          capabilities: DELEGATE_CAPABILITIES,
+          capabilities,
           // Cannot mint children, and acts without an owner co-sign.
           delegatableCaps: 0,
           approvalRequiredCaps: 0,
@@ -515,6 +523,8 @@ export function useAgentActions() {
             agent_object_id: agentObjectId,
             mydata_key_id: myDataKey.id,
             encrypted_key,
+            delegate_class: delegateClass,
+            allowed_action_ids: [...delegateActionIds(delegateClass)],
           });
         } catch (error) {
           // The seed existed only here, so it is gone with this call. Say so,

@@ -18,6 +18,7 @@ import { removeStoredGroup } from '../lib/group-store';
 import { useRequiredMessagingClient } from '../contexts/MessagingClientContext';
 import { signAndExecuteTransactionAndWait } from '../lib/sign-and-wait';
 import { useMessages } from '../hooks/useMessages';
+import type { VerifiableMessage } from '../lib/agents/rooms';
 import { useAgentMemoryReply } from '../hooks/agents/useAgentMemoryReply';
 import { useRepairAgentChatSend } from '../hooks/agents/useAgentChatActions';
 import { useAgentNamesByAddress } from '../hooks/agents/useSubAgents';
@@ -79,6 +80,11 @@ interface ChatAreaProps {
   /** Phone stack: return to the conversation list (clears selection). */
   onMobileBack?: () => void;
   devAgentPanel?: ReactNode;
+  /**
+   * Renders below the thread with the messages currently loaded; used by agent rooms to show
+   * on-chain digest verification beside the conversation.
+   */
+  roomVerifier?: (messages: readonly VerifiableMessage[]) => ReactNode;
   /** Agent-chat creator addresses, so foreign agents still get an orb. */
   agentCreatorActors?: readonly (string | null | undefined)[];
 }
@@ -141,6 +147,7 @@ export function ChatArea({
   receiptApplyRef,
   onMobileBack,
   devAgentPanel,
+  roomVerifier,
   agentCreatorActors,
 }: Readonly<ChatAreaProps>) {
   if (!selectedGroup) {
@@ -197,6 +204,7 @@ export function ChatArea({
       receiptApplyRef={receiptApplyRef}
       onMobileBack={onMobileBack}
       devAgentPanel={devAgentPanel}
+      roomVerifier={roomVerifier}
       agentCreatorActors={agentCreatorActors}
     />
   );
@@ -359,6 +367,7 @@ function ChatView({
   receiptApplyRef,
   onMobileBack,
   devAgentPanel,
+  roomVerifier,
   agentCreatorActors = [],
 }: Readonly<{
   group: StoredGroup;
@@ -370,6 +379,7 @@ function ChatView({
   >;
   onMobileBack?: () => void;
   devAgentPanel?: ReactNode;
+  roomVerifier?: (messages: readonly VerifiableMessage[]) => ReactNode;
   agentCreatorActors?: readonly (string | null | undefined)[];
 }>) {
   const { client, signer } = useRequiredMessagingClient();
@@ -1262,6 +1272,8 @@ function ChatView({
       )}
 
       {devAgentPanel}
+
+      {roomVerifier ? roomVerifier(messages) : null}
 
       {/* Reply-to-claim: the peer paid an escrow that our first reply claims */}
       {paidGate.claimPending && !permissionsLoading && permissions.canSend && (

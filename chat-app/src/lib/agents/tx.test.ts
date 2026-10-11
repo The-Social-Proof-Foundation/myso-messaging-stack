@@ -4,7 +4,23 @@ import type {Transaction} from '@socialproof/myso/transactions';
 import {normalizeMySoAddress, toBase64} from '@socialproof/myso/utils';
 
 import {
+  acceptRefundTx,
+  acceptTaskTx,
   approveAgentSpendTx,
+  cancelOfferTx,
+  createTaskTx,
+  declineTaskTx,
+  expireOfferTx,
+  markTaskDeliveredTx,
+  proposeRefundTx,
+  refundTaskTx,
+  rejectRefundTx,
+  releaseTaskTx,
+  reviewBuyerAgentTx,
+  reviewBuyerPrincipalTx,
+  reviewSellerTx,
+  settleTaskTx,
+  withdrawRefundTx,
   createAgenticOrganizationTx,
   depositAiCreditTx,
   ensureAgentMemoryVaultTx,
@@ -238,5 +254,260 @@ describe('memory builders', () => {
       'ensure_agent_memory_vault',
       'set_agent_budget',
     ]);
+  });
+});
+
+const TASK_IDS = {...IDS, taskConfigId: '0xc0'};
+const TASK = '0xc1';
+const BUYER_ACCOUNT = '0xc2';
+const SELLER_ACCOUNT = '0xc3';
+const SELLER_AGENT = '0xc4';
+const BUYER_AGENT = '0xc5';
+const PLATFORM = '0xc6';
+const PAYMENT = '0xc7';
+const ROOM = '0xc8';
+const DIGEST = new Uint8Array(32).fill(0x11);
+const u8arg = u8;
+
+describe('agent_task builders', () => {
+  it('create_task(config, memory_config, buyer, seller, seller_agent, payment, amount, scope, title, windows, room, platform, clock)', () => {
+    const tx = createTaskTx(TASK_IDS, {
+      buyerAccountId: BUYER_ACCOUNT,
+      sellerAccountId: SELLER_ACCOUNT,
+      sellerAgentId: SELLER_AGENT,
+      amountMist: 1_000_000_000n,
+      scopeDigest: DIGEST,
+      title: 'write the report',
+      acceptWindowMs: 86_400_000,
+      deliveryWindowMs: 172_800_000,
+      settleWindowMs: 259_200_000,
+      roomGroupId: ROOM,
+      platformId: null,
+      paymentCoinId: PAYMENT,
+    });
+    expect(lastMoveCall(tx)).toEqual({
+      target: 'agent_task::create_task',
+      args: [
+        obj(TASK_IDS.taskConfigId),
+        obj(IDS.memoryConfigId),
+        obj(BUYER_ACCOUNT),
+        obj(SELLER_ACCOUNT),
+        obj(SELLER_AGENT),
+        obj(PAYMENT),
+        u64(1_000_000_000),
+        vecU8(DIGEST),
+        str('write the report'),
+        u64(86_400_000),
+        u64(172_800_000),
+        u64(259_200_000),
+        optAddr(ROOM),
+        optAddr(null),
+        obj(CLOCK),
+      ],
+    });
+  });
+
+  it('accept_task(config, task, memory_config, seller_account, seller_agent, terms_digest, clock)', () => {
+    const tx = acceptTaskTx(TASK_IDS, {
+      taskId: TASK,
+      sellerAccountId: SELLER_ACCOUNT,
+      sellerAgentId: SELLER_AGENT,
+      termsDigest: DIGEST,
+    });
+    expect(lastMoveCall(tx)).toEqual({
+      target: 'agent_task::accept_task',
+      args: [
+        obj(TASK_IDS.taskConfigId),
+        obj(TASK),
+        obj(IDS.memoryConfigId),
+        obj(SELLER_ACCOUNT),
+        obj(SELLER_AGENT),
+        vecU8(DIGEST),
+        obj(CLOCK),
+      ],
+    });
+  });
+
+  it('decline_task / cancel_offer / expire_offer', () => {
+    expect(
+      lastMoveCall(
+        declineTaskTx(TASK_IDS, {taskId: TASK, sellerAccountId: SELLER_ACCOUNT, sellerAgentId: SELLER_AGENT}),
+      ),
+    ).toEqual({
+      target: 'agent_task::decline_task',
+      args: [obj(TASK), obj(IDS.memoryConfigId), obj(SELLER_ACCOUNT), obj(SELLER_AGENT), obj(CLOCK)],
+    });
+    expect(lastMoveCall(cancelOfferTx(TASK_IDS, {taskId: TASK, buyerAccountId: BUYER_ACCOUNT}))).toEqual({
+      target: 'agent_task::cancel_offer',
+      args: [obj(TASK), obj(IDS.memoryConfigId), obj(BUYER_ACCOUNT), obj(CLOCK)],
+    });
+    expect(lastMoveCall(expireOfferTx(IDS, {taskId: TASK}))).toEqual({
+      target: 'agent_task::expire_offer',
+      args: [obj(TASK), obj(CLOCK)],
+    });
+  });
+
+  it('mark_delivered(config, task, seller_agent, digest, uri, clock)', () => {
+    const tx = markTaskDeliveredTx(TASK_IDS, {
+      taskId: TASK,
+      sellerAgentId: SELLER_AGENT,
+      digest: DIGEST,
+      uri: 'walrus://x',
+    });
+    expect(lastMoveCall(tx)).toEqual({
+      target: 'agent_task::mark_delivered',
+      args: [
+        obj(TASK_IDS.taskConfigId),
+        obj(TASK),
+        obj(SELLER_AGENT),
+        vecU8(DIGEST),
+        str('walrus://x'),
+        obj(CLOCK),
+      ],
+    });
+  });
+
+  it('settle_task and release_task take both accounts and a platform', () => {
+    const args = {
+      taskId: TASK,
+      buyerAccountId: BUYER_ACCOUNT,
+      sellerAccountId: SELLER_ACCOUNT,
+      platformObjectId: PLATFORM,
+    };
+    expect(lastMoveCall(settleTaskTx(TASK_IDS, args))).toEqual({
+      target: 'agent_task::settle_task',
+      args: [
+        obj(TASK_IDS.taskConfigId),
+        obj(TASK),
+        obj(IDS.memoryConfigId),
+        obj(BUYER_ACCOUNT),
+        obj(SELLER_ACCOUNT),
+        obj(PLATFORM),
+        obj(CLOCK),
+      ],
+    });
+    // release_task has no memory_config: it needs no actor resolution.
+    expect(lastMoveCall(releaseTaskTx(TASK_IDS, args))).toEqual({
+      target: 'agent_task::release_task',
+      args: [
+        obj(TASK_IDS.taskConfigId),
+        obj(TASK),
+        obj(BUYER_ACCOUNT),
+        obj(SELLER_ACCOUNT),
+        obj(PLATFORM),
+        obj(CLOCK),
+      ],
+    });
+  });
+
+  it('refund_task is permissionless: task and clock only', () => {
+    expect(lastMoveCall(refundTaskTx(IDS, {taskId: TASK}))).toEqual({
+      target: 'agent_task::refund_task',
+      args: [obj(TASK), obj(CLOCK)],
+    });
+  });
+
+  it('mutual refund calls share one argument shape', () => {
+    const args = {taskId: TASK, buyerAccountId: BUYER_ACCOUNT, sellerAgentId: SELLER_AGENT};
+    const shape = [obj(TASK), obj(IDS.memoryConfigId), obj(BUYER_ACCOUNT), obj(SELLER_AGENT), obj(CLOCK)];
+    for (const [build, fn] of [
+      [proposeRefundTx, 'propose_refund'],
+      [acceptRefundTx, 'accept_refund'],
+      [rejectRefundTx, 'reject_refund'],
+      [withdrawRefundTx, 'withdraw_refund'],
+    ] as const) {
+      expect(lastMoveCall(build(TASK_IDS, args))).toEqual({target: `agent_task::${fn}`, args: shape});
+    }
+  });
+
+  it('review builders pass stars as a u8 after the objects', () => {
+    expect(
+      lastMoveCall(
+        reviewSellerTx(TASK_IDS, {
+          taskId: TASK,
+          buyerAccountId: BUYER_ACCOUNT,
+          sellerAccountId: SELLER_ACCOUNT,
+          sellerAgentId: SELLER_AGENT,
+          stars: 5,
+        }),
+      ),
+    ).toEqual({
+      target: 'agent_task::review_seller',
+      args: [
+        obj(TASK_IDS.taskConfigId),
+        obj(TASK),
+        obj(IDS.memoryConfigId),
+        obj(BUYER_ACCOUNT),
+        obj(SELLER_ACCOUNT),
+        obj(SELLER_AGENT),
+        u8arg(5),
+        obj(CLOCK),
+      ],
+    });
+    expect(
+      lastMoveCall(
+        reviewBuyerAgentTx(TASK_IDS, {
+          taskId: TASK,
+          buyerAccountId: BUYER_ACCOUNT,
+          buyerAgentId: BUYER_AGENT,
+          sellerAgentId: SELLER_AGENT,
+          stars: 2,
+        }),
+      ),
+    ).toEqual({
+      target: 'agent_task::review_buyer_agent',
+      args: [
+        obj(TASK_IDS.taskConfigId),
+        obj(TASK),
+        obj(BUYER_ACCOUNT),
+        obj(BUYER_AGENT),
+        obj(SELLER_AGENT),
+        u8arg(2),
+        obj(CLOCK),
+      ],
+    });
+    expect(
+      lastMoveCall(
+        reviewBuyerPrincipalTx(TASK_IDS, {
+          taskId: TASK,
+          buyerAccountId: BUYER_ACCOUNT,
+          sellerAgentId: SELLER_AGENT,
+          stars: 4,
+        }),
+      ),
+    ).toEqual({
+      target: 'agent_task::review_buyer_principal',
+      args: [
+        obj(TASK_IDS.taskConfigId),
+        obj(TASK),
+        obj(BUYER_ACCOUNT),
+        obj(SELLER_AGENT),
+        u8arg(4),
+        obj(CLOCK),
+      ],
+    });
+  });
+
+  it('a review can ride in the same transaction as the settlement', () => {
+    const tx = settleTaskTx(TASK_IDS, {
+      taskId: TASK,
+      buyerAccountId: BUYER_ACCOUNT,
+      sellerAccountId: SELLER_ACCOUNT,
+      platformObjectId: PLATFORM,
+    });
+    reviewSellerTx(
+      TASK_IDS,
+      {
+        taskId: TASK,
+        buyerAccountId: BUYER_ACCOUNT,
+        sellerAccountId: SELLER_ACCOUNT,
+        sellerAgentId: SELLER_AGENT,
+        stars: 5,
+      },
+      tx,
+    );
+    const data = tx.getData() as unknown as {commands: {$kind: string}[]};
+    expect(data.commands.map((c) => c.$kind)).toEqual(['MoveCall', 'MoveCall']);
+    expect(lastMoveCall(tx).target).toBe('agent_task::review_seller');
   });
 });
