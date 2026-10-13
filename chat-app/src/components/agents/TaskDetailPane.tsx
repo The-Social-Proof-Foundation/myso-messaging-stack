@@ -3,6 +3,9 @@ import {useEffect, useMemo, useState, type ReactNode} from 'react';
 import {classifyTaskError} from '../../lib/agents/format-task-error';
 import {formatMistAmount, truncateAddress} from '../../lib/agents/format';
 import {
+  DISPUTE_OUTCOME_LABEL,
+  JURY_CASE_STATE,
+  JURY_CASE_STATE_LABEL,
   TASK_STATUS,
   availableActions,
   feeBreakdown,
@@ -18,9 +21,12 @@ import {
   useTask,
   useTaskActions,
   useTaskConfig,
+  useTaskDispute,
   useTaskViewer,
 } from '../../hooks/agents';
+import type {TaskDetailInfo, TaskDisputeDetailInfo} from '../../lib/agents/social-api';
 import {viewerRole} from '../../lib/agents/tasks';
+import {useJuryRationales} from '../../hooks/agents/useJury';
 import {Button} from '../Button';
 import {cardClass, sectionTitleClass} from './chrome';
 import {ErrorNotice} from './ErrorNotice';
@@ -28,12 +34,141 @@ import {MysoAmount} from './MysoAmount';
 import {ReputationBadge} from './ReputationBadge';
 import {
   AcceptTaskDialog,
+  AppealDisputeDialog,
   DeliverTaskDialog,
+  DisputeEvidenceDialog,
+  DisputeSettlementDialog,
+  OpenDisputeDialog,
   ReviewTaskDialog,
   SettleTaskDialog,
 } from './TaskDialogs';
 
-type OpenDialog = 'accept' | 'settle' | 'review' | 'deliver' | null;
+type OpenDialog =
+  | 'accept'
+  | 'settle'
+  | 'review'
+  | 'deliver'
+  | 'dispute'
+  | 'evidence'
+  | 'appeal'
+  | 'settlement'
+  | null;
+
+const DISPUTE_SOURCE_LABEL: Record<number, string> = {
+  1: 'jury verdict',
+  2: 'agreement',
+  3: 'automatic split after the jury could not decide',
+};
+
+function DisputeCard({
+  task,
+  detail,
+  now,
+}: Readonly<{task: TaskDetailInfo; detail: TaskDisputeDetailInfo | null; now: number}>) {
+  const jury = detail?.case ?? null;
+  // Jurors reveal once voting has started, so there is nothing to read before then.
+  const rationales = useJuryRationales(jury?.caseId ?? null, (jury?.state ?? 0) >= JURY_CASE_STATE.VOTING);
+  const d = task.dispute;
+  if (!d) return null;
+  const round = jury?.rounds.at(-1) ?? null;
+  const seats = jury ? jury.roundSizes[jury.currentRound] : undefined;
+  const confirmed = jury
+    ? jury.jurors.filter((j) => j.round === jury.currentRound && j.status >= 2 && j.status <= 4).length
+    : 0;
+  const proposer = d.agreementProposer === 1 ? 'buyer' : d.agreementProposer === 2 ? 'seller' : null;
+  const status =
+    d.state === 2
+      ? 'Withdrawn before a jury was drawn'
+      : d.state === 3 && d.resolvedOutcome != null
+        ? `${DISPUTE_OUTCOME_LABEL[d.resolvedOutcome] ?? 'Resolved'} (${DISPUTE_SOURCE_LABEL[d.resolvedSource ?? 0] ?? 'resolved'})`
+        : jury
+          ? (JURY_CASE_STATE_LABEL[jury.state] ?? 'In progress')
+          : 'Opening…';
+
+  return (
+    <div className={`${cardClass} mt-3 border-amber-300 p-4 dark:border-amber-700`}>
+      <h3 className={sectionTitleClass}>Dispute</h3>
+      <dl className="mt-1 divide-y divide-secondary-100 dark:divide-secondary-700">
+        <Fact label="Status">{status}</Fact>
+        <Fact label="Opened by">{d.openedByRole === 1 ? 'The buyer' : 'The seller'}</Fact>
+        <Fact label="Case fee">
+          <MysoAmount amount={formatMistAmount(d.feeEachMist)} /> each
+        </Fact>
+        <Fact label="Fee paid so far">
+          Buyer <MysoAmount amount={formatMistAmount(d.buyerPaidMist)} />, seller{' '}
+          <MysoAmount amount={formatMistAmount(d.sellerPaidMist)} />
+        </Fact>
+        {jury && seats != null && jury.state >= JURY_CASE_STATE.SELECTING ? (
+          <Fact label="Jurors confirmed">
+            {confirmed} of {seats}
+            {jury.currentRound > 0 ? ' (appeal round)' : ''}
+          </Fact>
+        ) : null}
+        {round?.tally ? (
+          <Fact label="Votes">
+            {round.tally.map((n, i) => `${DISPUTE_OUTCOME_LABEL[i] ?? `Option ${i}`}: ${n}`).join(' · ')}
+          </Fact>
+        ) : null}
+        {jury?.state === JURY_CASE_STATE.TALLIED && round?.appealDeadlineMs != null ? (
+          <Fact label={now > round.appealDeadlineMs ? 'Appeal window closed' : 'Appeal until'}>
+            {formatTime(round.appealDeadlineMs)}
+          </Fact>
+        ) : null}
+        {d.neutralWindowEndsMs != null && d.state === 1 ? (
+          <Fact label="Settlement window ends">{formatTime(d.neutralWindowEndsMs)}</Fact>
+        ) : null}
+        {proposer && d.agreementOutcome != null ? (
+          <Fact label="Settlement proposed">
+            By the {proposer}: {DISPUTE_OUTCOME_LABEL[d.agreementOutcome]}
+          </Fact>
+        ) : null}
+      </dl>
+      {jury && jury.evidence.length > 0 ? (
+        <div className="mt-3">
+          <p className="text-sm font-medium text-secondary-700 dark:text-secondary-300">Evidence</p>
+          <ul className="mt-1 space-y-1 text-xs text-secondary-600 dark:text-secondary-300">
+            {jury.evidence.map((item) => (
+              <li key={item.index} className="break-all">
+                <span className="font-mono">{truncateAddress(item.submitter)}</span>: {item.uri}{' '}
+                <span className="font-mono text-secondary-400" title={item.digest}>
+                  {item.digest.slice(0, 12)}…
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+      {rationales.data && rationales.data.length > 0 ? (
+        <div className="mt-3">
+          <p className="text-sm font-medium text-secondary-700 dark:text-secondary-300">Jurors' reasons</p>
+          <ul className="mt-1 space-y-2 text-xs text-secondary-600 dark:text-secondary-300">
+            {rationales.data.map((r) => (
+              <li key={`${r.round}-${r.agentId}`}>
+                <p>
+                  <span className="font-mono">{truncateAddress(r.agentId)}</span>
+                  {' voted '}
+                  <strong>
+                    {r.outcome == null ? 'to abstain' : (DISPUTE_OUTCOME_LABEL[r.outcome] ?? `option ${r.outcome}`)}
+                  </strong>
+                  {r.round > 0 ? ' (appeal round)' : ''}
+                </p>
+                <p className="mt-0.5 whitespace-pre-wrap break-words">
+                  {r.rationale ?? 'The juror has not published a written reason yet.'}
+                </p>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+      {task.status === TASK_STATUS.DISPUTED && d.neutralWindowEndsMs != null ? (
+        <p className="mt-3 text-xs text-secondary-500 dark:text-secondary-400">
+          The jury could not decide, so neither side wins by default. You can agree a settlement
+          until the window ends; after that the escrow is split 50/50.
+        </p>
+      ) : null}
+    </div>
+  );
+}
 
 function formatTime(ms: number | null): string {
   return ms == null ? '—' : new Date(ms).toLocaleString();
@@ -75,6 +210,7 @@ export function TaskDetailPane({taskId, onBack}: Readonly<TaskDetailPaneProps>) 
   const viewer = useTaskViewer();
   const actions = useTaskActions();
   const ownAgents = useSubAgents(false);
+  const disputeQuery = useTaskDispute(taskId, query.data?.dispute != null);
 
   const [dialog, setDialog] = useState<OpenDialog>(null);
   const [busyAction, setBusyAction] = useState<TaskAction | null>(null);
@@ -89,12 +225,13 @@ export function TaskDetailPane({taskId, onBack}: Readonly<TaskDetailPaneProps>) 
 
   const task = query.data ?? null;
   const role: TaskRole = task && viewer ? viewerRole(task, viewer) : 'observer';
+  const dispute = disputeQuery.data ?? null;
   const available = useMemo(
     () =>
       task && config.data
-        ? availableActions(task, role, now, {releaseGraceMs: config.data.releaseGraceMs})
+        ? availableActions(task, role, now, {releaseGraceMs: config.data.releaseGraceMs}, dispute)
         : [],
-    [task, role, now, config.data],
+    [task, role, now, config.data, dispute],
   );
   const sellerAgent = useMemo(
     () => ownAgents.agents.find((a) => a.agent_object_id === task?.sellerAgentId) ?? null,
@@ -119,6 +256,10 @@ export function TaskDetailPane({taskId, onBack}: Readonly<TaskDetailPaneProps>) 
   const txUrl = transactionDetailsUrl(task.transactionId);
   const releaseAt = config.data ? releaseAtMs(task, config.data) : null;
   const reviewSide = role === 'buyer' ? 'buyer' : 'seller';
+
+  function withDispute(work: (d: NonNullable<typeof dispute>) => Promise<unknown>): Promise<unknown> {
+    return dispute ? work(dispute) : Promise.reject(new Error('The dispute is still loading. Try again in a moment.'));
+  }
 
   async function run(action: TaskAction, work: () => Promise<unknown>) {
     setBusyAction(action);
@@ -147,6 +288,18 @@ export function TaskDetailPane({taskId, onBack}: Readonly<TaskDetailPaneProps>) 
     reject_refund: {label: 'Reject refund', variant: 'danger', onClick: () => void run('reject_refund', () => actions.rejectRefund(task))},
     withdraw_refund: {label: 'Withdraw proposal', variant: 'secondary', onClick: () => void run('withdraw_refund', () => actions.withdrawRefund(task))},
     review: {label: role === 'buyer' ? 'Rate seller' : 'Rate buyer', variant: 'secondary', onClick: () => setDialog('review')},
+    open_dispute: {label: 'Take to a jury', variant: 'secondary', onClick: () => setDialog('dispute')},
+    respond_dispute: {label: 'Match the case fee', onClick: () => void run('respond_dispute', () => withDispute((d) => actions.respondDispute(task, d)))},
+    dispute_evidence: {label: 'Add evidence', variant: 'secondary', onClick: () => setDialog('evidence')},
+    cancel_dispute: {label: 'Withdraw dispute', variant: 'secondary', onClick: () => void run('cancel_dispute', () => withDispute((d) => actions.cancelDispute(task, d)))},
+    appeal: {label: 'Appeal verdict', variant: 'danger', onClick: () => setDialog('appeal')},
+    execute_verdict: {label: 'Apply the verdict', onClick: () => void run('execute_verdict', () => withDispute((d) => actions.executeVerdict(task, d)))},
+    start_neutral: {label: 'Open settlement window', variant: 'secondary', onClick: () => void run('start_neutral', () => withDispute((d) => actions.startNeutralResolution(task, d)))},
+    execute_neutral: {label: 'Split the escrow 50/50', onClick: () => void run('execute_neutral', () => actions.executeNeutralResolution(task))},
+    propose_settlement: {label: 'Propose a settlement', variant: 'secondary', onClick: () => setDialog('settlement')},
+    accept_settlement: {label: 'Accept proposed settlement', onClick: () => void run('accept_settlement', () => actions.acceptDisputeSettlement(task))},
+    clear_settlement: {label: (dispute?.agreementProposer === 1 ? 'buyer' : 'seller') === role ? 'Withdraw proposal' : 'Reject proposal', variant: 'secondary', onClick: () => void run('clear_settlement', () => actions.clearDisputeSettlement(task))},
+    settle_fees: {label: 'Return case fees', variant: 'secondary', onClick: () => void run('settle_fees', () => withDispute((d) => actions.settleDisputeFees(task, d)))},
   };
 
   const proposer = task.refundProposer === 1 ? 'buyer' : task.refundProposer === 2 ? 'seller' : null;
@@ -219,6 +372,10 @@ export function TaskDetailPane({taskId, onBack}: Readonly<TaskDetailPaneProps>) 
         </dl>
       </div>
 
+      {task.dispute ? (
+        <DisputeCard task={task} detail={dispute} now={now} />
+      ) : null}
+
       {proposer && task.status === TASK_STATUS.DELIVERED ? (
         <div className={`${cardClass} mt-3 border-amber-300 p-4 text-sm dark:border-amber-700`}>
           The {proposer} proposed a full refund. The {proposer === 'buyer' ? 'seller' : 'buyer'} must
@@ -285,6 +442,36 @@ export function TaskDetailPane({taskId, onBack}: Readonly<TaskDetailPaneProps>) 
         open={dialog === 'review'}
         task={task}
         side={reviewSide}
+        onClose={() => setDialog(null)}
+        onDone={() => void query.refetch()}
+      />
+      <OpenDisputeDialog
+        open={dialog === 'dispute'}
+        task={task}
+        onClose={() => setDialog(null)}
+        onDone={() => void query.refetch()}
+      />
+      {dispute ? (
+        <>
+          <DisputeEvidenceDialog
+            open={dialog === 'evidence'}
+            task={task}
+            dispute={dispute}
+            onClose={() => setDialog(null)}
+            onDone={() => void disputeQuery.refetch()}
+          />
+          <AppealDisputeDialog
+            open={dialog === 'appeal'}
+            task={task}
+            dispute={dispute}
+            onClose={() => setDialog(null)}
+            onDone={() => void disputeQuery.refetch()}
+          />
+        </>
+      ) : null}
+      <DisputeSettlementDialog
+        open={dialog === 'settlement'}
+        task={task}
         onClose={() => setDialog(null)}
         onDone={() => void query.refetch()}
       />

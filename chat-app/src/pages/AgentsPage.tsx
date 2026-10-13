@@ -4,20 +4,23 @@ import {Navigate, useSearchParams} from 'react-router-dom';
 import {AutomationPanel} from '../components/agents/AutomationPanel';
 import {CreditsPanel} from '../components/agents/CreditsPanel';
 import {OrganizationsPanel} from '../components/agents/OrganizationsPanel';
+import {JuryPanel} from '../components/agents/JuryPanel';
 import {TasksPanel} from '../components/agents/TasksPanel';
 import {chipClass, pageTitleClass} from '../components/agents/chrome';
 import {useMySocialAuth} from '../contexts/MySocialAuthContext';
 
-type AgentsTab = 'overview' | 'organizations' | 'tasks';
+type AgentsTab = 'overview' | 'organizations' | 'tasks' | 'jury';
 
 const TABS: {id: AgentsTab; label: string}[] = [
   {id: 'overview', label: 'Overview'},
   {id: 'organizations', label: 'Organizations'},
   {id: 'tasks', label: 'Tasks'},
+  {id: 'jury', label: 'Jury'},
 ];
 
 function parseTab(value: string | null): AgentsTab {
   if (value === 'tasks') return 'tasks';
+  if (value === 'jury') return 'jury';
   return value === 'organizations' || value === 'agents' ? 'organizations' : 'overview';
 }
 
@@ -57,7 +60,7 @@ export function AgentsPage() {
   }
 
   // Both tabs scroll their own lists inside a fixed-height pane.
-  const organizationsTab = tab === 'organizations' || tab === 'tasks';
+  const organizationsTab = tab === 'organizations' || tab === 'tasks' || tab === 'jury';
 
   return (
     <main
@@ -102,6 +105,7 @@ export function AgentsPage() {
         ) : null}
         {tab === 'organizations' ? <OrganizationsPanel /> : null}
         {tab === 'tasks' ? <TasksPanel /> : null}
+        {tab === 'jury' ? <JuryPanel /> : null}
       </div>
     </main>
   );

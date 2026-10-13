@@ -4,8 +4,22 @@ import type {Transaction} from '@socialproof/myso/transactions';
 import {normalizeMySoAddress, toBase64} from '@socialproof/myso/utils';
 
 import {
+  acceptDisputeSettlementTx,
   acceptRefundTx,
   acceptTaskTx,
+  appealDisputeTx,
+  cancelDisputeTx,
+  clearDisputeSettlementTx,
+  disputeEvidenceTx,
+  executeNeutralResolutionTx,
+  executeVerdictTx,
+  joinRosterTx,
+  leaveRosterTx,
+  openDisputeTx,
+  proposeDisputeSettlementTx,
+  respondDisputeTx,
+  settleDisputeFeesTx,
+  startNeutralResolutionTx,
   approveAgentSpendTx,
   cancelOfferTx,
   createTaskTx,
@@ -60,7 +74,7 @@ const vecU8 = (v: Uint8Array) => pure(bcs.vector(bcs.u8()).serialize(Array.from(
 type Input =
   | {$kind: 'UnresolvedObject'; UnresolvedObject: {objectId: string}}
   | {$kind: 'Pure'; Pure: {bytes: string}};
-type Arg = {$kind: 'Input'; Input: number} | {$kind: 'NestedResult'; NestedResult: [number, number]};
+type Arg = {$kind: string; Input?: number; NestedResult?: [number, number]};
 
 /** Renders the last Move call as `module::function` plus readable arguments. */
 function lastMoveCall(tx: Transaction): {target: string; args: string[]} {
@@ -71,8 +85,10 @@ function lastMoveCall(tx: Transaction): {target: string; args: string[]} {
   const call = [...data.commands].reverse().find((c) => c.$kind === 'MoveCall')?.MoveCall;
   if (!call) throw new Error('no MoveCall');
   const args = call.arguments.map((arg) => {
-    if (arg.$kind === 'NestedResult') return `result:${arg.NestedResult[0]}`;
-    const input = data.inputs[arg.Input]!;
+    if (arg.$kind === 'NestedResult') return `result:${arg.NestedResult![0]}`;
+    // A coin built from an intent (a case fee) is not an input; its value is not what is under test.
+    if (arg.$kind !== 'Input') return `coin:${arg.$kind}`;
+    const input = data.inputs[arg.Input!]!;
     return input.$kind === 'Pure'
       ? `pure:${input.Pure.bytes}`
       : `obj:${input.UnresolvedObject.objectId}`;
@@ -509,5 +525,261 @@ describe('agent_task builders', () => {
     const data = tx.getData() as unknown as {commands: {$kind: string}[]};
     expect(data.commands.map((c) => c.$kind)).toEqual(['MoveCall', 'MoveCall']);
     expect(lastMoveCall(tx).target).toBe('agent_task::review_seller');
+  });
+});
+
+const DISPUTE_IDS = {...TASK_IDS, juryConfigId: '0xd1', jurorRosterId: '0xd2'};
+const CASE = '0xd3';
+const FEE = expect.stringMatching(/^coin:/);
+
+describe('task dispute builders', () => {
+  it('open_dispute(config, jury_config, roster, task, memory_config, buyer, seller, seller_agent, fee, clock)', () => {
+    const tx = openDisputeTx(DISPUTE_IDS, {
+      taskId: TASK,
+      buyerAccountId: BUYER_ACCOUNT,
+      sellerAccountId: SELLER_ACCOUNT,
+      sellerAgentId: SELLER_AGENT,
+      feeMist: 100_000_000,
+    });
+    expect(lastMoveCall(tx)).toEqual({
+      target: 'agent_task::open_dispute',
+      args: [
+        obj(DISPUTE_IDS.taskConfigId),
+        obj(DISPUTE_IDS.juryConfigId),
+        obj(DISPUTE_IDS.jurorRosterId),
+        obj(TASK),
+        obj(IDS.memoryConfigId),
+        obj(BUYER_ACCOUNT),
+        obj(SELLER_ACCOUNT),
+        obj(SELLER_AGENT),
+        FEE,
+        obj(CLOCK),
+      ],
+    });
+  });
+
+  it('respond_dispute and appeal_dispute take (task, case, memory_config, buyer, seller_agent, fee, clock)', () => {
+    const args = {
+      taskId: TASK,
+      caseId: CASE,
+      buyerAccountId: BUYER_ACCOUNT,
+      sellerAgentId: SELLER_AGENT,
+      feeMist: 60,
+    };
+    const expected = [
+      obj(TASK),
+      obj(CASE),
+      obj(IDS.memoryConfigId),
+      obj(BUYER_ACCOUNT),
+      obj(SELLER_AGENT),
+      FEE,
+      obj(CLOCK),
+    ];
+    expect(lastMoveCall(respondDisputeTx(DISPUTE_IDS, args))).toEqual({
+      target: 'agent_task::respond_dispute',
+      args: expected,
+    });
+    expect(lastMoveCall(appealDisputeTx(DISPUTE_IDS, args))).toEqual({
+      target: 'agent_task::appeal_dispute',
+      args: expected,
+    });
+  });
+
+  it('submit_dispute_evidence(jury_config, task, case, memory_config, buyer, seller_agent, digest, uri, clock)', () => {
+    const tx = disputeEvidenceTx(DISPUTE_IDS, {
+      taskId: TASK,
+      caseId: CASE,
+      buyerAccountId: BUYER_ACCOUNT,
+      sellerAgentId: SELLER_AGENT,
+      digest: DIGEST,
+      uri: 'https://e.example/1',
+    });
+    expect(lastMoveCall(tx)).toEqual({
+      target: 'agent_task::submit_dispute_evidence',
+      args: [
+        obj(DISPUTE_IDS.juryConfigId),
+        obj(TASK),
+        obj(CASE),
+        obj(IDS.memoryConfigId),
+        obj(BUYER_ACCOUNT),
+        obj(SELLER_AGENT),
+        vecU8(DIGEST),
+        vecU8(new TextEncoder().encode('https://e.example/1')),
+        obj(CLOCK),
+      ],
+    });
+  });
+
+  it('cancel_dispute_before_draw(task, case, memory_config, buyer, seller_agent, clock)', () => {
+    const tx = cancelDisputeTx(DISPUTE_IDS, {
+      taskId: TASK,
+      caseId: CASE,
+      buyerAccountId: BUYER_ACCOUNT,
+      sellerAgentId: SELLER_AGENT,
+    });
+    expect(lastMoveCall(tx)).toEqual({
+      target: 'agent_task::cancel_dispute_before_draw',
+      args: [
+        obj(TASK),
+        obj(CASE),
+        obj(IDS.memoryConfigId),
+        obj(BUYER_ACCOUNT),
+        obj(SELLER_AGENT),
+        obj(CLOCK),
+      ],
+    });
+  });
+
+  it('execute_verdict(config, task, case, buyer, seller, platform, clock)', () => {
+    const tx = executeVerdictTx(DISPUTE_IDS, {
+      taskId: TASK,
+      caseId: CASE,
+      buyerAccountId: BUYER_ACCOUNT,
+      sellerAccountId: SELLER_ACCOUNT,
+      platformObjectId: PLATFORM,
+    });
+    expect(lastMoveCall(tx)).toEqual({
+      target: 'agent_task::execute_verdict',
+      args: [
+        obj(DISPUTE_IDS.taskConfigId),
+        obj(TASK),
+        obj(CASE),
+        obj(BUYER_ACCOUNT),
+        obj(SELLER_ACCOUNT),
+        obj(PLATFORM),
+        obj(CLOCK),
+      ],
+    });
+  });
+
+  it('start_neutral_resolution(jury_config, task, case, clock) and execute_neutral_resolution(config, task, buyer, seller, platform, clock)', () => {
+    expect(lastMoveCall(startNeutralResolutionTx(DISPUTE_IDS, {taskId: TASK, caseId: CASE}))).toEqual({
+      target: 'agent_task::start_neutral_resolution',
+      args: [obj(DISPUTE_IDS.juryConfigId), obj(TASK), obj(CASE), obj(CLOCK)],
+    });
+    expect(
+      lastMoveCall(
+        executeNeutralResolutionTx(DISPUTE_IDS, {
+          taskId: TASK,
+          buyerAccountId: BUYER_ACCOUNT,
+          sellerAccountId: SELLER_ACCOUNT,
+          platformObjectId: PLATFORM,
+        }),
+      ),
+    ).toEqual({
+      target: 'agent_task::execute_neutral_resolution',
+      args: [
+        obj(DISPUTE_IDS.taskConfigId),
+        obj(TASK),
+        obj(BUYER_ACCOUNT),
+        obj(SELLER_ACCOUNT),
+        obj(PLATFORM),
+        obj(CLOCK),
+      ],
+    });
+  });
+
+  it('the settlement agreement calls', () => {
+    expect(
+      lastMoveCall(
+        proposeDisputeSettlementTx(DISPUTE_IDS, {
+          taskId: TASK,
+          buyerAccountId: BUYER_ACCOUNT,
+          sellerAgentId: SELLER_AGENT,
+          outcome: 2,
+        }),
+      ),
+    ).toEqual({
+      target: 'agent_task::propose_dispute_settlement',
+      args: [
+        obj(TASK),
+        obj(IDS.memoryConfigId),
+        obj(BUYER_ACCOUNT),
+        obj(SELLER_AGENT),
+        u8(2),
+        obj(CLOCK),
+      ],
+    });
+    expect(
+      lastMoveCall(
+        acceptDisputeSettlementTx(DISPUTE_IDS, {
+          taskId: TASK,
+          buyerAccountId: BUYER_ACCOUNT,
+          sellerAccountId: SELLER_ACCOUNT,
+          sellerAgentId: SELLER_AGENT,
+          platformObjectId: PLATFORM,
+        }),
+      ),
+    ).toEqual({
+      target: 'agent_task::accept_dispute_settlement',
+      args: [
+        obj(DISPUTE_IDS.taskConfigId),
+        obj(TASK),
+        obj(IDS.memoryConfigId),
+        obj(BUYER_ACCOUNT),
+        obj(SELLER_ACCOUNT),
+        obj(SELLER_AGENT),
+        obj(PLATFORM),
+        obj(CLOCK),
+      ],
+    });
+    expect(
+      lastMoveCall(
+        clearDisputeSettlementTx(DISPUTE_IDS, {
+          taskId: TASK,
+          buyerAccountId: BUYER_ACCOUNT,
+          sellerAgentId: SELLER_AGENT,
+        }),
+      ),
+    ).toEqual({
+      target: 'agent_task::clear_dispute_settlement',
+      args: [obj(TASK), obj(IDS.memoryConfigId), obj(BUYER_ACCOUNT), obj(SELLER_AGENT), obj(CLOCK)],
+    });
+  });
+
+  it('settle_dispute_fees(task, case, clock), preceded by closing a case that is still open', () => {
+    const finished = settleDisputeFeesTx(DISPUTE_IDS, {taskId: TASK, caseId: CASE, closeCaseFirst: false});
+    expect(lastMoveCall(finished)).toEqual({
+      target: 'agent_task::settle_dispute_fees',
+      args: [obj(TASK), obj(CASE), obj(CLOCK)],
+    });
+    const data = (tx: Transaction) => tx.getData() as unknown as {commands: unknown[]};
+    expect(data(finished).commands).toHaveLength(1);
+
+    const open = settleDisputeFeesTx(DISPUTE_IDS, {taskId: TASK, caseId: CASE, closeCaseFirst: true});
+    expect(data(open).commands).toHaveLength(2);
+    expect(lastMoveCall(open).target).toBe('agent_task::settle_dispute_fees');
+  });
+});
+
+describe('juror roster builders', () => {
+  it('join_roster(jury_config, roster, memory_config, account, agent, payout, model_family, clock)', () => {
+    const tx = joinRosterTx(DISPUTE_IDS, {
+      accountId: BUYER_ACCOUNT,
+      agentId: SELLER_AGENT,
+      payoutAddress: '0xf00d',
+      modelFamily: 3,
+    });
+    expect(lastMoveCall(tx)).toEqual({
+      target: 'jury::join_roster',
+      args: [
+        obj(DISPUTE_IDS.juryConfigId),
+        obj(DISPUTE_IDS.jurorRosterId),
+        obj(IDS.memoryConfigId),
+        obj(BUYER_ACCOUNT),
+        obj(SELLER_AGENT),
+        addr('0xf00d'),
+        u8(3),
+        obj(CLOCK),
+      ],
+    });
+  });
+
+  it('leave_roster(roster, account, agent_id, clock)', () => {
+    const tx = leaveRosterTx(DISPUTE_IDS, {accountId: BUYER_ACCOUNT, agentId: SELLER_AGENT});
+    expect(lastMoveCall(tx)).toEqual({
+      target: 'jury::leave_roster',
+      args: [obj(DISPUTE_IDS.jurorRosterId), obj(BUYER_ACCOUNT), addr(SELLER_AGENT), obj(CLOCK)],
+    });
   });
 });

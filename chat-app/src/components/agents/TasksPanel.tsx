@@ -7,7 +7,7 @@ import {useMyTasks, useTaskConfig, useTaskViewer} from '../../hooks/agents';
 import {Button} from '../Button';
 import {chipClass, cardClass, sectionTitleClass} from './chrome';
 import {CreateTaskDialog} from './CreateTaskDialog';
-import {ListError, LoadMoreRow} from './ListStates';
+import {ListError} from './ListStates';
 import {MysoAmount} from './MysoAmount';
 import {ReputationBadge} from './ReputationBadge';
 import {TaskDetailPane} from './TaskDetailPane';
@@ -22,7 +22,13 @@ const TABS: {id: TaskTab; label: string}[] = [
 
 function tabOf(task: AgentTaskInfo): TaskTab {
   if (task.status === TASK_STATUS.OFFERED) return 'offers';
-  if (task.status === TASK_STATUS.ACCEPTED || task.status === TASK_STATUS.DELIVERED) return 'active';
+  if (
+    task.status === TASK_STATUS.ACCEPTED ||
+    task.status === TASK_STATUS.DELIVERED ||
+    task.status === TASK_STATUS.DISPUTED
+  ) {
+    return 'active';
+  }
   return 'done';
 }
 

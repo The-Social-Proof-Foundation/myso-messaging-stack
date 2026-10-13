@@ -8,6 +8,7 @@ import {
   fetchPrincipalReputation,
   fetchTask,
   fetchTaskConfig,
+  fetchTaskDispute,
   fetchTasks,
   type AgentTaskInfo,
   type TaskReceiptInfo,
@@ -90,6 +91,17 @@ export function useTask(taskId: string | null) {
     queryFn: () => fetchTask(taskId!),
     enabled: Boolean(taskId),
     // A task changes with every party action, so keep it fresh while its pane is open.
+    refetchInterval: 15_000,
+  });
+}
+
+/** The dispute and its jury case, once a task has gone to a jury. */
+export function useTaskDispute(taskId: string | null, enabled: boolean) {
+  return useQuery({
+    queryKey: agentKeys.taskDispute(taskId ?? ''),
+    queryFn: () => fetchTaskDispute(taskId!),
+    enabled: Boolean(taskId) && enabled,
+    // Jurors vote on their own schedule, so poll while a dispute is on screen.
     refetchInterval: 15_000,
   });
 }

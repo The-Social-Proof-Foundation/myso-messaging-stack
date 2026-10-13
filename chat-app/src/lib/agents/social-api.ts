@@ -259,7 +259,7 @@ export interface GroupDigestInfo {
   transactionId: string;
 }
 
-/** `GET /tasks`, `GET /tasks/:id` (camelCase). Status: 0 offered .. 5 cancelled. */
+/** `GET /tasks`, `GET /tasks/:id` (camelCase). Status: 0 offered .. 5 cancelled, 6 in dispute. */
 export interface AgentTaskInfo {
   taskId: string;
   buyerPrincipal: string;
@@ -328,8 +328,107 @@ export interface TaskReviewInfo {
   transactionId: string;
 }
 
+/** `GET /tasks/:id` carries this once a task has gone to a jury. */
+export interface TaskDisputeInfo {
+  taskId: string;
+  caseId: string;
+  /** 1 buyer, 2 seller. */
+  openedByRole: number;
+  /** 1 open, 2 cancelled before a draw, 3 resolved. */
+  state: number;
+  feeEachMist: number;
+  buyerPaidMist: number;
+  sellerPaidMist: number;
+  openedAtMs: number;
+  /** Set when the jury failed: the settlement window ends here, then the 50/50 split runs. */
+  neutralWindowEndsMs: number | null;
+  /** 0 none, 1 buyer, 2 seller. */
+  agreementProposer: number;
+  agreementOutcome: number | null;
+  resolvedOutcome: number | null;
+  /** 1 verdict, 2 agreement, 3 neutral split. */
+  resolvedSource: number | null;
+  resolvedAtMs: number | null;
+  feesSettled: boolean;
+  buyerFeeRefundMist: number | null;
+  sellerFeeRefundMist: number | null;
+}
+
 export interface TaskDetailInfo extends AgentTaskInfo {
   reviews: TaskReviewInfo[];
+  dispute: TaskDisputeInfo | null;
+}
+
+export interface JuryRoundInfo {
+  round: number;
+  acceptDeadlineMs: number;
+  commitDeadlineMs: number | null;
+  revealDeadlineMs: number | null;
+  /** Votes per menu option, known once the round is tallied. */
+  tally: number[] | null;
+  abstain: number | null;
+  revealed: number | null;
+  decisive: boolean | null;
+  leading: number | null;
+  /** When the appeal window closes and anyone may finalize the case. */
+  appealDeadlineMs: number | null;
+}
+
+export interface JurySlotInfo {
+  round: number;
+  agentId: string;
+  /** 1 drafted, 2 accepted, 3 committed, 4 revealed, 5 replaced, 6 defaulted. */
+  status: number;
+  outcome: number | null;
+  rationaleDigest: string | null;
+}
+
+export interface JuryEvidenceInfo {
+  index: number;
+  submitter: string;
+  round: number;
+  kind: number;
+  digest: string;
+  uri: string;
+  submittedAtMs: number;
+}
+
+/** `GET /jury/cases/:id`. State: 1 evidence .. 6 final, 7 failed, 8 cancelled. */
+export interface JuryCaseDetailInfo {
+  caseId: string;
+  subjectKind: number;
+  subjectId: string;
+  menuLen: number;
+  roundSizes: number[];
+  appealable: boolean;
+  feeMist: number;
+  evidenceDeadlineMs: number;
+  state: number;
+  currentRound: number;
+  finalOutcome: number | null;
+  appealsUsed: number;
+  failedAppeal: boolean;
+  participants: number | null;
+  perJurorFeeMist: number | null;
+  failReason: number | null;
+  rounds: JuryRoundInfo[];
+  jurors: JurySlotInfo[];
+  evidence: JuryEvidenceInfo[];
+}
+
+/** `GET /jury/cases/:id/rationales`: a revealed vote and the reason its juror gave, once published. */
+export interface JuryRationaleInfo {
+  round: number;
+  agentId: string;
+  outcome: number | null;
+  rationaleDigest: string | null;
+  revealedAtMs: number | null;
+  rationale: string | null;
+}
+
+/** `GET /tasks/:id/dispute`.
+export interface TaskDisputeDetailInfo extends TaskDisputeInfo {
+  case: JuryCaseDetailInfo | null;
 }
 
 export interface TaskReceiptInfo {
@@ -844,6 +943,67 @@ export async function fetchTasks(
 
 export function fetchTask(taskId: string): Promise<TaskDetailInfo | null> {
   return getJsonOrNull(`/tasks/${enc(taskId)}`);
+}
+
+/** `GET /jury/roster`. Status: 0 left, 1 active, 3 suspended (over once `suspendedUntilMs` has passed). */
+export interface JurorRosterInfo {
+  agentId: string;
+  owner: string;
+  memoryAccountId: string;
+  organizationId: string;
+  payoutAddress: string;
+  modelFamily: number;
+  exempt: boolean;
+  status: number;
+  suspendedUntilMs: number | null;
+  dutyScore: number | null;
+  strikes: number;
+  joinedAtMs: number;
+  leftAtMs: number | null;
+}
+
+/** One duty a juror holds. `dutyKind` is what to do next and `deadlineMs` when it closes. */
+export interface JurorAssignmentInfo {
+  caseId: string;
+  round: number;
+  agentId: string;
+  status: number;
+  dutyKind: 'accept' | 'commit' | 'reveal' | null;
+  deadlineMs: number | null;
+  commitment: string | null;
+  revealed: boolean;
+  caseState: number;
+  /** 1 task dispute, 2 governance proposal. */
+  subjectKind: number;
+  subjectId: string;
+}
+
+/** Roster entries for agents owned by `owner` that are active or suspended. */
+export async function fetchOwnerJurors(owner: string, signal?: AbortSignal): Promise<JurorRosterInfo[]> {
+  const {json} = await getPagedJson<JurorRosterInfo[]>('/jury/roster', {
+    owner,
+    status: '1,3',
+    limit: 200,
+    signal,
+  });
+  return Array.isArray(json) ? json : [];
+}
+
+/** Open duties for one juror agent, soonest deadline first. */
+export async function fetchJurorAssignments(agentId: string, signal?: AbortSignal): Promise<JurorAssignmentInfo[]> {
+  const {json} = await getPagedJson<JurorAssignmentInfo[]>(`/jury/jurors/${enc(agentId)}/assignments`, {
+    limit: 50,
+    signal,
+  });
+  return Array.isArray(json) ? json : [];
+}
+
+export async function fetchJuryRationales(caseId: string): Promise<JuryRationaleInfo[]> {
+  return (await getJsonOrNull<JuryRationaleInfo[]>(`/jury/cases/${enc(caseId)}/rationales`)) ?? [];
+}
+
+export function fetchTaskDispute(taskId: string): Promise<TaskDisputeDetailInfo | null> {
+  return getJsonOrNull(`/tasks/${enc(taskId)}/dispute`);
 }
 
 export async function fetchAgentReceipts(

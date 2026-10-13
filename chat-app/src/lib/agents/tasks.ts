@@ -2,7 +2,7 @@ import {sha3_256} from '@noble/hashes/sha3.js';
 import {bcs} from '@socialproof/myso/bcs';
 import {normalizeMySoAddress} from '@socialproof/myso/utils';
 
-import type {AgentTaskInfo, TaskConfigInfo} from './social-api';
+import type {AgentTaskInfo, TaskConfigInfo, TaskDisputeDetailInfo} from './social-api';
 
 /** Task states (`agent_task::STATUS_*`). */
 export const TASK_STATUS = {
@@ -12,6 +12,7 @@ export const TASK_STATUS = {
   SETTLED: 3,
   REFUNDED: 4,
   CANCELLED: 5,
+  DISPUTED: 6,
 } as const;
 
 export const TASK_STATUS_LABEL: Record<number, string> = {
@@ -21,6 +22,7 @@ export const TASK_STATUS_LABEL: Record<number, string> = {
   3: 'Settled',
   4: 'Refunded',
   5: 'Cancelled',
+  6: 'In dispute',
 };
 
 export const CLOSE_KIND_LABEL: Record<number, string> = {
@@ -32,12 +34,60 @@ export const CLOSE_KIND_LABEL: Record<number, string> = {
 export const SETTLEMENT_KIND_LABEL: Record<number, string> = {
   1: 'Settled by buyer',
   2: 'Released to seller',
+  3: 'Paid by jury verdict',
+  4: 'Paid by agreement after a dispute',
+  5: 'Split by jury verdict',
+  6: 'Split by agreement after a dispute',
+  7: 'Split after the jury could not decide',
 };
 
 export const REFUND_KIND_LABEL: Record<number, string> = {
   0: 'Delivery missed',
   1: 'Refunded by agreement',
+  2: 'Refunded by jury verdict',
+  3: 'Refunded by agreement after a dispute',
 };
+
+/** The three outcomes a jury, or the parties by agreement, can choose between. */
+export const DISPUTE_OUTCOME = {PAY_SELLER: 0, REFUND_BUYER: 1, SPLIT_50_50: 2} as const;
+
+export const DISPUTE_OUTCOME_LABEL: Record<number, string> = {
+  0: 'Pay the seller in full',
+  1: 'Refund the buyer in full',
+  2: 'Split 50/50',
+};
+
+/** `jury::CASE_*`. */
+export const JURY_CASE_STATE = {
+  EVIDENCE: 1,
+  AWAITING_DRAW: 2,
+  SELECTING: 3,
+  VOTING: 4,
+  TALLIED: 5,
+  FINAL: 6,
+  FAILED: 7,
+  CANCELLED: 8,
+} as const;
+
+export const JURY_CASE_STATE_LABEL: Record<number, string> = {
+  1: 'Gathering evidence',
+  2: 'Waiting for the jury to be drawn',
+  3: 'Jurors are being confirmed',
+  4: 'Jurors are voting',
+  5: 'Verdict reached; appeal window open',
+  6: 'Verdict final',
+  7: 'The jury could not decide',
+  8: 'Withdrawn',
+};
+
+/** `agent_task::dispute_fee_mist`: 3% of the escrow, between 0.1 and 50 MYSO. */
+export function disputeFeeMist(amountMist: number): number {
+  const raw = Math.floor((amountMist * 300) / 10_000);
+  return Math.min(Math.max(raw, 100_000_000), 50_000_000_000);
+}
+
+/** An appeal costs `APPEAL_FEE_MULTIPLIER` times the case fee. */
+export const APPEAL_FEE_MULTIPLIER = 2;
 
 export function taskStatusLabel(task: Pick<AgentTaskInfo, 'status' | 'closeKind' | 'settlementKind' | 'refundKind'>): string {
   if (task.status === TASK_STATUS.CANCELLED && task.closeKind != null) {
@@ -160,7 +210,19 @@ export type TaskAction =
   | 'accept_refund'
   | 'reject_refund'
   | 'withdraw_refund'
-  | 'review';
+  | 'review'
+  | 'open_dispute'
+  | 'respond_dispute'
+  | 'dispute_evidence'
+  | 'cancel_dispute'
+  | 'appeal'
+  | 'execute_verdict'
+  | 'start_neutral'
+  | 'execute_neutral'
+  | 'propose_settlement'
+  | 'accept_settlement'
+  | 'clear_settlement'
+  | 'settle_fees';
 
 export interface TaskViewer {
   /** The signed-in principal address. */
@@ -205,6 +267,7 @@ export function availableActions(
   role: TaskRole,
   nowMs: number,
   config: Pick<TaskConfigInfo, 'releaseGraceMs'>,
+  dispute: TaskDisputeDetailInfo | null = null,
 ): TaskAction[] {
   const actions: TaskAction[] = [];
   const proposer = task.refundProposer === 1 ? 'buyer' : task.refundProposer === 2 ? 'seller' : null;
@@ -236,9 +299,15 @@ export function availableActions(
         if (proposer === null || proposer === role) actions.push('propose_refund');
         if (proposer !== null && proposer !== role) actions.push('accept_refund', 'reject_refund');
         if (proposer === role) actions.push('withdraw_refund');
+        // A dispute can be opened until the seller could be paid automatically.
+        if (releaseAt == null || nowMs <= releaseAt) actions.push('open_dispute');
       }
       break;
     }
+
+    case TASK_STATUS.DISPUTED:
+      if (dispute) actions.push(...disputeActions(dispute, role, nowMs));
+      break;
 
     case TASK_STATUS.SETTLED: {
       const open = task.reviewDeadlineMs == null || nowMs <= task.reviewDeadlineMs;
@@ -249,6 +318,65 @@ export function availableActions(
 
     default:
       break;
+  }
+  if (dispute && task.status !== TASK_STATUS.DISPUTED && canSettleDisputeFees(dispute)) {
+    actions.push('settle_fees');
+  }
+  return actions;
+}
+
+/** Fees come back once the dispute has been withdrawn or resolved; anyone may run the payout. */
+function canSettleDisputeFees(dispute: TaskDisputeDetailInfo): boolean {
+  return dispute.state !== 1 && !dispute.feesSettled && dispute.case != null;
+}
+
+/**
+ * What a viewer may do while the escrow is frozen, from the dispute and its jury case. Mirrors the
+ * gates in `agent_task`; steps anyone may run (apply the verdict, open or close the settlement
+ * window) are offered to observers too.
+ */
+function disputeActions(dispute: TaskDisputeDetailInfo, role: TaskRole, nowMs: number): TaskAction[] {
+  if (dispute.state !== 1) return [];
+  const jury = dispute.case;
+  const caseState = jury?.state ?? null;
+  const party = role !== 'observer';
+  const opener: TaskRole = dispute.openedByRole === 1 ? 'buyer' : 'seller';
+  const beforeDraw = caseState != null && caseState <= JURY_CASE_STATE.AWAITING_DRAW;
+  const actions: TaskAction[] = [];
+
+  if (party && beforeDraw) {
+    const otherPaid = opener === 'buyer' ? dispute.sellerPaidMist : dispute.buyerPaidMist;
+    if (role !== opener && otherPaid === 0) actions.push('respond_dispute');
+    actions.push('dispute_evidence');
+    if (role === opener) actions.push('cancel_dispute');
+  }
+
+  if (party && caseState === JURY_CASE_STATE.TALLIED && jury) {
+    const tallied = jury.rounds.at(-1);
+    const open = tallied?.appealDeadlineMs == null || nowMs <= tallied.appealDeadlineMs;
+    const leading = tallied?.leading;
+    const lost =
+      leading === DISPUTE_OUTCOME.PAY_SELLER
+        ? role === 'buyer'
+        : leading === DISPUTE_OUTCOME.REFUND_BUYER
+          ? role === 'seller'
+          : leading != null;
+    if (open && lost) actions.push('appeal');
+  }
+
+  if (caseState === JURY_CASE_STATE.FINAL) actions.push('execute_verdict');
+  if (caseState === JURY_CASE_STATE.FAILED && dispute.neutralWindowEndsMs == null) {
+    actions.push('start_neutral');
+  }
+  if (dispute.neutralWindowEndsMs != null && nowMs > dispute.neutralWindowEndsMs) {
+    actions.push('execute_neutral');
+  }
+
+  if (party && caseState !== JURY_CASE_STATE.FINAL) {
+    const proposer = dispute.agreementProposer === 1 ? 'buyer' : dispute.agreementProposer === 2 ? 'seller' : null;
+    if (proposer === null) actions.push('propose_settlement');
+    else if (proposer === role) actions.push('clear_settlement');
+    else actions.push('accept_settlement', 'clear_settlement');
   }
   return actions;
 }

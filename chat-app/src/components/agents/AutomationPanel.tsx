@@ -3,6 +3,7 @@ import {useEffect, useState} from 'react';
 import {buttonClass, cardClass, fieldClass, sectionTitleClass} from './chrome';
 import {AutomationDelegates} from './AutomationDelegates';
 import {AutomationJobForm} from './AutomationJobForm';
+import {JurorAutomationForm} from './JurorAutomationForm';
 import {TaskAutomationForm} from './TaskAutomationForm';
 import {ListError} from './ListStates';
 import type {SubAgentRow} from '../../lib/agents/social-api';
@@ -249,6 +250,7 @@ export function AutomationPanel({agent: fixedAgent}: Readonly<{agent?: SubAgentR
 
       {health.error ? null : <AutomationJobForm agent={agent} />}
       {health.error ? null : <TaskAutomationForm agent={agent} />}
+      {health.error ? null : <JurorAutomationForm agent={agent} />}
       {health.error ? null : <AutomationDelegates agent={agent} />}
     </section>
   );

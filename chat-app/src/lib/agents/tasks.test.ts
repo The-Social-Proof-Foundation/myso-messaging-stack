@@ -1,12 +1,14 @@
 import {describe, expect, it} from 'vitest';
 
 import {
+  JURY_CASE_STATE,
   TASK_STATUS,
   availableActions,
   bytesToHex,
   computeTermsDigest,
   feeBreakdown,
   formatTermsWindow,
+  disputeFeeMist,
   hexToBytes,
   releaseAtMs,
   taskStatusLabel,
@@ -14,7 +16,7 @@ import {
   viewerRole,
   type TaskAction,
 } from './tasks';
-import type {AgentTaskInfo} from './social-api';
+import type {AgentTaskInfo, JuryCaseDetailInfo, TaskDisputeDetailInfo} from './social-api';
 
 const BUYER = '0xb1';
 const SELLER = '0x5e';
@@ -125,8 +127,8 @@ describe('delivered', () => {
     task({status: TASK_STATUS.DELIVERED, settleDeadlineMs: 3 * DAY, ...over});
 
   it('offers the buyer settle and both parties a refund proposal, never a unilateral refund', () => {
-    expect(acts(delivered(), 'buyer', 2 * DAY)).toEqual(['settle', 'propose_refund']);
-    expect(acts(delivered(), 'seller', 2 * DAY)).toEqual(['propose_refund']);
+    expect(acts(delivered(), 'buyer', 2 * DAY)).toEqual(['settle', 'propose_refund', 'open_dispute']);
+    expect(acts(delivered(), 'seller', 2 * DAY)).toEqual(['propose_refund', 'open_dispute']);
     for (const role of ['buyer', 'seller', 'observer'] as const) {
       expect(acts(delivered(), role, 100 * DAY)).not.toContain('refund_missed_delivery');
     }
@@ -141,8 +143,13 @@ describe('delivered', () => {
 
   it('a pending proposal gives the counterparty accept and reject and the proposer withdraw', () => {
     const t = delivered({refundProposer: 2});
-    expect(acts(t, 'buyer', DAY)).toEqual(['settle', 'accept_refund', 'reject_refund']);
-    expect(acts(t, 'seller', DAY)).toEqual(['propose_refund', 'withdraw_refund']);
+    expect(acts(t, 'buyer', DAY)).toEqual([
+      'settle',
+      'accept_refund',
+      'reject_refund',
+      'open_dispute',
+    ]);
+    expect(acts(t, 'seller', DAY)).toEqual(['propose_refund', 'withdraw_refund', 'open_dispute']);
     expect(acts(t, 'observer', DAY)).toEqual([]);
   });
 
@@ -150,6 +157,162 @@ describe('delivered', () => {
     const t = delivered({refundProposer: 1});
     expect(acts(t, 'buyer', 7 * DAY)).toContain('settle');
     expect(acts(t, 'buyer', 7 * DAY)).toContain('release');
+  });
+});
+
+describe('disputes', () => {
+  const delivered = (over: Partial<AgentTaskInfo> = {}) =>
+    task({status: TASK_STATUS.DELIVERED, settleDeadlineMs: 3 * DAY, ...over});
+  const disputed = task({status: TASK_STATUS.DISPUTED, settleDeadlineMs: 3 * DAY});
+
+  function dispute(over: Partial<TaskDisputeDetailInfo> = {}, jury: Partial<JuryCaseDetailInfo> | null = {}) {
+    const base: TaskDisputeDetailInfo = {
+      taskId: '0xc1',
+      caseId: '0xca5e',
+      openedByRole: 1,
+      state: 1,
+      feeEachMist: 30_000_000,
+      buyerPaidMist: 30_000_000,
+      sellerPaidMist: 0,
+      openedAtMs: 0,
+      neutralWindowEndsMs: null,
+      agreementProposer: 0,
+      agreementOutcome: null,
+      resolvedOutcome: null,
+      resolvedSource: null,
+      resolvedAtMs: null,
+      feesSettled: false,
+      buyerFeeRefundMist: null,
+      sellerFeeRefundMist: null,
+      case:
+        jury === null
+          ? null
+          : {
+              caseId: '0xca5e',
+              subjectKind: 1,
+              subjectId: '0xc1',
+              menuLen: 3,
+              roundSizes: [3, 5],
+              appealable: true,
+              feeMist: 30_000_000,
+              evidenceDeadlineMs: 2 * DAY,
+              state: JURY_CASE_STATE.EVIDENCE,
+              currentRound: 0,
+              finalOutcome: null,
+              appealsUsed: 0,
+              failedAppeal: false,
+              participants: null,
+              perJurorFeeMist: null,
+              failReason: null,
+              rounds: [],
+              jurors: [],
+              evidence: [],
+              ...jury,
+            },
+      ...over,
+    };
+    return base;
+  }
+  const dact = (role: 'buyer' | 'seller' | 'observer', d: TaskDisputeDetailInfo | null, now = DAY) =>
+    availableActions(disputed, role, now, CONFIG, d);
+
+  it('lets a party take delivered work to a jury only until the seller could be paid automatically', () => {
+    expect(acts(delivered(), 'buyer', 6 * DAY)).toContain('open_dispute');
+    expect(acts(delivered(), 'buyer', 6 * DAY + 1)).not.toContain('open_dispute');
+    expect(acts(delivered(), 'observer', DAY)).not.toContain('open_dispute');
+  });
+
+  it('freezes everything else while disputed', () => {
+    const none = dact('buyer', null);
+    expect(none).toEqual([]);
+    for (const a of ['settle', 'release', 'propose_refund'] as const) {
+      expect(dact('buyer', dispute())).not.toContain(a);
+    }
+  });
+
+  it('before the draw the other side may match the fee and either may add evidence', () => {
+    expect(dact('seller', dispute())).toEqual(['respond_dispute', 'dispute_evidence', 'propose_settlement']);
+    expect(dact('buyer', dispute())).toEqual(['dispute_evidence', 'cancel_dispute', 'propose_settlement']);
+    expect(dact('observer', dispute())).toEqual([]);
+  });
+
+  it('does not offer to match a fee already matched', () => {
+    expect(dact('seller', dispute({sellerPaidMist: 30_000_000}))).toEqual(['dispute_evidence', 'propose_settlement']);
+  });
+
+  it('after the draw only the loser may appeal, and only while the window is open', () => {
+    const tallied = (leading: number, appealDeadlineMs: number | null) =>
+      dispute(
+        {},
+        {
+          state: JURY_CASE_STATE.TALLIED,
+          rounds: [
+            {
+              round: 0,
+              acceptDeadlineMs: 0,
+              commitDeadlineMs: 0,
+              revealDeadlineMs: 0,
+              tally: [2, 1, 0],
+              abstain: 0,
+              revealed: 3,
+              decisive: true,
+              leading,
+              appealDeadlineMs,
+            },
+          ],
+        },
+      );
+    expect(dact('buyer', tallied(0, 2 * DAY))).toContain('appeal');
+    expect(dact('seller', tallied(0, 2 * DAY))).not.toContain('appeal');
+    expect(dact('seller', tallied(1, 2 * DAY))).toContain('appeal');
+    expect(dact('buyer', tallied(2, 2 * DAY))).toContain('appeal');
+    expect(dact('buyer', tallied(0, 2 * DAY), 3 * DAY)).not.toContain('appeal');
+  });
+
+  it('anyone may apply a final verdict', () => {
+    const final = dispute({}, {state: JURY_CASE_STATE.FINAL, finalOutcome: 1});
+    expect(dact('observer', final)).toEqual(['execute_verdict']);
+    expect(dact('buyer', final)).toEqual(['execute_verdict']);
+  });
+
+  it('a failed jury opens the settlement window, then anyone may run the 50/50 split', () => {
+    const failed = dispute({}, {state: JURY_CASE_STATE.FAILED});
+    expect(dact('observer', failed)).toEqual(['start_neutral']);
+    const open = dispute({neutralWindowEndsMs: 2 * DAY}, {state: JURY_CASE_STATE.FAILED});
+    expect(dact('observer', open, DAY)).toEqual([]);
+    expect(dact('observer', open, 2 * DAY + 1)).toEqual(['execute_neutral']);
+    expect(dact('buyer', open, DAY)).toEqual(['propose_settlement']);
+  });
+
+  it('a pending agreement is accepted or cleared by the other side and cleared by its proposer', () => {
+    const pending = dispute({agreementProposer: 1, agreementOutcome: 2});
+    expect(dact('seller', pending)).toContain('accept_settlement');
+    expect(dact('seller', pending)).toContain('clear_settlement');
+    expect(dact('buyer', pending)).toContain('clear_settlement');
+    expect(dact('buyer', pending)).not.toContain('accept_settlement');
+  });
+
+  it('pays out the fee pool once, after the dispute is over', () => {
+    const over = dispute({state: 3}, {state: JURY_CASE_STATE.FINAL});
+    const settled = task({status: TASK_STATUS.SETTLED, reviewDeadlineMs: 10 * DAY});
+    expect(availableActions(settled, 'observer', DAY, CONFIG, over)).toEqual(['settle_fees']);
+    expect(availableActions(settled, 'observer', DAY, CONFIG, {...over, feesSettled: true})).toEqual([]);
+    const withdrawn = dispute({state: 2}, {state: JURY_CASE_STATE.CANCELLED});
+    expect(availableActions(delivered(), 'observer', DAY, CONFIG, withdrawn)).toEqual(['settle_fees']);
+  });
+
+  it('prices the case fee like the contract', () => {
+    expect(disputeFeeMist(1_000_000_000)).toBe(100_000_000);
+    expect(disputeFeeMist(10_000_000_000)).toBe(300_000_000);
+    expect(disputeFeeMist(10_000_000_000_000)).toBe(50_000_000_000);
+  });
+
+  it('labels the frozen state and the new ways a task can end', () => {
+    expect(taskStatusLabel(disputed)).toBe('In dispute');
+    expect(taskStatusLabel(task({status: TASK_STATUS.SETTLED, settlementKind: 7}))).toBe(
+      'Split after the jury could not decide',
+    );
+    expect(taskStatusLabel(task({status: TASK_STATUS.REFUNDED, refundKind: 2}))).toBe('Refunded by jury verdict');
   });
 });
 

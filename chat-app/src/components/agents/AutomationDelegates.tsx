@@ -14,6 +14,7 @@ import {
   type DelegateClass,
   configuredMyDataKey,
   delegateKeyRef,
+  isJuryDelegateClass,
   isValidDelegateName,
 } from '../../lib/agents/automation-delegate';
 
@@ -57,7 +58,10 @@ export function AutomationDelegates({agent}: Readonly<{agent: SubAgentRow}>) {
   const organizationId = agent.organization_id ?? null;
   const ready = Boolean(client && accountId && organizationId) && myDataKeyConfigured();
   const nameOk = isValidDelegateName(name);
-  const limitOk = /^[1-9][0-9]*$/.test(limit);
+  const jury = isJuryDelegateClass(delegateClass);
+  // A jury delegate never spends, so its limit is fixed at zero rather than typed.
+  const effectiveLimit = jury ? '0' : limit;
+  const limitOk = jury || /^[1-9][0-9]*$/.test(limit);
 
   const refresh = () =>
     queryClient.invalidateQueries({queryKey: agentKeys.automationDelegates(accountId ?? '')});
@@ -73,7 +77,7 @@ export function AutomationDelegates({agent}: Readonly<{agent: SubAgentRow}>) {
         parent: agent,
         name,
         expiresAtMs: Date.now() + days * DAY_MS,
-        maxActionSpendMist: limit,
+        maxActionSpendMist: effectiveLimit,
         delegateClass,
         client,
         onStep: setStep,
@@ -149,6 +153,10 @@ export function AutomationDelegates({agent}: Readonly<{agent: SubAgentRow}>) {
                     <span className="rounded-full bg-sky-500/15 px-2 py-0.5 text-[10px] font-medium text-sky-600 dark:text-sky-300">
                       Task worker
                     </span>
+                  ) : row.delegate_class === 'juror' || row.delegate_class === 'jury_keeper' ? (
+                    <span className="rounded-full bg-violet-500/15 px-2 py-0.5 text-[10px] font-medium text-violet-600 dark:text-violet-300">
+                      {row.delegate_class === 'juror' ? 'Juror' : 'Jury keeper'}
+                    </span>
                   ) : null}
                 </div>
                 <p className="mt-0.5 truncate text-xs text-secondary-500">
@@ -182,7 +190,11 @@ export function AutomationDelegates({agent}: Readonly<{agent: SubAgentRow}>) {
         <select
           className={fieldClass}
           value={delegateClass}
-          onChange={(event) => setDelegateClass(event.target.value as DelegateClass)}
+          onChange={(event) => {
+            const next = event.target.value as DelegateClass;
+            setDelegateClass(next);
+            if (isJuryDelegateClass(next)) setLimit('');
+          }}
           aria-label="Delegate type"
         >
           {(Object.keys(DELEGATE_CLASS_LABELS) as DelegateClass[]).map((value) => (
@@ -205,9 +217,10 @@ export function AutomationDelegates({agent}: Readonly<{agent: SubAgentRow}>) {
         </select>
         <input
           className={fieldClass}
-          placeholder="Spending limit (MIST)"
+          placeholder={jury ? 'No spending (jury delegates spend nothing)' : 'Spending limit (MIST)'}
           inputMode="numeric"
-          value={limit}
+          disabled={jury}
+          value={jury ? '' : limit}
           onChange={(event) => setLimit(event.target.value.trim())}
           aria-label="Delegate spending limit in MIST"
         />

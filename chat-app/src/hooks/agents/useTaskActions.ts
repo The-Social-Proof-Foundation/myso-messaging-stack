@@ -8,10 +8,22 @@ import {useMessagingClient} from '../../contexts/MessagingClientContext';
 import {useMySocialAuth} from '../../contexts/MySocialAuthContext';
 import {resolveAgentChainIds} from '../../lib/agents/chain-ids';
 import {executeAsAgent, executeAsHuman} from '../../lib/agents/execute';
-import type {AgentTaskInfo, SubAgentRow} from '../../lib/agents/social-api';
-import {hexToBytes} from '../../lib/agents/tasks';
+import type {AgentTaskInfo, SubAgentRow, TaskDisputeDetailInfo} from '../../lib/agents/social-api';
+import {APPEAL_FEE_MULTIPLIER, JURY_CASE_STATE, disputeFeeMist, hexToBytes} from '../../lib/agents/tasks';
 import {
+  acceptDisputeSettlementTx,
   acceptRefundTx,
+  appealDisputeTx,
+  cancelDisputeTx,
+  clearDisputeSettlementTx,
+  disputeEvidenceTx,
+  executeNeutralResolutionTx,
+  executeVerdictTx,
+  openDisputeTx,
+  proposeDisputeSettlementTx,
+  respondDisputeTx,
+  settleDisputeFeesTx,
+  startNeutralResolutionTx,
   acceptTaskTx,
   cancelOfferTx,
   createTaskTx,
@@ -184,6 +196,109 @@ export function useTaskActions() {
     withdrawRefund: (task: AgentTaskInfo) =>
       execute((ids) => withdrawRefundTx(ids, refundArgs(task))),
 
+    /** The buyer or seller takes delivered work to a jury and pays the case fee. */
+    openDispute: (task: AgentTaskInfo) =>
+      execute((ids) =>
+        openDisputeTx(ids, {
+          taskId: task.taskId,
+          buyerAccountId: task.buyerMemoryAccountId,
+          sellerAccountId: task.sellerMemoryAccountId,
+          sellerAgentId: task.sellerAgentId,
+          feeMist: disputeFeeMist(task.amountMist),
+        }),
+      ),
+
+    /** The other side matches the case fee before the jury is drawn. */
+    respondDispute: (task: AgentTaskInfo, dispute: TaskDisputeDetailInfo) =>
+      execute((ids) =>
+        respondDisputeTx(ids, {...partyArgs(task, dispute), feeMist: dispute.feeEachMist}),
+      ),
+
+    submitDisputeEvidence: (
+      task: AgentTaskInfo,
+      dispute: TaskDisputeDetailInfo,
+      evidence: {digest: Uint8Array; uri: string},
+    ) => execute((ids) => disputeEvidenceTx(ids, {...partyArgs(task, dispute), ...evidence})),
+
+    cancelDispute: (task: AgentTaskInfo, dispute: TaskDisputeDetailInfo) =>
+      execute((ids) => cancelDisputeTx(ids, partyArgs(task, dispute))),
+
+    appealDispute: (task: AgentTaskInfo, dispute: TaskDisputeDetailInfo) =>
+      execute((ids) =>
+        appealDisputeTx(ids, {
+          ...partyArgs(task, dispute),
+          feeMist: dispute.feeEachMist * APPEAL_FEE_MULTIPLIER,
+        }),
+      ),
+
+    /** Permissionless: applies the jury's final verdict. */
+    executeVerdict: (task: AgentTaskInfo, dispute: TaskDisputeDetailInfo) =>
+      execute((ids) =>
+        executeVerdictTx(ids, {
+          taskId: task.taskId,
+          caseId: dispute.caseId,
+          buyerAccountId: task.buyerMemoryAccountId,
+          sellerAccountId: task.sellerMemoryAccountId,
+          platformObjectId: platformFor(task),
+        }),
+      ),
+
+    startNeutralResolution: (task: AgentTaskInfo, dispute: TaskDisputeDetailInfo) =>
+      execute((ids) =>
+        startNeutralResolutionTx(ids, {taskId: task.taskId, caseId: dispute.caseId}),
+      ),
+
+    /** Permissionless once the settlement window has ended: splits the escrow 50/50. */
+    executeNeutralResolution: (task: AgentTaskInfo) =>
+      execute((ids) =>
+        executeNeutralResolutionTx(ids, {
+          taskId: task.taskId,
+          buyerAccountId: task.buyerMemoryAccountId,
+          sellerAccountId: task.sellerMemoryAccountId,
+          platformObjectId: platformFor(task),
+        }),
+      ),
+
+    proposeDisputeSettlement: (task: AgentTaskInfo, outcome: number) =>
+      execute((ids) =>
+        proposeDisputeSettlementTx(ids, {
+          taskId: task.taskId,
+          buyerAccountId: task.buyerMemoryAccountId,
+          sellerAgentId: task.sellerAgentId,
+          outcome,
+        }),
+      ),
+
+    acceptDisputeSettlement: (task: AgentTaskInfo) =>
+      execute((ids) =>
+        acceptDisputeSettlementTx(ids, {
+          taskId: task.taskId,
+          buyerAccountId: task.buyerMemoryAccountId,
+          sellerAccountId: task.sellerMemoryAccountId,
+          sellerAgentId: task.sellerAgentId,
+          platformObjectId: platformFor(task),
+        }),
+      ),
+
+    clearDisputeSettlement: (task: AgentTaskInfo) =>
+      execute((ids) =>
+        clearDisputeSettlementTx(ids, {
+          taskId: task.taskId,
+          buyerAccountId: task.buyerMemoryAccountId,
+          sellerAgentId: task.sellerAgentId,
+        }),
+      ),
+
+    /** Returns each side's share of the case fee; closes the case first if it is still open. */
+    settleDisputeFees: (task: AgentTaskInfo, dispute: TaskDisputeDetailInfo) =>
+      execute((ids) =>
+        settleDisputeFeesTx(ids, {
+          taskId: task.taskId,
+          caseId: dispute.caseId,
+          closeCaseFirst: !isFinished(dispute),
+        }),
+      ),
+
     /**
      * One review per direction. The buyer rates the seller agent; the seller rates a buyer agent
      * or, when the principal bought directly, the principal.
@@ -223,4 +338,23 @@ function refundArgs(task: AgentTaskInfo) {
     buyerAccountId: task.buyerMemoryAccountId,
     sellerAgentId: task.sellerAgentId,
   };
+}
+
+function partyArgs(task: AgentTaskInfo, dispute: TaskDisputeDetailInfo) {
+  return {
+    taskId: task.taskId,
+    caseId: dispute.caseId,
+    buyerAccountId: task.buyerMemoryAccountId,
+    sellerAgentId: task.sellerAgentId,
+  };
+}
+
+/** A jury case that has ended on its own (final, failed or withdrawn) needs no closing. */
+function isFinished(dispute: TaskDisputeDetailInfo): boolean {
+  const state = dispute.case?.state;
+  return (
+    state === JURY_CASE_STATE.FINAL ||
+    state === JURY_CASE_STATE.FAILED ||
+    state === JURY_CASE_STATE.CANCELLED
+  );
 }

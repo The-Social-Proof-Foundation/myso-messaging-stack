@@ -454,6 +454,7 @@ export function useAgentActions() {
         name: args.name,
         expiresAtMs: args.expiresAtMs,
         maxActionSpendMist: args.maxActionSpendMist,
+        delegateClass,
       });
       const {client: rpc, human} = requireClient();
       const ids = await resolveAgentChainIds();
@@ -475,7 +476,9 @@ export function useAgentActions() {
             `"${args.parent.label}" is not allowed to create delegates yet. Open its permissions and ` +
               (delegateClass === 'task_worker'
                 ? 'allow it to register agents and to delegate memory and task trading, then try again.'
-                : 'allow it to register agents and to delegate read and write memory, then try again.'),
+                : delegateClass === 'juror' || delegateClass === 'jury_keeper'
+                  ? 'allow it to register agents and to delegate read and write memory and jury duty, then try again.'
+                  : 'allow it to register agents and to delegate read and write memory, then try again.'),
           );
         }
         if (parentPolicy.maxActionSpend != null && BigInt(args.maxActionSpendMist) > BigInt(parentPolicy.maxActionSpend)) {

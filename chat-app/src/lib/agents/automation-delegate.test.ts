@@ -14,6 +14,10 @@ import {
   DELEGATE_CLASS_LABELS,
   DELEGATE_MAX_TTL_MS,
   DelegateError,
+  JUROR_ACTION_IDS,
+  JUROR_CAPABILITIES,
+  JURY_KEEPER_CAPABILITIES,
+  KEEPER_ACTION_IDS,
   TASK_ACTION_IDS,
   TASK_WORKER_CAPABILITIES,
   delegateActionIds,
@@ -191,6 +195,64 @@ describe('delegate classes', () => {
   });
 
   it('labels each class', () => {
-    expect(Object.keys(DELEGATE_CLASS_LABELS).sort()).toEqual(['memory', 'task_worker']);
+    expect(Object.keys(DELEGATE_CLASS_LABELS).sort()).toEqual([
+      'juror',
+      'jury_keeper',
+      'memory',
+      'task_worker',
+    ]);
+  });
+
+  it('a juror and a keeper each add exactly one jury capability to memory', () => {
+    expect(JUROR_CAPABILITIES).toBe(DELEGATE_CAPABILITIES | CAP.JURY);
+    expect(JURY_KEEPER_CAPABILITIES).toBe(DELEGATE_CAPABILITIES | CAP.JURY_KEEPER);
+    expect(delegateCapabilities('juror') & ~DELEGATE_CAPABILITIES).toBe(262144);
+    expect(delegateCapabilities('jury_keeper') & ~DELEGATE_CAPABILITIES).toBe(524288);
+  });
+
+  it('a juror runs four actions and a keeper fourteen, with nothing in common', () => {
+    expect(delegateActionIds('juror')).toEqual(JUROR_ACTION_IDS);
+    expect(delegateActionIds('jury_keeper')).toEqual(KEEPER_ACTION_IDS);
+    expect(JUROR_ACTION_IDS).toHaveLength(4);
+    expect(KEEPER_ACTION_IDS).toHaveLength(14);
+    expect(new Set(KEEPER_ACTION_IDS).size).toBe(14);
+    const jurorSet = new Set<string>(JUROR_ACTION_IDS);
+    expect(KEEPER_ACTION_IDS.some((id) => jurorSet.has(id))).toBe(false);
+    // The engine allows at most 16 actions on one delegate.
+    expect(KEEPER_ACTION_IDS.length).toBeLessThanOrEqual(16);
+    for (const id of [...JUROR_ACTION_IDS, ...KEEPER_ACTION_IDS]) {
+      expect(id).toMatch(/^jury\.[a-z_]+\.v1$/);
+    }
+  });
+});
+
+describe('jury delegates spend nothing', () => {
+  const now = 1_000_000;
+  const base = {name: 'jury', expiresAtMs: now + 24 * 60 * 60 * 1000};
+
+  it('require a zero limit, and refuse any allowance', () => {
+    for (const delegateClass of ['juror', 'jury_keeper'] as const) {
+      expect(() =>
+        validateDelegatePolicy({...base, maxActionSpendMist: '0', delegateClass}, now),
+      ).not.toThrow();
+      expect(() => validateDelegatePolicy({...base, maxActionSpendMist: '1', delegateClass}, now)).toThrow(
+        DelegateError,
+      );
+    }
+  });
+
+  it('still bound the lifetime', () => {
+    expect(() =>
+      validateDelegatePolicy(
+        {name: 'jury', expiresAtMs: now + 91 * 24 * 60 * 60 * 1000, maxActionSpendMist: '0', delegateClass: 'juror'},
+        now,
+      ),
+    ).toThrow('90 days');
+  });
+
+  it('leave other classes needing a real limit', () => {
+    expect(() =>
+      validateDelegatePolicy({...base, maxActionSpendMist: '0', delegateClass: 'task_worker'}, now),
+    ).toThrow(DelegateError);
   });
 });

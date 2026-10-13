@@ -34,6 +34,10 @@ export const agentKeys = {
 
   myTasks: (address: string, side: 'buyer' | 'seller') => ['agents', 'tasks', address, side] as const,
   task: (taskId: string) => ['agents', 'task', taskId] as const,
+  taskDispute: (taskId: string) => ['agents', 'task-dispute', taskId] as const,
+  juryRationales: (caseId: string) => ['agents', 'jury-rationales', caseId] as const,
+  ownerJurors: (principal: string) => ['agents', 'jury-roster', principal] as const,
+  jurorDuties: (agentId: string) => ['agents', 'juror-duties', agentId] as const,
   agentReceipts: (agentObjectId: string) => ['agents', 'receipts', agentObjectId] as const,
   taskConfig: () => ['agents', 'task-config'] as const,
   agentReputation: (agentObjectId: string) => ['agents', 'reputation', agentObjectId] as const,

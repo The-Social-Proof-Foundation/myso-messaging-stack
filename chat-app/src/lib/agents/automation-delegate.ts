@@ -30,9 +30,11 @@ export const DELEGATE_CAPABILITIES = CAP.MEMORY_READ | CAP.MEMORY_WRITE | CAP.MY
 /**
  * What a delegate is for. A `memory` delegate reads and writes memory. A `task_worker` can also
  * run task market actions (offer, accept, deliver, settle, review) and nothing else: no posting,
- * trading, spending or agent management. The bridge and the chain enforce the same limit.
+ * trading, spending or agent management. A `juror` serves on juries (accept, commit, reveal, claim
+ * its fee) and a `jury_keeper` runs the permissionless jury cranks; both spend nothing at all.
+ * The bridge and the chain enforce the same limits.
  */
-export type DelegateClass = 'memory' | 'task_worker';
+export type DelegateClass = 'memory' | 'task_worker' | 'juror' | 'jury_keeper';
 
 export const TASK_WORKER_CAPABILITIES = DELEGATE_CAPABILITIES | CAP.TASK_TRADE;
 
@@ -56,18 +58,75 @@ export const TASK_ACTION_IDS = [
 
 export type TaskActionId = (typeof TASK_ACTION_IDS)[number];
 
+export const JUROR_CAPABILITIES = DELEGATE_CAPABILITIES | CAP.JURY;
+export const JURY_KEEPER_CAPABILITIES = DELEGATE_CAPABILITIES | CAP.JURY_KEEPER;
+
+/** What a juror's own jobs do: take the seat, vote in two steps, and collect the fee. */
+export const JUROR_ACTION_IDS = [
+  'jury.accept.v1',
+  'jury.commit_vote.v1',
+  'jury.reveal_vote.v1',
+  'jury.claim_fee.v1',
+] as const;
+
+/** The permissionless jury cranks a keeper runs. Must match the bridge's keeper set (14 ids). */
+export const KEEPER_ACTION_IDS = [
+  'jury.select_jury.v1',
+  'jury.replace_no_shows.v1',
+  'jury.finalize_round.v1',
+  'jury.finalize_case.v1',
+  'jury.execute_task_verdict.v1',
+  'jury.start_neutral_resolution.v1',
+  'jury.execute_neutral_resolution.v1',
+  'jury.settle_dispute_fees.v1',
+  'jury.escalate_proposal.v1',
+  'jury.finalize_proposal.v1',
+  'jury.apply_proposal_decision.v1',
+  'jury.sweep_case.v1',
+  'jury.refresh_roster_entry.v1',
+  'jury.evict_ineligible.v1',
+] as const;
+
+export type JurorActionId = (typeof JUROR_ACTION_IDS)[number];
+export type KeeperActionId = (typeof KEEPER_ACTION_IDS)[number];
+
+/** Delegates that exist only to act on the jury, and so may never hold a spending allowance. */
+export function isJuryDelegateClass(delegateClass: DelegateClass): boolean {
+  return delegateClass === 'juror' || delegateClass === 'jury_keeper';
+}
+
 export function delegateCapabilities(delegateClass: DelegateClass): number {
-  return delegateClass === 'task_worker' ? TASK_WORKER_CAPABILITIES : DELEGATE_CAPABILITIES;
+  switch (delegateClass) {
+    case 'task_worker':
+      return TASK_WORKER_CAPABILITIES;
+    case 'juror':
+      return JUROR_CAPABILITIES;
+    case 'jury_keeper':
+      return JURY_KEEPER_CAPABILITIES;
+    default:
+      return DELEGATE_CAPABILITIES;
+  }
 }
 
 /** The actions a delegate of this class is registered to run. Memory delegates run none. */
-export function delegateActionIds(delegateClass: DelegateClass): readonly TaskActionId[] {
-  return delegateClass === 'task_worker' ? TASK_ACTION_IDS : [];
+export function delegateActionIds(delegateClass: DelegateClass): readonly string[] {
+  switch (delegateClass) {
+    case 'task_worker':
+      return TASK_ACTION_IDS;
+    case 'juror':
+      return JUROR_ACTION_IDS;
+    case 'jury_keeper':
+      return KEEPER_ACTION_IDS;
+    default:
+      return [];
+  }
 }
 
 export const DELEGATE_CLASS_LABELS: Record<DelegateClass, string> = {
   memory: 'Memory only',
   task_worker: 'Task worker (memory and the task market)',
+  juror: 'Juror (serves on juries, spends nothing)',
+  jury_keeper: 'Jury keeper (runs jury cranks, spends nothing)',
 };
 
 /** Longest a delegate may live. Renewing is one gesture; a leaked key is not forever. */
@@ -225,6 +284,8 @@ export interface DelegatePolicyInput {
   expiresAtMs: number;
   /** Spend cap in MIST, as a decimal string. */
   maxActionSpendMist: string;
+  /** A jury delegate must have no allowance at all. Defaults to a class that needs one. */
+  delegateClass?: DelegateClass;
 }
 
 /**
@@ -242,6 +303,12 @@ export function validateDelegatePolicy(input: DelegatePolicyInput, nowMs = Date.
   }
   if (ttl > DELEGATE_MAX_TTL_MS) {
     throw new DelegateError('A delegate may last at most 90 days. You can renew it later.');
+  }
+  if (input.delegateClass && isJuryDelegateClass(input.delegateClass)) {
+    if (input.maxActionSpendMist !== '0') {
+      throw new DelegateError('A jury delegate spends nothing: its spending limit must be 0.');
+    }
+    return;
   }
   if (!/^[1-9][0-9]*$/.test(input.maxActionSpendMist)) {
     throw new DelegateError('Set a spending limit greater than zero.');

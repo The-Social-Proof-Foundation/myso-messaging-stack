@@ -105,7 +105,7 @@ export interface WebhookActionConfig {
     policy?: TaskActionPolicy;
 }
 
-export type DelegateClass = 'memory' | 'task_worker';
+export type DelegateClass = 'memory' | 'task_worker' | 'juror' | 'jury_keeper';
 
 /** A stored delegate, as listed. The encrypted key is never returned. */
 export interface AutomationDelegate {

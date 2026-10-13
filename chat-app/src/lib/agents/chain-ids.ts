@@ -20,6 +20,10 @@ export interface AgentChainIds {
   blockListRegistryId: string;
   /** Shared `agent_task::TaskConfig` — every task call reads it. */
   taskConfigId: string;
+  /** Shared `jury::JuryConfig` — every dispute call reads it. */
+  juryConfigId: string;
+  /** Shared `jury::JurorRoster` — read when a dispute opens and when a case closes. */
+  jurorRosterId: string;
 }
 
 const GRAPHQL_URL = import.meta.env.VITE_MYSO_GRAPHQL_URL || '/api/graphql';
@@ -72,7 +76,15 @@ let cached: Promise<AgentChainIds> | null = null;
 export function resolveAgentChainIds(): Promise<AgentChainIds> {
   if (!cached) {
     cached = (async () => {
-      const [genesis, aiCreditConfigId, platformRegistryId, blockListRegistryId, taskConfigId] =
+      const [
+        genesis,
+        aiCreditConfigId,
+        platformRegistryId,
+        blockListRegistryId,
+        taskConfigId,
+        juryConfigId,
+        jurorRosterId,
+      ] =
         await Promise.all([
           resolveGenesisMessagingConfig(createBaseMySoRpcClient(), {
             graphqlUrl: getGenesisGraphqlUrl(),
@@ -94,6 +106,8 @@ export function resolveAgentChainIds(): Promise<AgentChainIds> {
             `${GENESIS_PACKAGE_IDS.social}::agent_task::TaskConfig`,
             'TaskConfig',
           ),
+          findSharedObjectId(`${GENESIS_PACKAGE_IDS.social}::jury::JuryConfig`, 'JuryConfig'),
+          findSharedObjectId(`${GENESIS_PACKAGE_IDS.social}::jury::JurorRoster`, 'JurorRoster'),
         ]);
       return {
         socialPackageId: GENESIS_PACKAGE_IDS.social,
@@ -102,6 +116,8 @@ export function resolveAgentChainIds(): Promise<AgentChainIds> {
         platformRegistryId,
         blockListRegistryId,
         taskConfigId,
+        juryConfigId,
+        jurorRosterId,
       };
     })().catch((error: unknown) => {
       cached = null;

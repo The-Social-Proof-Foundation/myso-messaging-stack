@@ -902,3 +902,327 @@ export function reviewBuyerPrincipalTx(
   });
   return tx;
 }
+
+// ============================================================
+// Task disputes (`agent_task` entry points that use `social_contracts::jury`)
+//
+// A party resolves to a role from the sender: the buyer passes its account and the seller its
+// agent. Case fees are paid from an explicit MYSO coin; the contract returns any change.
+// ============================================================
+
+type DisputeIds = TaskIds & Pick<AgentChainIds, 'juryConfigId' | 'jurorRosterId'>;
+
+export interface DisputePartyArgs {
+  taskId: string;
+  caseId: string;
+  buyerAccountId: string;
+  sellerAgentId: string;
+}
+
+export function openDisputeTx(
+  ids: DisputeIds,
+  args: {
+    taskId: string;
+    buyerAccountId: string;
+    sellerAccountId: string;
+    sellerAgentId: string;
+    feeMist: bigint | number;
+  },
+  tx = new Transaction(),
+): Transaction {
+  const fee = tx.add(coinWithBalance({balance: BigInt(args.feeMist), useGasCoin: false}));
+  tx.moveCall({
+    target: taskTarget(ids, 'open_dispute'),
+    arguments: [
+      tx.object(ids.taskConfigId),
+      tx.object(ids.juryConfigId),
+      tx.object(ids.jurorRosterId),
+      tx.object(args.taskId),
+      tx.object(ids.memoryConfigId),
+      tx.object(args.buyerAccountId),
+      tx.object(args.sellerAccountId),
+      tx.object(args.sellerAgentId),
+      fee,
+      tx.object(MYSO_CLOCK_OBJECT_ID),
+    ],
+  });
+  return tx;
+}
+
+function feePaidDisputeTx(
+  fn: 'respond_dispute' | 'appeal_dispute',
+  ids: DisputeIds,
+  args: DisputePartyArgs & {feeMist: bigint | number},
+  tx: Transaction,
+): Transaction {
+  const fee = tx.add(coinWithBalance({balance: BigInt(args.feeMist), useGasCoin: false}));
+  tx.moveCall({
+    target: taskTarget(ids, fn),
+    arguments: [
+      tx.object(args.taskId),
+      tx.object(args.caseId),
+      tx.object(ids.memoryConfigId),
+      tx.object(args.buyerAccountId),
+      tx.object(args.sellerAgentId),
+      fee,
+      tx.object(MYSO_CLOCK_OBJECT_ID),
+    ],
+  });
+  return tx;
+}
+
+export const respondDisputeTx = (
+  ids: DisputeIds,
+  args: DisputePartyArgs & {feeMist: bigint | number},
+  tx = new Transaction(),
+) => feePaidDisputeTx('respond_dispute', ids, args, tx);
+export const appealDisputeTx = (
+  ids: DisputeIds,
+  args: DisputePartyArgs & {feeMist: bigint | number},
+  tx = new Transaction(),
+) => feePaidDisputeTx('appeal_dispute', ids, args, tx);
+
+export function disputeEvidenceTx(
+  ids: DisputeIds,
+  args: DisputePartyArgs & {digest: Uint8Array; uri: string},
+  tx = new Transaction(),
+): Transaction {
+  tx.moveCall({
+    target: taskTarget(ids, 'submit_dispute_evidence'),
+    arguments: [
+      tx.object(ids.juryConfigId),
+      tx.object(args.taskId),
+      tx.object(args.caseId),
+      tx.object(ids.memoryConfigId),
+      tx.object(args.buyerAccountId),
+      tx.object(args.sellerAgentId),
+      tx.pure.vector('u8', Array.from(args.digest)),
+      tx.pure.vector('u8', Array.from(new TextEncoder().encode(args.uri))),
+      tx.object(MYSO_CLOCK_OBJECT_ID),
+    ],
+  });
+  return tx;
+}
+
+export function cancelDisputeTx(
+  ids: DisputeIds,
+  args: DisputePartyArgs,
+  tx = new Transaction(),
+): Transaction {
+  tx.moveCall({
+    target: taskTarget(ids, 'cancel_dispute_before_draw'),
+    arguments: [
+      tx.object(args.taskId),
+      tx.object(args.caseId),
+      tx.object(ids.memoryConfigId),
+      tx.object(args.buyerAccountId),
+      tx.object(args.sellerAgentId),
+      tx.object(MYSO_CLOCK_OBJECT_ID),
+    ],
+  });
+  return tx;
+}
+
+export interface DisputePayoutArgs {
+  taskId: string;
+  caseId: string;
+  buyerAccountId: string;
+  sellerAccountId: string;
+  /** Any `Platform` object when the task has no platform; the contract ignores it then. */
+  platformObjectId: string;
+}
+
+/** Permissionless once the case is final. */
+export function executeVerdictTx(
+  ids: DisputeIds,
+  args: DisputePayoutArgs,
+  tx = new Transaction(),
+): Transaction {
+  tx.moveCall({
+    target: taskTarget(ids, 'execute_verdict'),
+    arguments: [
+      tx.object(ids.taskConfigId),
+      tx.object(args.taskId),
+      tx.object(args.caseId),
+      tx.object(args.buyerAccountId),
+      tx.object(args.sellerAccountId),
+      tx.object(args.platformObjectId),
+      tx.object(MYSO_CLOCK_OBJECT_ID),
+    ],
+  });
+  return tx;
+}
+
+/** Permissionless once a case has failed: opens the settlement window. */
+export function startNeutralResolutionTx(
+  ids: DisputeIds,
+  args: {taskId: string; caseId: string},
+  tx = new Transaction(),
+): Transaction {
+  tx.moveCall({
+    target: taskTarget(ids, 'start_neutral_resolution'),
+    arguments: [
+      tx.object(ids.juryConfigId),
+      tx.object(args.taskId),
+      tx.object(args.caseId),
+      tx.object(MYSO_CLOCK_OBJECT_ID),
+    ],
+  });
+  return tx;
+}
+
+/** Permissionless once the settlement window has ended: the escrow is split 50/50. */
+export function executeNeutralResolutionTx(
+  ids: DisputeIds,
+  args: Omit<DisputePayoutArgs, 'caseId'>,
+  tx = new Transaction(),
+): Transaction {
+  tx.moveCall({
+    target: taskTarget(ids, 'execute_neutral_resolution'),
+    arguments: [
+      tx.object(ids.taskConfigId),
+      tx.object(args.taskId),
+      tx.object(args.buyerAccountId),
+      tx.object(args.sellerAccountId),
+      tx.object(args.platformObjectId),
+      tx.object(MYSO_CLOCK_OBJECT_ID),
+    ],
+  });
+  return tx;
+}
+
+export function proposeDisputeSettlementTx(
+  ids: DisputeIds,
+  args: {taskId: string; buyerAccountId: string; sellerAgentId: string; outcome: number},
+  tx = new Transaction(),
+): Transaction {
+  tx.moveCall({
+    target: taskTarget(ids, 'propose_dispute_settlement'),
+    arguments: [
+      tx.object(args.taskId),
+      tx.object(ids.memoryConfigId),
+      tx.object(args.buyerAccountId),
+      tx.object(args.sellerAgentId),
+      tx.pure.u8(args.outcome),
+      tx.object(MYSO_CLOCK_OBJECT_ID),
+    ],
+  });
+  return tx;
+}
+
+export function acceptDisputeSettlementTx(
+  ids: DisputeIds,
+  args: {
+    taskId: string;
+    buyerAccountId: string;
+    sellerAccountId: string;
+    sellerAgentId: string;
+    platformObjectId: string;
+  },
+  tx = new Transaction(),
+): Transaction {
+  tx.moveCall({
+    target: taskTarget(ids, 'accept_dispute_settlement'),
+    arguments: [
+      tx.object(ids.taskConfigId),
+      tx.object(args.taskId),
+      tx.object(ids.memoryConfigId),
+      tx.object(args.buyerAccountId),
+      tx.object(args.sellerAccountId),
+      tx.object(args.sellerAgentId),
+      tx.object(args.platformObjectId),
+      tx.object(MYSO_CLOCK_OBJECT_ID),
+    ],
+  });
+  return tx;
+}
+
+export function clearDisputeSettlementTx(
+  ids: DisputeIds,
+  args: {taskId: string; buyerAccountId: string; sellerAgentId: string},
+  tx = new Transaction(),
+): Transaction {
+  tx.moveCall({
+    target: taskTarget(ids, 'clear_dispute_settlement'),
+    arguments: [
+      tx.object(args.taskId),
+      tx.object(ids.memoryConfigId),
+      tx.object(args.buyerAccountId),
+      tx.object(args.sellerAgentId),
+      tx.object(MYSO_CLOCK_OBJECT_ID),
+    ],
+  });
+  return tx;
+}
+
+/**
+ * Pays out the case fee pool once the dispute is over. When the dispute ended by agreement or a
+ * neutral split the jury case is still open, so it is closed first in the same transaction.
+ */
+export function settleDisputeFeesTx(
+  ids: DisputeIds,
+  args: {taskId: string; caseId: string; closeCaseFirst: boolean},
+  tx = new Transaction(),
+): Transaction {
+  if (args.closeCaseFirst) {
+    tx.moveCall({
+      target: taskTarget(ids, 'close_case_after_resolution'),
+      arguments: [
+        tx.object(ids.juryConfigId),
+        tx.object(ids.jurorRosterId),
+        tx.object(args.taskId),
+        tx.object(args.caseId),
+        tx.object(MYSO_CLOCK_OBJECT_ID),
+      ],
+    });
+  }
+  tx.moveCall({
+    target: taskTarget(ids, 'settle_dispute_fees'),
+    arguments: [tx.object(args.taskId), tx.object(args.caseId), tx.object(MYSO_CLOCK_OBJECT_ID)],
+  });
+  return tx;
+}
+
+// ============================================================
+// Juror roster (`social_contracts::jury`) — free to join and leave; nothing is staked.
+// ============================================================
+
+type RosterIds = Pick<AgentChainIds, 'socialPackageId' | 'memoryConfigId' | 'juryConfigId' | 'jurorRosterId'>;
+
+export function joinRosterTx(
+  ids: RosterIds,
+  args: {accountId: string; agentId: string; payoutAddress: string; modelFamily: number},
+  tx = new Transaction(),
+): Transaction {
+  tx.moveCall({
+    target: `${ids.socialPackageId}::jury::join_roster`,
+    arguments: [
+      tx.object(ids.juryConfigId),
+      tx.object(ids.jurorRosterId),
+      tx.object(ids.memoryConfigId),
+      tx.object(args.accountId),
+      tx.object(args.agentId),
+      tx.pure.address(args.payoutAddress),
+      tx.pure.u8(args.modelFamily),
+      tx.object(MYSO_CLOCK_OBJECT_ID),
+    ],
+  });
+  return tx;
+}
+
+export function leaveRosterTx(
+  ids: RosterIds,
+  args: {accountId: string; agentId: string},
+  tx = new Transaction(),
+): Transaction {
+  tx.moveCall({
+    target: `${ids.socialPackageId}::jury::leave_roster`,
+    arguments: [
+      tx.object(ids.jurorRosterId),
+      tx.object(args.accountId),
+      tx.pure.address(args.agentId),
+      tx.object(MYSO_CLOCK_OBJECT_ID),
+    ],
+  });
+  return tx;
+}

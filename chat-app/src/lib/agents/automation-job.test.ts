@@ -1,19 +1,26 @@
 import {describe, expect, it} from 'vitest';
 
 import {
+  JURY_KEEPER_CRANK_LABELS,
+  JUROR_AUTOMATION_LABELS,
   JobFormError,
+  KEEPER_CRANK_KINDS,
   KEEPER_DUTY_LABELS,
   TASK_AUTOMATION_LABELS,
   acceptPolicyToConfig,
   buildJobInput,
+  buildJurorJobInput,
+  buildKeeperJobInput,
   buildTaskJobInput,
   localTimeToUtcCron,
+  requiredJurorActions,
+  requiredKeeperAction,
   requiredTaskActions,
   scheduleToTriggerSet,
   type KeeperDuty,
   type TaskAutomationChoice,
 } from './automation-job';
-import {TASK_ACTION_IDS} from './automation-delegate';
+import {JUROR_ACTION_IDS, KEEPER_ACTION_IDS, TASK_ACTION_IDS} from './automation-delegate';
 
 const CDT = 300; // getTimezoneOffset() for UTC-5
 const IST = -330; // UTC+5:30
@@ -289,5 +296,180 @@ describe('buildTaskJobInput', () => {
       ['auto_accept', 'auto_review', 'buyer_verifier', 'keeper', 'task_worker'],
     );
     expect(Object.keys(KEEPER_DUTY_LABELS)).toHaveLength(3);
+  });
+});
+
+describe('juror automation', () => {
+  const secret = 'a-long-enough-secret';
+  const base = {name: 'Serve', targetAgentObjectId: '0xagent', delegateKeyRef: 'delegate:juror'};
+
+  it('accepting a seat runs jury.accept on the case and agent the event names', () => {
+    const job = buildJurorJobInput({...base, choice: {kind: 'accept_duty'}});
+    // Announced once when drafted, then reminded until the seat is taken, so a lost event is not a lost seat.
+    expect(job.trigger_set.triggers).toEqual([
+      {kind: 'event', event_family: 'jury', event_type: 'duty_drafted'},
+      {
+        kind: 'event',
+        event_family: 'jury',
+        event_type: 'duty_poll',
+        payload_filter: {duty_kind: 'accept'},
+      },
+    ]);
+    expect(job.action).toEqual({
+      kind: 'registered_action',
+      config: {
+        action_id: 'jury.accept.v1',
+        params: {caseId: '{{event.payload.case_id}}', agentId: '{{event.payload.agent_id}}'},
+      },
+    });
+    expect(job.max_mist_per_run).toBe(0);
+  });
+
+  it('claiming a fee runs jury.claim_fee when the fee is claimable', () => {
+    const job = buildJurorJobInput({...base, choice: {kind: 'claim_fee'}});
+    expect(job.trigger_set.triggers[0]).toMatchObject({event_family: 'jury', event_type: 'fee_claimable'});
+    expect(job.action.config).toMatchObject({action_id: 'jury.claim_fee.v1'});
+  });
+
+  it('a vote is a webhook that may only commit or reveal, never a registered action', () => {
+    const job = buildJurorJobInput({
+      ...base,
+      choice: {kind: 'judge', webhookUrl: 'https://jury.example.com/webhook/engine', webhookSecret: secret},
+    });
+    expect(job.trigger_set.triggers.map((t) => t.event_type)).toEqual(['voting_started', 'duty_poll']);
+    expect(job.trigger_set.triggers.every((t) => t.event_family === 'jury')).toBe(true);
+    expect(job.action).toEqual({
+      kind: 'webhook',
+      config: {
+        url: 'https://jury.example.com/webhook/engine',
+        secret,
+        allowed_hosts: ['jury.example.com'],
+        allowed_action_ids: ['jury.commit_vote.v1', 'jury.reveal_vote.v1'],
+      },
+    });
+  });
+
+  it('refuses a runner that is not https or has a weak secret', () => {
+    expect(() =>
+      buildJurorJobInput({...base, choice: {kind: 'judge', webhookUrl: 'http://x.example.com/', webhookSecret: secret}}),
+    ).toThrow('https://');
+    expect(() =>
+      buildJurorJobInput({...base, choice: {kind: 'judge', webhookUrl: 'https://x.example.com/', webhookSecret: 'short'}}),
+    ).toThrow('secret');
+  });
+
+  it('every action a template needs is one a juror delegate is registered for', () => {
+    for (const choice of [
+      {kind: 'accept_duty'},
+      {kind: 'claim_fee'},
+      {kind: 'judge', webhookUrl: 'https://x.example.com/', webhookSecret: secret},
+    ] as const) {
+      for (const id of requiredJurorActions(choice)) {
+        expect(JUROR_ACTION_IDS as readonly string[], id).toContain(id);
+      }
+    }
+    expect(Object.keys(JUROR_AUTOMATION_LABELS).sort()).toEqual(['accept_duty', 'claim_fee', 'judge']);
+  });
+
+  it('needs a name and a delegate', () => {
+    expect(() => buildJurorJobInput({...base, name: ' ', choice: {kind: 'accept_duty'}})).toThrow(JobFormError);
+    expect(() => buildJurorJobInput({...base, delegateKeyRef: '', choice: {kind: 'accept_duty'}})).toThrow(
+      JobFormError,
+    );
+  });
+});
+
+describe('jury keeper automation', () => {
+  const base = {name: 'Crank', targetAgentObjectId: '0xagent', delegateKeyRef: 'delegate:keeper'};
+
+  it('has a template and a label for every crank the scan can emit', () => {
+    // These are the event types the social server's crank scan produces.
+    expect([...KEEPER_CRANK_KINDS].sort()).toEqual(
+      [
+        'apply_ready',
+        'case_finalize_due',
+        'escalate_due',
+        'execute_ready',
+        'fees_due',
+        'neutral_due',
+        'neutral_start_due',
+        'proposal_finalize_due',
+        'replace_due',
+        'round_finalize_due',
+        'select_due',
+        'roster_refresh_due',
+        'evict_due',
+        'sweep_due',
+      ].sort(),
+    );
+    expect(Object.keys(JURY_KEEPER_CRANK_LABELS).sort()).toEqual([...KEEPER_CRANK_KINDS].sort());
+  });
+
+  it('every crank runs an action a keeper delegate is registered for, on its own event', () => {
+    for (const crank of KEEPER_CRANK_KINDS) {
+      const job = buildKeeperJobInput({...base, crank});
+      expect(KEEPER_ACTION_IDS as readonly string[], crank).toContain(requiredKeeperAction(crank));
+      expect(job.trigger_set.triggers).toEqual([{kind: 'event', event_family: 'jury', event_type: crank}]);
+      expect(job.action.kind).toBe('registered_action');
+      expect(job.max_mist_per_run).toBe(0);
+    }
+  });
+
+  it('task cranks pass the accounts and platform the scan adds to the event', () => {
+    const verdict = buildKeeperJobInput({...base, crank: 'execute_ready'});
+    expect(verdict.action.config).toMatchObject({
+      action_id: 'jury.execute_task_verdict.v1',
+      params: {
+        taskId: '{{event.payload.task_id}}',
+        caseId: '{{event.payload.case_id}}',
+        buyerAccountId: '{{event.payload.buyer_account_id}}',
+        sellerAccountId: '{{event.payload.seller_account_id}}',
+        platformObjectId: '{{event.payload.platform_object_id}}',
+      },
+    });
+    const neutral = buildKeeperJobInput({...base, crank: 'neutral_due'});
+    expect(neutral.action.config).toMatchObject({
+      action_id: 'jury.execute_neutral_resolution.v1',
+      params: {buyerAccountId: '{{event.payload.buyer_account_id}}'},
+    });
+  });
+
+  it('roster upkeep names the agent and its own account, and a sweep names its case', () => {
+    const refresh = buildKeeperJobInput({...base, crank: 'roster_refresh_due'});
+    expect(refresh.action.config).toMatchObject({
+      action_id: 'jury.refresh_roster_entry.v1',
+      params: {accountId: '{{event.payload.memory_account_id}}', agentId: '{{event.payload.agent_id}}'},
+    });
+    expect(buildKeeperJobInput({...base, crank: 'evict_due'}).action.config).toMatchObject({
+      action_id: 'jury.evict_ineligible.v1',
+      params: {agentId: '{{event.payload.agent_id}}'},
+    });
+    expect(buildKeeperJobInput({...base, crank: 'sweep_due'}).action.config).toMatchObject({
+      action_id: 'jury.sweep_case.v1',
+      params: {caseId: '{{event.payload.case_id}}'},
+    });
+  });
+
+  it('proposal cranks name the registry, proposal and step, and a decision names its case', () => {
+    const escalate = buildKeeperJobInput({...base, crank: 'escalate_due'});
+    expect(escalate.action.config).toMatchObject({
+      action_id: 'jury.escalate_proposal.v1',
+      params: {
+        registryId: '{{event.payload.registry_id}}',
+        proposalId: '{{event.payload.proposal_id}}',
+        stage: '{{event.payload.stage}}',
+      },
+    });
+    const apply = buildKeeperJobInput({...base, crank: 'apply_ready'});
+    expect(apply.action.config).toMatchObject({
+      action_id: 'jury.apply_proposal_decision.v1',
+      params: {caseId: '{{event.payload.case_id}}', proposalId: '{{event.payload.proposal_id}}'},
+    });
+  });
+
+  it('a keeper trigger carries no payload filter, so it matches every event for its account', () => {
+    for (const crank of KEEPER_CRANK_KINDS) {
+      expect('payload_filter' in buildKeeperJobInput({...base, crank}).trigger_set.triggers[0]!).toBe(false);
+    }
   });
 });

@@ -31,9 +31,11 @@ export {
   usePrincipalReputation,
   useTask,
   useTaskConfig,
+  useTaskDispute,
   useTaskViewer,
 } from './useTasks';
 export {useTaskActions} from './useTaskActions';
+export {useJuryActions, useJuryRationales, useJurorDuties, useOwnerJurors} from './useJury';
 export {useOrganizationCategories} from './useOrganizationCategories';
 export {useAgentActions} from './useAgentActions';
 export {useDerivedAgentKey} from './useDerivedAgentKey';

@@ -31,6 +31,8 @@ describe('capability bits', () => {
     expect(CAP.BUDGET_MANAGE).toBe(32768);
     expect(CAP.SOCIAL_GRAPH).toBe(65536);
     expect(CAP.TASK_TRADE).toBe(131072);
+    expect(CAP.JURY).toBe(262144);
+    expect(CAP.JURY_KEEPER).toBe(524288);
   });
 
   it('keeps every bit unique so a mask decodes unambiguously', () => {
