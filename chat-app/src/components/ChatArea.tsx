@@ -20,6 +20,12 @@ import { signAndExecuteTransactionAndWait } from '../lib/sign-and-wait';
 import { useMessages } from '../hooks/useMessages';
 import type { VerifiableMessage } from '../lib/agents/rooms';
 import { useAgentMemoryReply } from '../hooks/agents/useAgentMemoryReply';
+import { AgentActionPermissionDialog } from './agents/AgentActionPermissionDialog';
+import { useAnchorMessage } from '../hooks/agents/useAnchorMessage';
+import { useGroupDigests } from '../hooks/agents';
+import { anchoredMessageIds } from '../lib/agents/anchor';
+import { withQueued } from '../lib/agents/reply-status';
+import { matchDigestsToMessages } from '../lib/agents/rooms';
 import { useRepairAgentChatSend } from '../hooks/agents/useAgentChatActions';
 import { useAgentNamesByAddress } from '../hooks/agents/useSubAgents';
 import { useAgentOrganizationLabel } from '../hooks/agents/useAgentOrganizationLabel';
@@ -52,6 +58,7 @@ import {
   planTimelineMemberJoinedDisplay,
 } from '../lib/system-message-copy';
 import { useIsMobileNav } from '../hooks/useMediaQuery';
+import { useSelfAddresses } from '../hooks/useSelfAddresses';
 import {
   chatInfoWidthBand,
   type ChatInfoWidthBand,
@@ -84,7 +91,10 @@ interface ChatAreaProps {
    * Renders below the thread with the messages currently loaded; used by agent rooms to show
    * on-chain digest verification beside the conversation.
    */
-  roomVerifier?: (messages: readonly VerifiableMessage[]) => ReactNode;
+  roomVerifier?: (
+    messages: readonly VerifiableMessage[],
+    helpers: { labelFor: (address: string) => string; onSelectMessage: (messageId: string) => void },
+  ) => ReactNode;
   /** Agent-chat creator addresses, so foreign agents still get an orb. */
   agentCreatorActors?: readonly (string | null | undefined)[];
 }
@@ -379,11 +389,16 @@ function ChatView({
   >;
   onMobileBack?: () => void;
   devAgentPanel?: ReactNode;
-  roomVerifier?: (messages: readonly VerifiableMessage[]) => ReactNode;
+  roomVerifier?: (
+    messages: readonly VerifiableMessage[],
+    helpers: { labelFor: (address: string) => string; onSelectMessage: (messageId: string) => void },
+  ) => ReactNode;
   agentCreatorActors?: readonly (string | null | undefined)[];
 }>) {
   const { client, signer } = useRequiredMessagingClient();
   const myAddress = signer.toMySoAddress();
+  // Earlier sign-ins used other addresses; their messages are still mine.
+  const self = useSelfAddresses();
   const { permissions, loading: permissionsLoading, refresh: refreshPermissions } =
     usePermissions(group.groupId);
   useRepairAgentChatSend({
@@ -528,8 +543,8 @@ function ChatView({
 
   /** The single other member of a 1:1 DM (null in groups). Payments are DM-only. */
   const dmPeer = useMemo(
-    () => dmPeerAddress(memberAddresses, myAddress),
-    [memberAddresses, myAddress],
+    () => dmPeerAddress(memberAddresses, [myAddress, ...self.aliases]),
+    [memberAddresses, myAddress, self.aliases],
   );
   const [paymentCompose, setPaymentCompose] = useState<PaymentComposeMode | null>(null);
 
@@ -587,6 +602,17 @@ function ChatView({
       .map((m) => ({senderAddress: m.senderAddress, text: m.text})),
   });
   const composerError = memoryReply.error ?? error;
+
+  // Agent chats can anchor an agent message on-chain; the Info panel's Verify section lists them.
+  const anchoringAvailable = Boolean(roomVerifier);
+  const anchorDigests = useGroupDigests(anchoringAvailable ? group.groupId : null);
+  const anchoredByMessage = useMemo(
+    () => anchoredMessageIds(matchDigestsToMessages(anchorDigests.digests, messages)),
+    [anchorDigests.digests, messages],
+  );
+  const anchorMessage = useAnchorMessage(group.groupId, group.uuid, myAddress, {
+    enabled: anchoringAvailable,
+  });
 
   const systemObjectAddresses = useMemo(
     () => client.messaging.derive.systemObjectAddresses(),
@@ -697,8 +723,12 @@ function ChatView({
 
   // The agent answers from this client, so no typing event arrives for it: show it as typing while
   // its reply is in flight.
-  const agentReplyAddresses = memoryReply.replying
-    ? memberAddresses.filter((a) => agentAddress(a) && !sameAddress(a, myAddress))
+  // Between queued answers `replying` blinks off for a moment; keep the line steady unless the
+  // agent is only waiting on an approval.
+  const agentWorking =
+    memoryReply.replying || (memoryReply.queued > 0 && !memoryReply.pendingAction);
+  const agentReplyAddresses = agentWorking
+    ? memberAddresses.filter((a) => agentAddress(a) && !self.isMine(a))
     : [];
   const typingAddresses = [
     ...typingMembers,
@@ -714,6 +744,7 @@ function ChatView({
       showRing: ring.showRing,
       ringPercent: ring.ringPercent,
       orb: agentAddress(address),
+      status: agentAddress(address) ? withQueued(memoryReply.status, memoryReply.queued) : null,
     };
   });
 
@@ -730,7 +761,7 @@ function ChatView({
     const tipIdx = lastNonDeletedIndex(timelineMessages);
     const tip = tipIdx >= 0 ? timelineMessages[tipIdx] : undefined;
     const tipIsPeer =
-      Boolean(tip?.senderAddress) && !sameAddress(tip!.senderAddress, myAddress);
+      Boolean(tip?.senderAddress) && !self.isMine(tip!.senderAddress);
     if (!tip || !tipIsPeer) {
       return {stackTypers: [] as typeof typingTypers, newPackTypers: typingTypers};
     }
@@ -741,10 +772,10 @@ function ChatView({
       else fresh.push(t);
     }
     return {stackTypers: stack, newPackTypers: fresh};
-  }, [typingTypers, timelineMessages, myAddress]);
+  }, [typingTypers, timelineMessages, self]);
 
   const dmPresence = useMemo((): DmPresenceView => {
-    const peer = dmPeerAddress(memberAddresses, myAddress);
+    const peer = dmPeerAddress(memberAddresses, [myAddress, ...self.aliases]);
     if (!peer) return null;
     const status = dmPeerPresenceStatus(presenceRecords, peer);
     if (status.kind === 'online') return { kind: 'online' };
@@ -752,7 +783,7 @@ function ChatView({
       return { kind: 'lastOnline', label: status.label };
     }
     return null;
-  }, [memberAddresses, myAddress, presenceRecords]);
+  }, [memberAddresses, myAddress, self.aliases, presenceRecords]);
 
   const [leaving, setLeaving] = useState(false);
   const [leaveError, setLeaveError] = useState<string | null>(null);
@@ -798,10 +829,21 @@ function ChatView({
   const prevMessageCountRef = useRef(0);
   const didInitialScrollRef = useRef(false);
 
+  /**
+   * While our own smooth scroll is animating, the thread is momentarily "not at the bottom".
+   * Without this, the next message that lands mid-animation would skip its scroll.
+   */
+  const programmaticScrollUntilRef = useRef(0);
+  const PROGRAMMATIC_SCROLL_MS = 800;
   const scrollToBottomSmooth = useCallback(() => {
     const el = scrollRef.current;
     if (!el) return;
+    programmaticScrollUntilRef.current = Date.now() + PROGRAMMATIC_SCROLL_MS;
     el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
+  }, []);
+  /** A wheel / touch means the reader took over; stop treating scrolls as ours. */
+  const cancelProgrammaticScroll = useCallback(() => {
+    programmaticScrollUntilRef.current = 0;
   }, []);
 
   /** Land on first unread (order > watermark) or the bottom of the thread. */
@@ -839,6 +881,7 @@ function ChatView({
     const threshold = 60; // px tolerance
     const atBottom =
       el.scrollHeight - el.scrollTop - el.clientHeight < threshold;
+    if (!atBottom && Date.now() < programmaticScrollUntilRef.current) return;
     setIsAtBottom(atBottom);
   }, []);
 
@@ -900,32 +943,49 @@ function ChatView({
     return () => cancelAnimationFrame(id);
   }, [loadingOlder]);
 
-  // Auto-scroll when new messages arrive (only if already at bottom)
+  // Auto-scroll when a new message lands. The arrow is the rule: while the scroll-down arrow
+  // shows (the reader is up in history) we never move them; with no arrow we follow the thread.
+  // The one exception is a message the reader just sent, which always takes them to it.
   useEffect(() => {
     // Never tip-scroll while restoring an older-page anchor.
     if (olderScrollAnchorRef.current) {
       prevMessageCountRef.current = messages.length;
       return;
     }
+    const latest = messages[messages.length - 1];
+    const sentByMe = Boolean(latest && myAddress && sameAddress(latest.senderAddress, myAddress));
     if (
       !didInitialScrollRef.current ||
-      !isAtBottom ||
       messages.length === 0 ||
-      messages.length <= prevMessageCountRef.current
+      messages.length <= prevMessageCountRef.current ||
+      (!isAtBottom && !sentByMe)
     ) {
       prevMessageCountRef.current = messages.length;
       return;
     }
     prevMessageCountRef.current = messages.length;
+    // Committing to the bottom now, so what lands next (agent thinking, a reply) follows too.
+    setIsAtBottom(true);
     scrollToBottomSmooth();
-  }, [messages.length, isAtBottom, scrollToBottomSmooth]);
+  }, [messages.length, isAtBottom, scrollToBottomSmooth, myAddress]);
 
-  // Keep typing bubble visible when near the bottom of the thread.
+  // Keep the typing bubble / agent thinking line visible, but only for a reader at the bottom.
   useEffect(() => {
-    if (isAtBottom && typingMembers.length > 0 && didInitialScrollRef.current) {
+    if (isAtBottom && typingAddresses.length > 0 && didInitialScrollRef.current) {
       scrollToBottomSmooth();
     }
-  }, [typingMembers.length, isAtBottom, scrollToBottomSmooth]);
+  }, [typingAddresses.length, isAtBottom, scrollToBottomSmooth]);
+
+  // The approval panel takes room above the composer; a reader at the bottom should stay there.
+  const approvalOpen = Boolean(memoryReply.pendingAction);
+  useEffect(() => {
+    if (!approvalOpen || !isAtBottom) return;
+    const id = requestAnimationFrame(() => {
+      const el = scrollRef.current;
+      if (el) el.scrollTop = el.scrollHeight;
+    });
+    return () => cancelAnimationFrame(id);
+  }, [approvalOpen, isAtBottom]);
 
   // Infinite scroll: load older when the top sentinel enters the scrollport.
   const olderSentinelRef = useRef<HTMLDivElement>(null);
@@ -950,6 +1010,30 @@ function ChatView({
     scrollToBottomSmooth();
   }, [scrollToBottomSmooth]);
 
+  /** Jump to a message from the Info panel's Verify list and flash it so the eye finds it. */
+  const scrollToMessage = useCallback(
+    (messageId: string) => {
+      const target = messages.find((m) => m.messageId === messageId);
+      if (!target) return;
+      // On mobile the chat is hidden while Info is open, so show it first. On desktop the drawer
+      // stays open: closing it would resize the thread and throw the scroll off.
+      if (isMobileNav) setAdminPanelOpen(false);
+      programmaticScrollUntilRef.current = Date.now() + PROGRAMMATIC_SCROLL_MS;
+      requestAnimationFrame(() =>
+        requestAnimationFrame(() => {
+          const node = scrollRef.current?.querySelector(`[data-message-order="${target.order}"]`);
+          if (!(node instanceof HTMLElement)) return;
+          node.scrollIntoView({ block: 'center', behavior: 'smooth' });
+          node.animate(
+            [{ backgroundColor: 'rgba(250, 204, 21, 0.16)' }, { backgroundColor: 'transparent' }],
+            { duration: 1800, easing: 'ease-out' },
+          );
+        }),
+      );
+    },
+    [messages, isMobileNav],
+  );
+
   return (
     <div ref={chatShellRef} className="flex min-w-0 flex-1 overflow-hidden">
       {/* On mobile, Group Info is its own full view — hide chat while open */}
@@ -963,6 +1047,8 @@ function ChatView({
       <div
         ref={scrollRef}
         onScroll={handleScroll}
+        onWheel={cancelProgrammaticScroll}
+        onTouchMove={cancelProgrammaticScroll}
         className="relative flex min-w-0 flex-1 flex-col overflow-x-hidden overflow-y-auto"
         style={{overflowAnchor: 'none'}}
       >
@@ -1046,7 +1132,7 @@ function ChatView({
             )}
             {timelineMessages.map((msg, index) => {
               const isSystem = msg.kind === 'system' && Boolean(msg.system);
-              const isOwn = sameAddress(msg.senderAddress, myAddress);
+              const isOwn = self.isMine(msg.senderAddress);
               const packPrevIdx = packNeighborIndex(
                 timelineMessages,
                 index,
@@ -1213,6 +1299,8 @@ function ChatView({
                         ? photoFor(msg.senderAddress)
                         : null
                     }
+                    onAnchor={anchoringAvailable ? anchorMessage : undefined}
+                    anchored={anchoredByMessage.get(msg.messageId)}
                     showAgentOrb={
                       Boolean(msg.isAgentMessage) ||
                       (msg.senderAddress
@@ -1273,7 +1361,13 @@ function ChatView({
 
       {devAgentPanel}
 
-      {roomVerifier ? roomVerifier(messages) : null}
+      {/* Agent-proposed writes wait here for the owner's OK */}
+      <AgentActionPermissionDialog
+        pending={memoryReply.pendingAction}
+        busy={memoryReply.actionBusy}
+        onApprove={() => void memoryReply.resolveAction(true)}
+        onDeny={() => void memoryReply.resolveAction(false)}
+      />
 
       {/* Reply-to-claim: the peer paid an escrow that our first reply claims */}
       {paidGate.claimPending && !permissionsLoading && permissions.canSend && (
@@ -1308,10 +1402,11 @@ function ChatView({
               paidGate.refresh();
               // Only ask the agent once the user's turn is actually in the thread;
               // otherwise it answers (and bills credits) for a message nobody sees.
-              if (sent && text.trim()) await memoryReply.reply(text);
+              // Queued, not awaited: the composer stays free while the agent works through its backlog.
+              if (sent && text.trim()) void memoryReply.reply(text);
             }}
             onTyping={sendTyping}
-            sending={sending || claiming || memoryReply.replying}
+            sending={sending || claiming}
             paymentMenu={
               dmPeer
                 ? {
@@ -1366,6 +1461,11 @@ function ChatView({
         groupUuid={group.uuid}
         groupName={group.name}
         permissions={permissions}
+        verifySection={
+          roomVerifier
+            ? roomVerifier(messages, { labelFor: memberLabelFor, onSelectMessage: scrollToMessage })
+            : null
+        }
         onPermissionsChanged={() => {
           refreshPermissions();
           refreshMemberLabels();

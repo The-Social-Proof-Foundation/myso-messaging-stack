@@ -47,9 +47,9 @@ export function ReputationBadge({
           }`}
           aria-hidden
         />
-        <span className="font-medium tabular-nums">
-          {unrated ? 'New' : formatStars(view.overall.scoreMilli)}
-        </span>
+        {unrated ? null : (
+          <span className="font-medium tabular-nums">{formatStars(view.overall.scoreMilli)}</span>
+        )}
         <span className="text-secondary-400 dark:text-secondary-500">
           {unrated ? 'no reviews yet' : formatReviewCount(view.totalReviews)}
         </span>

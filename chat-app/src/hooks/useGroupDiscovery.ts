@@ -13,6 +13,7 @@ import {
   useGraphQLClient,
   useMessagingClient,
 } from '../contexts/MessagingClientContext';
+import { useMySocialAuth } from '../contexts/MySocialAuthContext';
 import {
   getStoredGroups,
   addStoredGroup,
@@ -68,7 +69,7 @@ interface EventsQueryResult {
 async function queryAllEventGroupIds(
   graphqlClient: MySoGraphQLClient,
   eventType: string,
-  memberAddress: string,
+  memberAddresses: ReadonlySet<string>,
 ): Promise<string[]> {
   const groupIds: string[] = [];
   let cursor: string | null = null;
@@ -91,7 +92,7 @@ async function queryAllEventGroupIds(
       if (!json) continue;
 
       // Client-side filter: only keep events targeting our address
-      if (json.member === memberAddress) {
+      if (memberAddresses.has(json.member.toLowerCase())) {
         groupIds.push(json.group_id);
       }
     }
@@ -129,6 +130,10 @@ export function useGroupDiscovery(
 ): UseGroupDiscoveryResult {
   const graphqlClient = useGraphQLClient();
   const client = useMessagingClient();
+  const { keypair } = useMySocialAuth();
+  // Chats are created and joined by the messaging signer, which can differ from
+  // the login address (zkLogin / derived signers), so discovery matches both.
+  const signerAddress = keypair?.toMySoAddress();
 
   // Start with cached groups from localStorage
   const [groups, setGroups] = useState<StoredGroup[]>(getStoredGroups);
@@ -187,13 +192,18 @@ export function useGroupDiscovery(
         // Get event type strings from the SDK's BCS module.
         // These include the resolved package IDs:
         //   {pkgId}::permissioned_group::MemberAdded<{witnessPkgId}::messaging::Messaging>
+        const memberAddresses = new Set(
+          [address, signerAddress]
+            .filter((a): a is string => !!a)
+            .map((a) => a.toLowerCase()),
+        );
         const memberAddedType = client!.groups.bcs.MemberAdded.name;
         const memberRemovedType = client!.groups.bcs.MemberRemoved.name;
     
         // Paginate through all events of each type
         const [addedGroupIds, removedGroupIds] = await Promise.all([
-          queryAllEventGroupIds(graphqlClient, memberAddedType, address!),
-          queryAllEventGroupIds(graphqlClient, memberRemovedType, address!),
+          queryAllEventGroupIds(graphqlClient, memberAddedType, memberAddresses),
+          queryAllEventGroupIds(graphqlClient, memberRemovedType, memberAddresses),
         ]);
     
         // Abort check
@@ -224,9 +234,11 @@ export function useGroupDiscovery(
           ? await client!.messaging.view.groupsMetadata({ groupIds: newGroupIds, refresh: true })
           : {};
     
-        // Remove stored groups that are no longer active
+        // Only drop a stored group when the chain says we were removed from it. A
+        // group that is merely absent from the events (indexer lag, address
+        // mismatch) stays cached rather than vanishing from the sidebar.
         for (const storedId of storedByGroupId.keys()) {
-          if (!activeGroupIds.includes(storedId)) {
+          if ((counts.get(storedId) ?? 1) <= 0) {
             removeStoredGroup(storedId);
           }
         }
@@ -262,7 +274,7 @@ export function useGroupDiscovery(
     return () => {
       controller.abort();
     };
-  }, [address, client, graphqlClient]);
+  }, [address, signerAddress, client, graphqlClient]);
 
   return { groups, loading, refresh, handleDiscovered, handleHidden };
 }

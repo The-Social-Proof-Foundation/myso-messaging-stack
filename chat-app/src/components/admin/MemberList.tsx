@@ -3,6 +3,7 @@ import { ChevronRight, UserPlus } from 'lucide-react';
 import { useMessagingMemberAddress } from '../../contexts/MessagingClientContext';
 import type { WalletRingBits } from '../../hooks/useWalletAvatarMap';
 import { MemberItem } from './MemberItem';
+import { useSelfAddresses } from '../../hooks/useSelfAddresses';
 
 interface MemberWithPermissions {
   address: string;
@@ -39,7 +40,7 @@ interface MemberListProps {
 }
 
 export function MemberList({
-  members,
+  members: allMembers,
   loading,
   isAdmin,
   removingMember,
@@ -58,6 +59,9 @@ export function MemberList({
 }: Readonly<MemberListProps>) {
   const accountAddress = useMessagingMemberAddress();
   const [expandedMember, setExpandedMember] = useState<string | null>(null);
+  // My earlier sign-ins show up as extra members; fold them into me instead of counting them.
+  const self = useSelfAddresses();
+  const members = allMembers.filter((m) => !self.isAlias(m.address));
 
   return (
     <section className="border-b border-secondary-100 p-4 dark:border-secondary-700">
@@ -150,6 +154,9 @@ export function MemberList({
                 showRing={ring?.showRing ?? false}
                 ringPercent={ring?.ringPercent ?? 0}
                 showAgentOrb={isAgentAddress?.(m.address) ?? false}
+                onMarkAsMe={
+                  isSelf || isAgentAddress?.(m.address) ? undefined : () => self.addAlias(m.address)
+                }
               />
             );
           })}

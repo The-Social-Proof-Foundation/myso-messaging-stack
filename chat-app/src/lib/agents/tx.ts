@@ -1226,3 +1226,57 @@ export function leaveRosterTx(
   });
   return tx;
 }
+
+// ============================================================
+// Message anchoring (`messaging::send_agent_message_digest`)
+// ============================================================
+
+export interface AnchorPackageConfig {
+  latestPackageId: string;
+  versionId: string;
+  messagingConfigId: string;
+  blockListRegistryId: string;
+  memoryConfigId: string;
+}
+
+/**
+ * Commits a free message's sha256 and a pointer to it on-chain, signed by the sending agent.
+ * This is the only free-message anchor the contract exposes, so it is agent-only: the content
+ * stays in the room and only the digest, sender, recipient and time become public.
+ */
+export function anchorAgentMessageTx(
+  pkg: AnchorPackageConfig,
+  args: {
+    groupId: string;
+    messageLogId: string;
+    platformId: string;
+    memoryAccountId: string;
+    recipient: string;
+    contentDigest: Uint8Array;
+    contentUri: string;
+    dedupeKey: Uint8Array;
+    nonce: bigint;
+  },
+  tx = new Transaction(),
+): Transaction {
+  tx.moveCall({
+    target: `${pkg.latestPackageId}::messaging::send_agent_message_digest`,
+    arguments: [
+      tx.object(pkg.versionId),
+      tx.object(pkg.messagingConfigId),
+      tx.object(args.groupId),
+      tx.object(args.messageLogId),
+      tx.object(pkg.blockListRegistryId),
+      tx.object(args.platformId),
+      tx.object(pkg.memoryConfigId),
+      tx.object(args.memoryAccountId),
+      tx.pure.address(args.recipient),
+      tx.pure.vector('u8', Array.from(args.contentDigest)),
+      tx.pure.string(args.contentUri),
+      tx.pure.vector('u8', Array.from(args.dedupeKey)),
+      tx.pure.u128(args.nonce),
+      tx.object(MYSO_CLOCK_OBJECT_ID),
+    ],
+  });
+  return tx;
+}

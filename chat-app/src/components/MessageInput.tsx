@@ -4,7 +4,7 @@ import EmojiPicker, {
   Theme as EmojiTheme,
   type EmojiClickData,
 } from 'emoji-picker-react';
-import { HandCoins, Smile } from 'lucide-react';
+import { HandCoins, Paperclip, Plus, Send, Smile } from 'lucide-react';
 import type { AttachmentFile } from '../hooks/useMessages';
 import { usePageEngaged } from '../hooks/usePageEngaged';
 
@@ -63,6 +63,24 @@ export function MessageInput({
 }: Readonly<MessageInputProps>) {
   const pageEngaged = usePageEngaged();
   const [showPaymentMenu, setShowPaymentMenu] = useState(false);
+  const plusMenuRef = useRef<HTMLDivElement>(null);
+
+  // Dismiss the "+" menu on outside click / Escape.
+  useEffect(() => {
+    if (!showPaymentMenu) return;
+    const onPointerDown = (e: MouseEvent) => {
+      if (!plusMenuRef.current?.contains(e.target as Node)) setShowPaymentMenu(false);
+    };
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      if (e.key === 'Escape') setShowPaymentMenu(false);
+    };
+    document.addEventListener('mousedown', onPointerDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onPointerDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [showPaymentMenu]);
   const [text, setText] = useState('');
   const [files, setFiles] = useState<File[]>([]);
   const [fileError, setFileError] = useState<string | null>(null);
@@ -275,70 +293,70 @@ export function MessageInput({
       )}
 
       <div className="flex items-end gap-1.5">
-        {/* Attachment button */}
-        <button
-          onClick={() => fileInputRef.current?.click()}
-          disabled={disabled || sending}
-          className="mb-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-secondary-400 hover:bg-secondary-100 hover:text-secondary-600 disabled:opacity-50 dark:hover:bg-secondary-700 dark:hover:text-secondary-300"
-          title="Attach files"
-        >
-          <svg
-            xmlns="http://www.w3.org/2000/svg"
-            viewBox="0 0 20 20"
-            fill="currentColor"
-            className="h-5 w-5"
+        {/* One "+" menu: attach media and (1:1 DMs) send / request MYSO. */}
+        <div ref={plusMenuRef} className="relative mb-0.5 shrink-0">
+          <button
+            type="button"
+            onClick={() => setShowPaymentMenu((v) => !v)}
+            disabled={disabled || sending}
+            aria-haspopup="menu"
+            aria-expanded={showPaymentMenu}
+            className="flex h-9 w-9 items-center justify-center rounded-full text-secondary-400 hover:bg-secondary-100 hover:text-secondary-600 disabled:opacity-50 dark:hover:bg-secondary-700 dark:hover:text-secondary-300"
+            title="More"
           >
-            <path
-              fillRule="evenodd"
-              d="M15.621 4.379a3 3 0 00-4.242 0l-7 7a3 3 0 004.241 4.243h.001l.497-.5a.75.75 0 011.064 1.057l-.498.501-.002.002a4.5 4.5 0 01-6.364-6.364l7-7a4.5 4.5 0 016.368 6.36l-3.455 3.553A2.625 2.625 0 119.52 9.52l3.45-3.451a.75.75 0 111.061 1.06l-3.45 3.451a1.125 1.125 0 001.587 1.595l3.454-3.553a3 3 0 000-4.242z"
-              clipRule="evenodd"
+            <Plus
+              className={`h-5 w-5 transition-transform ${showPaymentMenu ? 'rotate-45' : ''}`}
+              aria-hidden
             />
-          </svg>
-        </button>
-        {paymentMenu && (
-          <div className="relative mb-0.5 shrink-0">
-            <button
-              type="button"
-              onClick={() => setShowPaymentMenu((v) => !v)}
-              disabled={disabled || sending}
-              aria-haspopup="menu"
-              aria-expanded={showPaymentMenu}
-              className="flex h-9 w-9 items-center justify-center rounded-full text-secondary-400 hover:bg-secondary-100 hover:text-secondary-600 disabled:opacity-50 dark:hover:bg-secondary-700 dark:hover:text-secondary-300"
-              title="Payments"
+          </button>
+          {showPaymentMenu && (
+            <div
+              role="menu"
+              className="absolute bottom-full left-0 z-40 mb-2 w-48 overflow-hidden rounded-xl border border-secondary-200 bg-white shadow-xl dark:border-secondary-600 dark:bg-secondary-800"
             >
-              <HandCoins className="h-5 w-5" aria-hidden />
-            </button>
-            {showPaymentMenu && (
-              <div
-                role="menu"
-                className="absolute bottom-full left-0 z-40 mb-2 w-44 overflow-hidden rounded-xl border border-secondary-200 bg-white py-1 shadow-xl dark:border-secondary-600 dark:bg-secondary-800"
+              {paymentMenu && (
+                <>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      setShowPaymentMenu(false);
+                      paymentMenu.onRequest();
+                    }}
+                    className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-secondary-800 hover:bg-secondary-100 dark:text-secondary-100 dark:hover:bg-secondary-700"
+                  >
+                    <HandCoins className="h-4 w-4" aria-hidden />
+                    Request MySo
+                  </button>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      setShowPaymentMenu(false);
+                      paymentMenu.onSend();
+                    }}
+                    className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-secondary-800 hover:bg-secondary-100 dark:text-secondary-100 dark:hover:bg-secondary-700"
+                  >
+                    <Send className="h-4 w-4" aria-hidden />
+                    Send MySo
+                  </button>
+                </>
+              )}
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setShowPaymentMenu(false);
+                  fileInputRef.current?.click();
+                }}
+                className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-secondary-800 hover:bg-secondary-100 dark:text-secondary-100 dark:hover:bg-secondary-700"
               >
-                <button
-                  type="button"
-                  role="menuitem"
-                  onClick={() => {
-                    setShowPaymentMenu(false);
-                    paymentMenu.onSend();
-                  }}
-                  className="block w-full px-3 py-2 text-left text-sm text-secondary-800 hover:bg-secondary-100 dark:text-secondary-100 dark:hover:bg-secondary-700"
-                >
-                  Send MYSO
-                </button>
-                <button
-                  type="button"
-                  role="menuitem"
-                  onClick={() => {
-                    setShowPaymentMenu(false);
-                    paymentMenu.onRequest();
-                  }}
-                  className="block w-full px-3 py-2 text-left text-sm text-secondary-800 hover:bg-secondary-100 dark:text-secondary-100 dark:hover:bg-secondary-700"
-                >
-                  Request MYSO
-                </button>
-              </div>
-            )}
-          </div>
-        )}
+                <Paperclip className="h-4 w-4" aria-hidden />
+                Attach Media
+              </button>
+            </div>
+          )}
+        </div>
         <input
           ref={fileInputRef}
           type="file"

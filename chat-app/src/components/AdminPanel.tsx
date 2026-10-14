@@ -2,7 +2,7 @@
  * Slide-out admin panel for group management.
  * Desktop: animated width rail. Mobile: full-view with back.
  */
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, type ReactNode } from 'react';
 import { ChevronLeft } from 'lucide-react';
 import { useRequiredMessagingClient } from '../contexts/MessagingClientContext';
 import { grantMessagingPermission } from '../lib/agents/agent-chat-permissions';
@@ -64,6 +64,8 @@ interface AdminPanelProps {
   groupUuid: string;
   groupName: string;
   permissions: Permissions;
+  /** Chain-anchored message verification, shown as its own section (agent chats). */
+  verifySection?: ReactNode;
   onPermissionsChanged?: () => void;
   onGroupRenamed?: (newName: string) => void;
   onGroupArchived?: () => void;
@@ -91,6 +93,7 @@ export function AdminPanel({
   groupUuid,
   groupName,
   permissions,
+  verifySection,
   onPermissionsChanged,
   onGroupRenamed,
   onGroupArchived,
@@ -625,6 +628,8 @@ export function AdminPanel({
           onSubmit={handleAddMember}
           onBlockedChange={setAddMemberBlocked}
         />
+
+        {verifySection}
 
         <ChatSettingsSection
           notificationsEnabled={notificationsEnabled}

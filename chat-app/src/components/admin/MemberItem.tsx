@@ -1,6 +1,7 @@
 import { ChevronRight } from 'lucide-react';
 import { ReservationNavAvatar } from '../ReservationNavAvatar';
 import { AgentOrb } from '../agents/AgentOrb';
+import { AgentMemberDetails } from './AgentMemberDetails';
 
 interface PermType {
   key: string;
@@ -29,6 +30,8 @@ interface MemberItemProps {
   ringPercent?: number;
   /** Agent member: orb instead of the empty photo. */
   showAgentOrb?: boolean;
+  /** Offered on other people's rows: mark this address as one of my own earlier sign-ins. */
+  onMarkAsMe?: () => void;
 }
 
 function permissionLabel(permType: string): string {
@@ -114,6 +117,7 @@ export function MemberItem({
   showRing = false,
   ringPercent = 0,
   showAgentOrb = false,
+  onMarkAsMe,
 }: Readonly<MemberItemProps>) {
   const displayLabel = label?.trim() || truncateAddress(address);
   const isWalletLabel = displayLabel === truncateAddress(address);
@@ -154,14 +158,21 @@ export function MemberItem({
             />
           )}
         </span>
-        <span
-          className={`min-w-0 flex-1 truncate font-medium ${
-            isWalletLabel ? 'font-mono' : ''
-          }`}
-        >
-          {displayLabel}
-          {isSelf && (
-            <span className="ml-1 font-sans text-primary-500">(you)</span>
+        <span className="flex min-w-0 flex-1 items-center gap-1.5">
+          <span
+            className={`min-w-0 truncate font-medium ${
+              isWalletLabel ? 'font-mono' : ''
+            }`}
+          >
+            {displayLabel}
+            {isSelf && (
+              <span className="ml-1 font-sans text-primary-500">(you)</span>
+            )}
+          </span>
+          {showAgentOrb && (
+            <span className="shrink-0 rounded bg-secondary-200/80 px-1 py-0.5 text-[10px] font-semibold uppercase leading-none tracking-wide text-secondary-600 dark:bg-secondary-600/80 dark:text-secondary-200">
+              Agent
+            </span>
           )}
         </span>
         <ChevronRight
@@ -181,6 +192,21 @@ export function MemberItem({
         aria-hidden={!isExpanded}
       >
         <div className="min-h-0 overflow-hidden">
+      {showAgentOrb && isExpanded ? <AgentMemberDetails address={address} /> : null}
+      {onMarkAsMe && isExpanded ? (
+        <div className="flex items-center justify-between gap-3 border-t border-secondary-200 bg-secondary-50/50 px-3 py-2 text-xs dark:border-secondary-700 dark:bg-secondary-900/60">
+          <span className="min-w-0 text-secondary-500 dark:text-secondary-400">
+            Signed in before and this was you?
+          </span>
+          <button
+            type="button"
+            onClick={onMarkAsMe}
+            className="shrink-0 rounded-md border border-secondary-300 px-2 py-1 font-medium text-secondary-700 transition-colors hover:bg-secondary-100 dark:border-secondary-600 dark:text-secondary-200 dark:hover:bg-secondary-700"
+          >
+            This is me
+          </button>
+        </div>
+      ) : null}
       {/* Permission toggles when the signed-in member is an admin, including their own row. */}
       {isAdmin ? (
         <div className="space-y-1 border-t border-secondary-200 bg-secondary-50/50 px-3 pb-3 pt-2 dark:border-secondary-700 dark:bg-secondary-900/60">

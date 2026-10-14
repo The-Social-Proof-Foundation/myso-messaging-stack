@@ -349,9 +349,18 @@ export async function recallAgentMemories(
   memory: Memory,
   query: string,
   limit = RECALL_DEFAULT_LIMIT,
+  options: {
+    scope?: RecallScope;
+    /** Search every sub-label instead of only this app's, for a deliberate lookup. */
+    anyLabel?: boolean;
+  } = {},
 ): Promise<AgentRecallResult> {
   const recalled = await withMemoryRetry(() =>
-    memory.recall(query, {limit, subLabel: CHAT_NAMESPACE}),
+    memory.recall(query, {
+      limit,
+      ...(options.anyLabel ? {} : {subLabel: CHAT_NAMESPACE}),
+      ...(options.scope ? {scope: options.scope} : {}),
+    }),
   );
   const results: RecallMemory[] = recalled.results ?? [];
   return {

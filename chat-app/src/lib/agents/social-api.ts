@@ -426,7 +426,7 @@ export interface JuryRationaleInfo {
   rationale: string | null;
 }
 
-/** `GET /tasks/:id/dispute`.
+/** `GET /tasks/:id/dispute`: the dispute with its jury case. */
 export interface TaskDisputeDetailInfo extends TaskDisputeInfo {
   case: JuryCaseDetailInfo | null;
 }

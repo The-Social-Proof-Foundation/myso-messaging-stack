@@ -1,4 +1,4 @@
-import {useCallback, useState} from 'react';
+import {useCallback, useEffect, useRef, useState} from 'react';
 import {createAgentMessagingClient} from '@socialproof/myso-messaging-stack';
 import {useQuery} from '@tanstack/react-query';
 
@@ -28,9 +28,16 @@ import {
   turnIdempotencyKey,
   type AgentCommand,
 } from '../../lib/agents/memory-turn';
-import {fetchSubAgentByObjectId} from '../../lib/agents/social-api';
+import {createReplyQueue, type ReplyQueue} from '../../lib/agents/reply-queue';
+import {RECALL_STATUS_MS, REPLY_STATUS, actionStatus} from '../../lib/agents/reply-status';
+import {describeCapabilities, type OrgMemoryAccess} from '../../lib/agents/capability-brief';
+import {MAX_LOOKUP_ROUNDS, lookupFollowUp, orgMemoryAccessFor} from '../../lib/agents/chat-action-run';
+import {ORG_PERM_MEMORY_READ, ORG_PERM_MEMORY_WRITE} from '@socialproof/memory/account';
+import {parseActionProposal, type ChatActionProposal} from '../../lib/agents/chat-actions';
+import {fetchOrganizationMemoryPermissions, fetchSubAgentByObjectId} from '../../lib/agents/social-api';
 import {isTransientMyDataError, withMyDataRetry} from '../../lib/format-relayer-error';
 import {useAgentChatPlatform} from './useAgentChatPlatform';
+import {useChatActionExecutor} from './useChatActionExecutor';
 import {useMemoryAccount} from './useMemoryAccount';
 import {useAllSubAgents, useSubAgents} from './useSubAgents';
 import {useOrganizations} from './useOrganizations';
@@ -63,7 +70,7 @@ function replyError(error: unknown): string {
   if (!(error instanceof MemoryClientError)) {
     return error instanceof Error ? error.message : 'This agent could not answer.';
   }
-  if (error.kind === 'insufficient_credits') return 'This agent is out of AI credits.';
+  if (error.kind === 'insufficient_credits') return 'This agent is out of AI credits. Deposit credits from the AI Credits menu to keep chatting.';
   if (error.kind === 'approval_required') {
     return 'This ask needs a credit approval before the agent can answer.';
   }
@@ -119,8 +126,9 @@ function buildAgentProfile(
   agent: SubAgentRow,
   all: SubAgentRow[],
   orgName: string | null,
+  orgMemory: OrgMemoryAccess | null | undefined,
 ): string {
-  return `${describeAgent(agent, all, orgName)}\n${AGENT_MEMORY_NOTE}`;
+  return `${describeAgent(agent, all, orgName)}\n${describeCapabilities(agent, orgMemory)}\n${AGENT_MEMORY_NOTE}`;
 }
 
 function describeAgent(
@@ -140,7 +148,7 @@ function describeAgent(
           row.agent_object_id !== agent.agent_object_id,
       )
     : [];
-  const lines = [`Name: ${name(agent)}`];
+  const lines = [`Name: ${name(agent)}`, `Your agent id: ${agent.agent_object_id}`];
   if (orgName) lines.push(`Organization: ${orgName}`);
   lines.push(
     parent
@@ -150,6 +158,14 @@ function describeAgent(
   if (reports.length) lines.push(`Agents that report to you: ${reports.map(name).join(', ')}`);
   if (peers.length) lines.push(`Peer agents (same manager): ${peers.map(name).join(', ')}`);
   return lines.join('\n');
+}
+
+/** A write the agent proposed, held until the owner approves or denies it. */
+export interface PendingChatAction {
+  proposal: ChatActionProposal;
+  agent: SubAgentRow;
+  /** Posts a line into the chat as the agent. */
+  post: (text: string) => Promise<unknown>;
 }
 
 /**
@@ -173,6 +189,9 @@ export function useAgentMemoryReply(
   const vault = useAgentVault();
   const account = useMemoryAccount();
   const [replying, setReplying] = useState(false);
+  /** What the agent is doing right now, for the thinking indicator. */
+  const [status, setStatus] = useState<string | null>(null);
+  const recallTimer = useRef<number | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const metadata = useQuery({
@@ -192,12 +211,33 @@ export function useAgentMemoryReply(
   const agentChat = metadata.data
     ? agentChatFromMetadata(groupId, metadata.data)
     : null;
+  const runAction = useChatActionExecutor({enabled: Boolean(agentChat)});
+  const [pendingAction, setPendingAction] = useState<PendingChatAction | null>(null);
+  const [actionBusy, setActionBusy] = useState(false);
+  // The reply queue answers one question at a time, in order. While a write waits on the owner's
+  // decision it holds, so the agent answers nothing further until the proposal is settled.
+  const [queued, setQueued] = useState(0);
+  const replyOnceRef = useRef<(question: string) => Promise<void>>(async () => {});
+  const queueRef = useRef<ReplyQueue | null>(null);
+  if (queueRef.current === null) {
+    queueRef.current = createReplyQueue((text) => replyOnceRef.current(text), setQueued);
+  }
+  const setPending = useCallback((next: PendingChatAction | null) => {
+    setPendingAction(next);
+    if (next) queueRef.current?.hold();
+    else queueRef.current?.resume();
+  }, []);
+  // A proposal and a backlog both belong to one conversation; never carry them into another chat.
+  useEffect(() => {
+    queueRef.current?.clear();
+    setPending(null);
+  }, [groupId, setPending]);
   const agents = useSubAgents(false, {enabled: Boolean(agentChat)});
   const platform = useAgentChatPlatform({enabled: Boolean(agentChat)});
   const allAgents = useAllSubAgents({enabled: Boolean(agentChat)});
   const {organizations} = useOrganizations();
 
-  const reply = useCallback(
+  const replyOnce = useCallback(
     async (question: string) => {
       const text = question.trim();
       if (!text || !client || !keypair) return;
@@ -219,6 +259,7 @@ export function useAgentMemoryReply(
       if (!ref?.agentObjectId) return;
 
       setReplying(true);
+      setStatus(REPLY_STATUS.preparing);
       try {
         const agent = await fetchSubAgentByObjectId(ref.agentObjectId);
         if (!agent) {
@@ -273,8 +314,31 @@ export function useAgentMemoryReply(
           const orgName = orgId
             ? organizations.find((row) => row.organization_id.toLowerCase() === orgId)?.name?.trim() ?? null
             : null;
+          // The chain, not the model, says whether this agent can touch the org's shared memory.
+          let orgMemory: OrgMemoryAccess | null | undefined;
+          if (!agent.organization_id) orgMemory = null;
+          else {
+            try {
+              const rows = await fetchOrganizationMemoryPermissions(agent.organization_id, keypair, {
+                limit: 100,
+                offset: 0,
+                member: agent.derived_address,
+                activeOnly: true,
+              });
+              orgMemory = {
+                organizationName: orgName,
+                ...orgMemoryAccessFor(rows.items, agent.derived_address, {
+                  read: ORG_PERM_MEMORY_READ,
+                  write: ORG_PERM_MEMORY_WRITE,
+                }),
+              };
+            } catch {
+              orgMemory = undefined;
+            }
+          }
           const command = parseAgentCommand(text);
           const remember = decideRemember(text);
+          if (remember.facts.length > 0) setStatus(REPLY_STATUS.saving);
           const saved =
             remember.facts.length > 0 ? await rememberAgentFacts(memory, remember.facts) : null;
           if (command) {
@@ -299,15 +363,66 @@ export function useAgentMemoryReply(
               content,
             });
           }
-          if (turns.length && turns[turns.length - 1].role === 'user' && turns[turns.length - 1].content === text) turns.pop();
+          // Answer from what had been said when this question was asked: with messages queued behind
+          // it, the thread already holds later ones the agent has not reached yet.
+          for (let i = turns.length - 1; i >= 0; i -= 1) {
+            if (turns[i]!.role === 'user' && turns[i]!.content === text) {
+              turns.length = i;
+              break;
+            }
+          }
+          const agentProfile = buildAgentProfile(agent, allAgents.items, orgName, orgMemory);
+          if (localAnswer === null) {
+            setStatus(decision.recall ? REPLY_STATUS.recalling : REPLY_STATUS.thinking);
+            if (decision.recall) {
+              recallTimer.current = window.setTimeout(
+                () => setStatus((current) => (current === REPLY_STATUS.recalling ? REPLY_STATUS.thinking : current)),
+                RECALL_STATUS_MS,
+              );
+            }
+          }
           if (localAnswer === null) result = await askAgent(memory, {
             question: text,
             history: turns.slice(-12),
-            agentProfile: buildAgentProfile(agent, allAgents.items, orgName),
+            agentProfile,
             recall: decision.recall,
             idempotencyKey: await turnIdempotencyKey(groupId, text),
           });
+          if (recallTimer.current !== null) {
+            window.clearTimeout(recallTimer.current);
+            recallTimer.current = null;
+          }
           vault.assertCurrent(epoch);
+          // A lookup in the social indexer only reads, so it runs at once and its result goes back to
+          // the model, which then answers from real data instead of guessing.
+          if (result) {
+            for (let round = 0; round < MAX_LOOKUP_ROUNDS; round += 1) {
+              const asked = parseActionProposal(result.answer.trim(), agent);
+              const lookup = asked.proposal;
+              if (!lookup?.def.feedsBack) break;
+              setStatus(actionStatus(lookup.def.title));
+              let data: string;
+              try {
+                data = await runAction(lookup, agent);
+              } catch (err) {
+                data = `The lookup failed: ${replyError(err)}`;
+              }
+              vault.assertCurrent(epoch);
+              setStatus(REPLY_STATUS.thinking);
+              result = await askAgent(memory, {
+                question: lookupFollowUp(lookup.name, data, round === MAX_LOOKUP_ROUNDS - 1),
+                history: [
+                  ...turns.slice(-10),
+                  {role: 'user', content: text},
+                  {role: 'assistant', content: asked.text || `Looking that up with ${lookup.name}.`},
+                ],
+                agentProfile,
+                recall: false,
+                idempotencyKey: await turnIdempotencyKey(groupId, `${text}\u0000lookup${round}`),
+              });
+              vault.assertCurrent(epoch);
+            }
+          }
           if (result) {
           // A recall that comes back empty is indistinguishable from "never stored" in the
           // answer itself, so say which one the server reported. On the memory server this
@@ -324,7 +439,25 @@ export function useAgentMemoryReply(
           }
           }
         } finally {memory.destroy();}
-        const answer = localAnswer ?? (result?.answer.trim() || "I don't have anything in memory for that.");
+        const modelAnswer = localAnswer ?? (result?.answer.trim() || "I don't have anything in memory for that.");
+        // Only model output can carry an action; local /command answers never do.
+        const parsed = localAnswer === null ? parseActionProposal(modelAnswer, agent) : null;
+        let answer = parsed ? parsed.text : modelAnswer;
+        if (parsed?.problem) answer = [answer, parsed.problem].filter(Boolean).join('\n\n');
+        let readResult: string | null = null;
+        if (parsed?.proposal?.def.risk === 'auto') {
+          setStatus(actionStatus(parsed.proposal.def.title));
+          try {
+            readResult = await runAction(parsed.proposal, agent);
+          } catch (err) {
+            readResult = `I couldn't do that: ${replyError(err)}`;
+          }
+        }
+        if (readResult) answer = [answer, readResult].filter(Boolean).join('\n\n');
+        const writeProposal = parsed?.proposal?.def.risk === 'approval' ? parsed.proposal : null;
+        if (writeProposal && !answer) {
+          answer = `I'd like to ${writeProposal.def.title.toLowerCase()}. It needs your OK first.`;
+        }
 
         vault.assertCurrent(epoch);
         const joined = platform.active ?? (await platform.ensureMembership());
@@ -339,17 +472,26 @@ export function useAgentMemoryReply(
             platformId: joined.platformId,
           },
         });
-        // The answer is already generated and billed — retry key-server blips so it lands.
-        await withMyDataRetry(() =>
-          agentClient.sendMessage({
-            groupRef: {uuid: groupUuid},
-            text: answer,
-          }),
-        );
+        setStatus(REPLY_STATUS.sending);
+        const post = (text: string) =>
+          // The answer is already generated and billed — retry key-server blips so it lands.
+          withMyDataRetry(() =>
+            agentClient.sendMessage({
+              groupRef: {uuid: groupUuid},
+              text,
+            }),
+          );
+        await post(answer);
+        setPending(writeProposal ? {proposal: writeProposal, agent, post} : null);
       } catch (err) {
         setError(replyError(err));
       } finally {
+        if (recallTimer.current !== null) {
+          window.clearTimeout(recallTimer.current);
+          recallTimer.current = null;
+        }
         setReplying(false);
+        setStatus(null);
       }
     },
     [
@@ -366,8 +508,59 @@ export function useAgentMemoryReply(
       keypair,
       metadata.data,
       platform,
+      runAction,
     ],
   );
 
-  return {reply, replying, error};
+  // `replyOnce` closes over the latest thread and settings, so the queue always calls the newest.
+  replyOnceRef.current = replyOnce;
+
+  /**
+   * Ask the agent to answer. Safe to call while it is already working: the question joins a
+   * first-in-first-out queue and is answered after the ones ahead of it. Returns once queued, so
+   * the composer stays free while the agent works through its backlog.
+   */
+  const reply = useCallback(async (question: string) => {
+    const text = question.trim();
+    if (text) queueRef.current?.push(text);
+  }, []);
+
+  /** The owner's answer to the permission dialog. Approval is the only path to a signed write. */
+  const resolveAction = useCallback(
+    async (approve: boolean) => {
+      const pending = pendingAction;
+      if (!pending || actionBusy) return;
+      setActionBusy(true);
+      setError(null);
+      try {
+        if (!approve) {
+          await pending.post("Understood, I won't do that.");
+          setPending(null);
+          return;
+        }
+        // Re-read the agent: its permissions may have changed since it proposed this.
+        const fresh = await fetchSubAgentByObjectId(pending.agent.agent_object_id);
+        const current = fresh ? parseActionProposal(`[[action:${pending.proposal.name} ${JSON.stringify(pending.proposal.params)}]]`, fresh) : null;
+        if (!fresh || !fresh.active || !current?.proposal) {
+          throw new Error('This agent no longer has permission to do that.');
+        }
+        let message: string;
+        try {
+          message = await runAction(current.proposal, fresh);
+        } catch (err) {
+          message = `I couldn't do that: ${replyError(err)}`;
+        }
+        setPending(null);
+        await pending.post(message);
+      } catch (err) {
+        setError(replyError(err));
+        setPending(null);
+      } finally {
+        setActionBusy(false);
+      }
+    },
+    [pendingAction, actionBusy, runAction],
+  );
+
+  return {reply, replying, queued, status, error, pendingAction, actionBusy, resolveAction};
 }

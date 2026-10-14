@@ -1,9 +1,11 @@
+import {contentDigestV1, contentDigestV2} from './anchor';
 import {describe, expect, it} from 'vitest';
 
 import {
   AGENT_ROOM_KIND,
   DIGEST_MATCH_WINDOW_MS,
   matchDigestsToMessages,
+  messageIdFromAnchorUri,
   roomKindLabel,
   roomTaskLink,
   roomTitle,
@@ -100,5 +102,80 @@ describe('summarizeVerification', () => {
       unmatched: 1,
       failed: 1,
     });
+  });
+});
+
+describe('anchors made by this app', () => {
+  const hex = (b: Uint8Array) => Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('');
+  /** A current (v2) anchor: pointer and digest both name the room and message. */
+  const anchored = (seq: number, sender: string, messageId: string, text: string, createdAtMs: number) => ({
+    ...digest(seq, sender, createdAtMs),
+    contentUri: `myso-chat+v2://room-1/${messageId}`,
+    contentDigest: hex(contentDigestV2(text, 'room-1', messageId)),
+  });
+  /** One of the first anchors, made before digests were bound to the room. */
+  const legacy = (seq: number, sender: string, messageId: string, text: string, createdAtMs: number) => ({
+    ...digest(seq, sender, createdAtMs),
+    contentUri: `myso-chat://room-1/${messageId}`,
+    contentDigest: hex(contentDigestV1(text)),
+  });
+
+  it('matches by the message id in the pointer, however long after the message it was anchored', () => {
+    const rows = matchDigestsToMessages(
+      [anchored(0, '0xa', 'm-old', 'hello', 9_999_999)],
+      [{...message('m-old', '0xa', 1_000), text: 'hello'}],
+    );
+    expect(rows[0]?.matchedMessageId).toBe('m-old');
+    expect(rows[0]?.contentVerified).toBe(true);
+    expect(rows[0]?.senderVerified).toBe(true);
+  });
+
+  it('still verifies the first anchors, made with a plain sha256', () => {
+    const [row] = matchDigestsToMessages(
+      [legacy(0, '0xa', 'm1', 'hello', 5)],
+      [{...message('m1', '0xa', 5), text: 'hello'}],
+    );
+    expect(row?.contentVerified).toBe(true);
+  });
+
+  it('flags text that no longer hashes to the digest', () => {
+    const [row] = matchDigestsToMessages(
+      [anchored(0, '0xa', 'm1', 'original', 5)],
+      [{...message('m1', '0xa', 5), text: 'edited afterwards'}],
+    );
+    expect(row?.contentVerified).toBe(false);
+    expect(summarizeVerification([row!]).failed).toBe(1);
+    expect(summarizeVerification([row!]).verified).toBe(0);
+  });
+
+  it('does not recompute when the text is not loaded', () => {
+    const [row] = matchDigestsToMessages([anchored(0, '0xa', 'm1', 'x', 5)], [message('m1', '0xa', 5)]);
+    expect(row?.matchedMessageId).toBe('m1');
+    expect(row?.contentVerified).toBeNull();
+  });
+
+  it('never matches a pointer to a message from another sender', () => {
+    const [row] = matchDigestsToMessages([anchored(0, '0xa', 'm1', 'x', 5)], [message('m1', '0xb', 5)]);
+    expect(row?.matchedMessageId).toBeNull();
+  });
+
+  it('keeps an exact pointer match from being taken by a nearer time match', () => {
+    const rows = matchDigestsToMessages(
+      [digest(0, '0xa', 1_000), anchored(1, '0xa', 'm-exact', 'z', 50_000)],
+      [message('m-near-time', '0xa', 1_000), message('m-exact', '0xa', 1)],
+    );
+    expect(rows.find((r) => r.seq === 1)?.matchedMessageId).toBe('m-exact');
+    expect(rows.find((r) => r.seq === 0)?.matchedMessageId).toBe('m-near-time');
+  });
+
+  it('carries the transaction id through', () => {
+    const [row] = matchDigestsToMessages([anchored(0, '0xa', 'm1', 'x', 5)], [message('m1', '0xa', 5)]);
+    expect(row?.transactionId).toBeTruthy();
+  });
+
+  it('reads the id back out of a pointer', () => {
+    expect(messageIdFromAnchorUri('myso-chat+v2://room-1/abc-123')).toBe('abc-123');
+    expect(messageIdFromAnchorUri('myso-chat://room-1/abc-123')).toBe('abc-123');
+    expect(messageIdFromAnchorUri('https://elsewhere.dev/x')).toBeNull();
   });
 });

@@ -10,6 +10,8 @@ import {ReputationBadge} from '@/components/agents/ReputationBadge';
 import {type AgentChartNode} from '@/lib/agents/agent-chart';
 import {formatMistAmount} from '@/lib/agents/format';
 import type {AgentStats} from '@/hooks/agents/useAgentStats';
+import {useAgentPnl} from '@/hooks/agents/useAgentPnl';
+import {formatSignedMist, type AgentPnl} from '@/lib/agents/pnl';
 
 const LEVEL_STRIP = [
   'bg-sky-400/80',
@@ -44,6 +46,7 @@ export function AgentChartNodeCard({
 }: Readonly<AgentChartNodeCardProps>) {
   const [copied, setCopied] = useState(false);
   const childCount = node.children?.length ?? 0;
+  const pnl = useAgentPnl(node.id, stats?.spentMist);
 
   function copyAddress() {
     void navigator.clipboard.writeText(node.fullAddress).then(() => {
@@ -120,9 +123,10 @@ export function AgentChartNodeCard({
           </div>
         </div>
 
-        <dl className="grid grid-cols-2 gap-1.5">
+        <dl className="grid grid-cols-3 gap-1.5">
           <CardStat label="Balance" value={stats?.balanceMist} />
           <CardStat label="AI spent" value={stats?.spentMist} />
+          <PnlStat pnl={pnl} />
         </dl>
 
         {node.automations?.length ? (
@@ -157,6 +161,31 @@ export function AgentChartNodeCard({
           </Button>
         ) : null}
       </div>
+    </div>
+  );
+}
+
+/** Profit and loss, green when ahead and red when behind. The tooltip shows where it comes from. */
+function PnlStat({pnl}: Readonly<{pnl: AgentPnl | null}>) {
+  const tone =
+    pnl == null || pnl.pnlMist === 0n
+      ? 'text-foreground'
+      : pnl.pnlMist > 0n
+        ? 'text-emerald-500 dark:text-emerald-400'
+        : 'text-red-500 dark:text-red-400';
+  const title = pnl
+    ? [
+        `Earned as seller: ${formatMistAmount(pnl.revenueMist)} MySo (${pnl.soldCount} task${pnl.soldCount === 1 ? '' : 's'})`,
+        `Paid as buyer: ${formatMistAmount(pnl.taskSpendMist)} MySo (${pnl.boughtCount} task${pnl.boughtCount === 1 ? '' : 's'})`,
+        `AI spent: ${formatMistAmount(pnl.aiSpentMist)} MySo`,
+      ].join('\n')
+    : 'Profit and loss: task earnings minus task spend minus AI spend';
+  return (
+    <div className="min-w-0 rounded-lg bg-muted/60 px-2 py-1.5" title={title}>
+      <dt className="truncate text-[10px] text-muted-foreground">PnL</dt>
+      <dd className={cn('truncate text-xs font-medium tabular-nums', tone)}>
+        {pnl ? formatSignedMist(pnl.pnlMist) : '—'}
+      </dd>
     </div>
   );
 }

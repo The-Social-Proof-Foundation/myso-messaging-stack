@@ -21,6 +21,8 @@ import {MultiBubbleIcon} from '@/components/icons/MultiBubbleIcon';
 import {auditRowMentionsAgent} from '@/lib/agents/audit';
 import {ReputationBadge} from '@/components/agents/ReputationBadge';
 import {useAgentStats} from '@/hooks/agents/useAgentStats';
+import {useAgentPnl} from '@/hooks/agents/useAgentPnl';
+import {formatSignedMist} from '@/lib/agents/pnl';
 import {useDerivedAgentKey} from '@/hooks/agents/useDerivedAgentKey';
 import {useAllSubAgents} from '@/hooks/agents/useSubAgents';
 import type {AgentChartNode} from '@/lib/agents/agent-chart';
@@ -69,6 +71,7 @@ export function AgentProfileDrawer({
   const chat = useAgentChatProgress(agent.id);
   const statsAgents = useMemo(() => [{id: agent.id, fullAddress: agent.fullAddress}], [agent.id, agent.fullAddress]);
   const stats = useAgentStats(organizationId, statsAgents).get(agent.id);
+  const pnl = useAgentPnl(agent.id, stats?.spentMist);
   const audit = useOrgAuditLogs(organizationId);
   const agents = useAllSubAgents();
   const account = useMemoryAccount();
@@ -236,6 +239,27 @@ export function AgentProfileDrawer({
           <div className="mt-2 grid grid-cols-2 gap-2">
             <StatTile label="Balance" value={drawerAmount(stats?.balanceMist)} />
             <StatTile label="AI spent" value={drawerAmount(stats?.spentMist)} />
+            <StatTile
+              label="PnL"
+              value={
+                pnl ? (
+                  <span
+                    className={
+                      pnl.pnlMist > 0n
+                        ? 'text-emerald-500 dark:text-emerald-400'
+                        : pnl.pnlMist < 0n
+                          ? 'text-red-500 dark:text-red-400'
+                          : undefined
+                    }
+                    title={`Earned ${formatMistAmount(pnl.revenueMist)} as seller, paid ${formatMistAmount(pnl.taskSpendMist)} as buyer, AI spent ${formatMistAmount(pnl.aiSpentMist)}`}
+                  >
+                    <MysoAmount amount={formatSignedMist(pnl.pnlMist)} unitClassName={mysoUnitClass} />
+                  </span>
+                ) : (
+                  '—'
+                )
+              }
+            />
             <StatTile
               label="Budget left"
               value={

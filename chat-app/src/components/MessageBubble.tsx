@@ -9,6 +9,10 @@ import {
   type MouseEvent,
   type ReactNode,
 } from 'react';
+import { isEmojiOnlyMessage } from '../lib/emoji-only';
+import { AgentMarkdown } from './AgentMarkdown';
+import { CopyTextButton } from './CopyTextButton';
+import { AnchorMessageButton } from './AnchorMessageButton';
 import EmojiPicker, {
   EmojiStyle,
   Theme as EmojiPickerTheme,
@@ -75,6 +79,10 @@ interface MessageBubbleProps {
   avatarSrc?: string | null;
   /** Agent sender: render the deterministic orb instead of the empty photo. */
   showAgentOrb?: boolean;
+  /** Anchors an agent message on-chain; omit where anchoring is unavailable. */
+  onAnchor?: (message: { messageId: string; text: string; senderAddress: string }) => Promise<unknown>;
+  /** Set once this message is anchored and indexed. */
+  anchored?: { seq: number; transactionId: string; contentDigest: string };
   /** Resolve a display label (username / name / truncated address) for a wallet. */
   labelForAddress?: (address: string) => string;
   /** SPT reservation ring for the sender avatar (when GraphQL indicates SPT/pool). */
@@ -695,6 +703,8 @@ export function MessageBubble({
   tickStatus = 'none',
   avatarSrc = null,
   showAgentOrb = false,
+  onAnchor,
+  anchored,
   labelForAddress,
   avatarShowRing = false,
   avatarRingPercent = 0,
@@ -722,11 +732,16 @@ export function MessageBubble({
   const textRef = useRef<HTMLParagraphElement>(null);
   const [textExpanded, setTextExpanded] = useState(false);
   const [textOverflows, setTextOverflows] = useState(false);
+  const jumboEmoji = !editing && isEmojiOnlyMessage(message.text);
   useLayoutEffect(() => {
     const el = textRef.current;
+    if (jumboEmoji) {
+      setTextOverflows(false);
+      return;
+    }
     if (!el || textExpanded) return;
     setTextOverflows(el.scrollHeight > el.clientHeight + 1);
-  }, [message.text, textExpanded, editing]);
+  }, [message.text, textExpanded, editing, jumboEmoji]);
   const lastReportedWidthRef = useRef(0);
 
   useLayoutEffect(() => {
@@ -895,7 +910,16 @@ export function MessageBubble({
     Boolean(senderLabel) &&
     Boolean(message.senderAddress) &&
     senderLabel === truncateAddress(message.senderAddress);
-  const showAvatar = isLastInGroup;
+  // Agent replies read like an assistant answer: no bubble, the small name / Agent / time labels
+  // on top and the formatted text below. Human messages keep the bubble layout.
+  const isAgentSender = !isOwnMessage && (Boolean(message.isAgentMessage) || showAgentOrb);
+  const agentTextLayout =
+    isAgentSender &&
+    !editing &&
+    !message.isDeleted &&
+    !isPaymentKind(message.kind) &&
+    Boolean(message.text?.trim());
+  const showAvatar = agentTextLayout ? isFirstInGroup : isLastInGroup;
   const avatarShellWidth = reservationAvatarShellSize(
     AVATAR_SIZE,
     Boolean(avatarShowRing),
@@ -1011,9 +1035,9 @@ export function MessageBubble({
       style={{marginTop: marginTopPx}}
     >
       <div
-        className={`flex max-w-[85%] items-end gap-0 sm:max-w-[75%] ${
-          isOwnMessage ? 'flex-row-reverse' : 'flex-row'
-        }`}
+        className={`flex gap-0 ${
+          agentTextLayout ? 'max-w-full items-start sm:max-w-[min(100%,46rem)]' : 'max-w-[85%] items-end sm:max-w-[75%]'
+        } ${isOwnMessage ? 'flex-row-reverse' : 'flex-row'}`}
       >
         {/* Avatar only on the latest bubble; spacer uses the same shell width as
             the avatar (incl. SPT ring) so mid-cluster edges match. */}
@@ -1033,14 +1057,16 @@ export function MessageBubble({
             size={AVATAR_SIZE}
             showRing={avatarShowRing}
             ringPercent={avatarRingPercent}
-            className="relative z-20 mb-0.5 shrink-0 rounded-full shadow-sm dark:shadow-none"
+            className={`relative z-20 shrink-0 rounded-full shadow-sm dark:shadow-none ${
+              agentTextLayout ? 'mt-0.5' : 'mb-0.5'
+            }`}
           />
         ) : (
           <span
             className="shrink-0"
             style={{
-              width: avatarColumnInset,
-              height: avatarShellWidth,
+              width: agentTextLayout ? avatarShellWidth : avatarColumnInset,
+              height: agentTextLayout ? 1 : avatarShellWidth,
             }}
             aria-hidden
           />
@@ -1050,9 +1076,9 @@ export function MessageBubble({
           ref={bubbleWrapperRef}
           className={`relative z-0 flex min-w-0 max-w-full flex-col ${
             isOwnMessage ? 'items-end' : 'items-start'
-          }`}
+          } ${agentTextLayout ? 'flex-1 pl-2' : ''}`}
           style={
-            showAvatar
+            showAvatar && !agentTextLayout
               ? isOwnMessage
                 ? { marginRight: -AVATAR_OVERLAP_PX }
                 : { marginLeft: -AVATAR_OVERLAP_PX }
@@ -1159,14 +1185,68 @@ export function MessageBubble({
                 </div>
               )}
 
-              {showTextBubble && (
+              {showTextBubble && agentTextLayout && (
+                <div className="relative w-fit max-w-full">
+                  {isFirstInGroup && (
+                    <div className="mb-1 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[11px] leading-none text-secondary-400 dark:text-secondary-500">
+                      {senderLabel && (
+                        <span
+                          className="font-sans text-[11px] font-medium leading-none tracking-tight text-secondary-500 dark:text-secondary-400"
+                          title={message.senderAddress ?? undefined}
+                        >
+                          {senderLabel}
+                        </span>
+                      )}
+                      <span
+                        className="rounded bg-secondary-200/80 px-1 py-0.5 text-[10px] font-semibold uppercase leading-none tracking-wide text-secondary-600 dark:bg-secondary-600/80 dark:text-secondary-200"
+                        title={
+                          message.principalOwner
+                            ? `Agent of ${truncateAddress(message.principalOwner)}`
+                            : 'Agent message'
+                        }
+                      >
+                        Agent
+                      </span>
+                      {timeLabel ? (
+                        <span className="leading-none text-secondary-400/70 dark:text-secondary-500/70">{timeLabel}</span>
+                      ) : null}
+                      {editedSuffix}
+                      <CopyTextButton text={message.text} />
+                      {onAnchor && message.senderAddress ? (
+                        <AnchorMessageButton
+                          anchored={anchored}
+                          onAnchor={() =>
+                            onAnchor({
+                              messageId: message.messageId,
+                              text: message.text,
+                              senderAddress: message.senderAddress!,
+                            })
+                          }
+                        />
+                      ) : null}
+                    </div>
+                  )}
+                  <AgentMarkdown text={message.text} />
+                  {imageAttachments.length === 0 && reactionChipItems ? (
+                    <ReactionChipRow isOwnMessage={isOwnMessage}>
+                      {reactionChipItems}
+                    </ReactionChipRow>
+                  ) : null}
+                </div>
+              )}
+
+              {showTextBubble && !agentTextLayout && (
                 <div className="relative w-fit max-w-full">
                   <div
-                    className={`w-fit max-w-full overflow-hidden px-3.5 py-2 shadow-sm dark:shadow-none ${BUBBLE_RADIUS} ${
-                      isOwnMessage
-                        ? 'bg-bubble-sent-fill text-white'
-                        : 'bg-bubble-received-fill text-secondary-900 dark:text-secondary-100'
-                    }`}
+                    className={
+                      jumboEmoji
+                        ? 'w-fit max-w-full px-1'
+                        : `w-fit max-w-full overflow-hidden px-3.5 py-2 shadow-sm dark:shadow-none ${BUBBLE_RADIUS} ${
+                            isOwnMessage
+                              ? 'bg-bubble-sent-fill text-white'
+                              : 'bg-bubble-received-fill text-secondary-900 dark:text-secondary-100'
+                          }`
+                    }
                   >
                     {editing ? (
                       <div className="space-y-2">
@@ -1200,9 +1280,13 @@ export function MessageBubble({
                       <>
                         <p
                           ref={textRef}
-                          className="text-[15px] leading-snug break-words whitespace-pre-wrap"
+                          className={
+                            jumboEmoji
+                              ? 'text-[52px] leading-[1.1] whitespace-nowrap'
+                              : 'text-[15px] leading-snug break-words whitespace-pre-wrap'
+                          }
                           style={
-                            textExpanded
+                            textExpanded || jumboEmoji
                               ? undefined
                               : {
                                   display: '-webkit-box',
@@ -1217,7 +1301,7 @@ export function MessageBubble({
                             isOwnMessage={isOwnMessage}
                           />
                         </p>
-                        {(textOverflows || textExpanded) && (
+                        {!jumboEmoji && (textOverflows || textExpanded) && (
                           <button
                             type="button"
                             onClick={() => setTextExpanded((v) => !v)}
@@ -1299,7 +1383,7 @@ export function MessageBubble({
           )}
 
           {/* Meta — only under the last bubble in a same-sender run */}
-          {isLastInGroup && (
+          {isLastInGroup && !agentTextLayout && (
             <div
               className={`mt-0.5 flex w-max max-w-[min(100vw,20rem)] flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[11px] text-secondary-400 dark:text-secondary-500 ${
                 isOwnMessage ? 'justify-end' : 'justify-start'

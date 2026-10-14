@@ -146,10 +146,11 @@ export async function turnIdempotencyKey(
 
 /** Told to the model so it explains memory accurately instead of claiming it has no way to save. */
 export const AGENT_MEMORY_NOTE =
-  'Memory: you do not call a memory tool. The chat saves durable facts for you automatically when ' +
+  'Memory: the chat saves durable facts for you automatically when ' +
   'the user states one ("my name is…", "I prefer…") or asks you to remember something ' +
   '("remember that…", "/remember …"), and it recalls stored facts before you answer. ' +
-  'Never say you cannot save memories; if asked, explain this. ' +
+  'Never say you cannot save memories; if asked, explain this. You can also look something up on ' +
+  'purpose with the recall_memory action, or save one fact with remember, when those are listed. ' +
   'Users can also type /help to see local commands.';
 
 export type AgentCommandName = 'help' | 'whoami' | 'recall' | 'remember';

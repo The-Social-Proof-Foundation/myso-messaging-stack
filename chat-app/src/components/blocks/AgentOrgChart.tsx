@@ -1,4 +1,4 @@
-import {useEffect, useMemo, useRef, useState, type ReactNode} from 'react';
+import {useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent, type ReactNode} from 'react';
 
 import {cn} from '@/lib/utils';
 import {CHAT_SIDEBAR_MOTION} from '@/lib/chat-layout';
@@ -34,6 +34,9 @@ interface AgentOrgChartProps {
   /** Called after the inline create card registers an agent. */
   onAgentCreated?: () => void;
 }
+
+/** Pixels the pointer must travel before a press becomes a drag, so a click still selects. */
+const PAN_THRESHOLD_PX = 5;
 
 function parentIds(nodes: AgentChartNode[]): string[] {
   return flattenAgentChart(nodes)
@@ -83,6 +86,74 @@ export function AgentOrgChart({
   const [drawerOpen, setDrawerOpen] = useState(true);
   const [zoomLevel, setZoomLevel] = useState(100);
   const [expandedIds, setExpandedIds] = useState<Set<string>>(() => new Set(parentIds(roots)));
+
+  // The chart is scaled with a CSS transform, which leaves its layout size unscaled. Measure it
+  // and size a wrapper to the scaled result, so the scroll area covers all of it (nothing is
+  // stranded off the left edge when zoomed in) and the chart stays centered when it is small.
+  const contentRef = useRef<HTMLDivElement>(null);
+  const [contentSize, setContentSize] = useState<{width: number; height: number} | null>(null);
+  useLayoutEffect(() => {
+    const el = contentRef.current;
+    if (!el) return;
+    const measure = () => setContentSize({width: el.offsetWidth, height: el.offsetHeight});
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [roots.length]);
+
+  // Click and drag to move the chart around.
+  const panRef = useRef<{x: number; y: number; left: number; top: number; moved: boolean; id: number} | null>(null);
+  const suppressClickRef = useRef(false);
+  const [panning, setPanning] = useState(false);
+
+  function startPan(event: PointerEvent<HTMLDivElement>) {
+    // Touch already scrolls natively; only the mouse and pen need help.
+    if (event.button !== 0 || event.pointerType === 'touch') return;
+    const el = canvasRef.current;
+    if (!el) return;
+    panRef.current = {
+      x: event.clientX,
+      y: event.clientY,
+      left: el.scrollLeft,
+      top: el.scrollTop,
+      moved: false,
+      id: event.pointerId,
+    };
+  }
+
+  function movePan(event: PointerEvent<HTMLDivElement>) {
+    const pan = panRef.current;
+    const el = canvasRef.current;
+    if (!pan || !el) return;
+    const dx = event.clientX - pan.x;
+    const dy = event.clientY - pan.y;
+    if (!pan.moved) {
+      if (Math.hypot(dx, dy) < PAN_THRESHOLD_PX) return;
+      pan.moved = true;
+      el.setPointerCapture(pan.id);
+      setPanning(true);
+    }
+    el.scrollLeft = pan.left - dx;
+    el.scrollTop = pan.top - dy;
+  }
+
+  function endPan() {
+    const pan = panRef.current;
+    panRef.current = null;
+    if (!pan?.moved) return;
+    setPanning(false);
+    try {
+      canvasRef.current?.releasePointerCapture(pan.id);
+    } catch {
+      /* the capture is already gone */
+    }
+    // The release ends in a click; swallow it so a drag never selects the card it ended on.
+    suppressClickRef.current = true;
+    window.setTimeout(() => {
+      suppressClickRef.current = false;
+    }, 0);
+  }
 
   useEffect(() => {
     const el = canvasRef.current;
@@ -167,7 +238,22 @@ export function AgentOrgChart({
       />
 
       <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
-        <div ref={canvasRef} className="bg-chart-plus min-h-0 min-w-0 flex-1 overflow-auto">
+        <div
+          ref={canvasRef}
+          className={cn(
+            'bg-chart-plus min-h-0 min-w-0 flex-1 overflow-auto',
+            roots.length > 0 && (panning ? 'cursor-grabbing select-none' : 'cursor-grab'),
+          )}
+          onPointerDown={startPan}
+          onPointerMove={movePan}
+          onPointerUp={endPan}
+          onPointerCancel={endPan}
+          onClickCapture={(event) => {
+            if (!suppressClickRef.current) return;
+            event.stopPropagation();
+            event.preventDefault();
+          }}
+        >
           {roots.length === 0 ? (
             emptyState ?? (
               organizationId ? (
@@ -180,9 +266,21 @@ export function AgentOrgChart({
             )
           ) : (
             <div
-              className="flex w-max min-w-full justify-center px-6 py-8 transition-transform duration-200"
-              style={{transform: `scale(${zoomLevel / 100})`, transformOrigin: 'top center'}}
+              className="mx-auto"
+              style={
+                contentSize
+                  ? {
+                      width: contentSize.width * (zoomLevel / 100),
+                      height: contentSize.height * (zoomLevel / 100),
+                    }
+                  : undefined
+              }
             >
+              <div
+                ref={contentRef}
+                className="w-max px-6 py-8 transition-transform duration-200"
+                style={{transform: `scale(${zoomLevel / 100})`, transformOrigin: 'top left'}}
+              >
               <div className="flex items-start gap-8">
                 {roots.map((root) => (
                   <AgentChartBranch
@@ -199,6 +297,7 @@ export function AgentOrgChart({
                     onToggleExpand={toggleExpand}
                   />
                 ))}
+              </div>
               </div>
             </div>
           )}

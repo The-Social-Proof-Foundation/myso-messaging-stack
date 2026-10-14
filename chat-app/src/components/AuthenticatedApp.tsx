@@ -1,3 +1,4 @@
+import { useRecordSignerAddress } from '../hooks/useSelfAddresses';
 import {useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import {useLocation, useNavigate} from 'react-router-dom';
 
@@ -56,6 +57,8 @@ export function AuthenticatedApp({
 }: Readonly<AuthenticatedAppProps>) {
   const address = useAuthenticatedAddress();
   const { keypair } = useMySocialAuth();
+  // Each sign-in signs with a new key; remember it so the next sign-in still knows these messages are mine.
+  useRecordSignerAddress();
   const location = useLocation();
   const navigate = useNavigate();
 
@@ -465,8 +468,13 @@ export function AuthenticatedApp({
               roomVerifier={
                 selectedGroup &&
                 chatIndex.refs.some((ref) => ref.groupId === selectedGroup.groupId)
-                  ? (messages) => (
-                      <RoomVerifyPanel groupId={selectedGroup.groupId} messages={messages} />
+                  ? (messages, { labelFor, onSelectMessage }) => (
+                      <RoomVerifyPanel
+                        groupId={selectedGroup.groupId}
+                        messages={messages}
+                        labelFor={labelFor}
+                        onSelectMessage={onSelectMessage}
+                      />
                     )
                   : undefined
               }
