@@ -107,6 +107,27 @@ export function lookupFollowUp(action: string, data: string, final: boolean): st
   );
 }
 
+/** How many times a cut-off reply is continued before it is posted as it stands. */
+export const MAX_CONTINUATIONS = 2;
+
+/** Asked when a reply stopped at the output limit. */
+export const CONTINUE_PROMPT =
+  'Your last reply was cut off at the length limit. Continue exactly where it stopped: no introduction, ' +
+  'no repeating what you already wrote, and finish the thought concisely.';
+
+/**
+ * Joins a reply with its continuation. The seam usually falls mid-sentence, so a space goes in
+ * unless the first part already ends in whitespace or the continuation starts with punctuation.
+ */
+export function joinContinuation(previous: string, next: string): string {
+  const tail = next.replace(/^\s*(?:\.{3}|…)\s*/, '').trimStart();
+  if (!tail) return previous;
+  if (!previous) return tail;
+  if (/\s$/.test(previous)) return `${previous}${tail}`;
+  if (/^[.,;:!?)\]}'"”’%]/.test(tail) || /^\n/.test(next)) return `${previous}${/^\n/.test(next) ? next : tail}`;
+  return `${previous} ${tail}`;
+}
+
 /** Bit mask of a list of capability names. */
 export function maskOf(names: readonly CapabilityName[] | undefined): number {
   return (names ?? []).reduce((mask, name) => mask | CAP[name], 0);

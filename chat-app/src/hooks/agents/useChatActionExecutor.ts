@@ -35,7 +35,15 @@ import {
 } from '../../lib/agents/chat-action-run';
 import type {ChatActionProposal} from '../../lib/agents/chat-actions';
 import {parseMysoToMist} from '../../lib/agents/format';
-import {socialGet, socialGraphql, socialSchema} from '../../lib/agents/social-read';
+import {
+  accountBalance,
+  findProfile,
+  lookupObject,
+  lookupTransaction,
+  recentTransactions,
+  type Gql,
+} from '../../lib/agents/chain-read';
+import {runGraphql, socialGet, socialGraphql, socialSchema} from '../../lib/agents/social-read';
 import {
   createAgentMemoryClient,
   recallAgentMemories,
@@ -59,6 +67,8 @@ import {useTaskActions} from './useTaskActions';
 const HOUR_MS = 3_600_000;
 /** The same indexer GraphQL endpoint the profile and organization screens read. */
 const SOCIAL_GRAPHQL_URL = import.meta.env.VITE_MYSO_GRAPHQL_URL || '/api/graphql';
+/** One read-only GraphQL call against the indexer, returning its data. */
+const indexerGql: Gql = async (query, variables) => (await runGraphql(query, variables, SOCIAL_GRAPHQL_URL)).data;
 const shortDigest = (digest: string | null | undefined) => (digest ? ` (tx ${digest.slice(0, 8)}…)` : '');
 const label = (row: SubAgentRow) => row.label?.trim() || row.agent_object_id.slice(0, 10);
 const sameAgentId = (a: string, b: string) =>
@@ -331,6 +341,16 @@ export function useChatActionExecutor(options: {enabled?: boolean} = {}) {
           ].filter(Boolean);
           return `Done. I updated ${label(target)}: ${said.join(' and ')}.`;
         }
+        case 'find_profile':
+          return findProfile(indexerGql, {username: params.username, address: params.address});
+        case 'account_balance':
+          return accountBalance(indexerGql, params.address!);
+        case 'recent_transactions':
+          return recentTransactions(indexerGql, {address: params.address!, limit: params.limit, involvement: params.involvement});
+        case 'lookup_transaction':
+          return lookupTransaction(indexerGql, params.digest!);
+        case 'lookup_object':
+          return lookupObject(indexerGql, params.objectId!);
         case 'query_social_graphql':
           return socialGraphql(params.graphql!, params.variables, SOCIAL_GRAPHQL_URL);
         case 'social_api_get':

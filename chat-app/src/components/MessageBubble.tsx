@@ -13,6 +13,7 @@ import { isEmojiOnlyMessage } from '../lib/emoji-only';
 import { AgentMarkdown } from './AgentMarkdown';
 import { CopyTextButton } from './CopyTextButton';
 import { AnchorMessageButton } from './AnchorMessageButton';
+import { markRevealShown, prefersReducedMotion, shouldReveal } from '../lib/reveal';
 import EmojiPicker, {
   EmojiStyle,
   Theme as EmojiPickerTheme,
@@ -81,6 +82,8 @@ interface MessageBubbleProps {
   showAgentOrb?: boolean;
   /** Anchors an agent message on-chain; omit where anchoring is unavailable. */
   onAnchor?: (message: { messageId: string; text: string; senderAddress: string }) => Promise<unknown>;
+  /** Keeps a thread that is scrolled to the bottom there while a reply types itself out. */
+  onRevealGrow?: () => void;
   /** Set once this message is anchored and indexed. */
   anchored?: { seq: number; transactionId: string; contentDigest: string };
   /** Resolve a display label (username / name / truncated address) for a wallet. */
@@ -705,6 +708,7 @@ export function MessageBubble({
   showAgentOrb = false,
   onAnchor,
   anchored,
+  onRevealGrow,
   labelForAddress,
   avatarShowRing = false,
   avatarRingPercent = 0,
@@ -730,6 +734,22 @@ export function MessageBubble({
   /** Bubble / image column — measured for width-aware reaction clearance. */
   const contentColumnRef = useRef<HTMLDivElement>(null);
   const textRef = useRef<HTMLParagraphElement>(null);
+  // An agent's reply types itself out once, when it first appears. Decided on first render from
+  // what is true then (not repeated for history, scrolling back or a remount).
+  const isAgentSenderEarly = !isOwnMessage && (Boolean(message.isAgentMessage) || showAgentOrb);
+  const [revealOnArrival] = useState(
+    () =>
+      isAgentSenderEarly &&
+      shouldReveal({
+        messageId: message.messageId,
+        createdAt: message.createdAt,
+        reducedMotion: prefersReducedMotion(),
+        edited: message.isEdited,
+      }),
+  );
+  useEffect(() => {
+    if (isAgentSenderEarly) markRevealShown(message.messageId);
+  }, [isAgentSenderEarly, message.messageId]);
   const [textExpanded, setTextExpanded] = useState(false);
   const [textOverflows, setTextOverflows] = useState(false);
   const jumboEmoji = !editing && isEmojiOnlyMessage(message.text);
@@ -1226,7 +1246,7 @@ export function MessageBubble({
                       ) : null}
                     </div>
                   )}
-                  <AgentMarkdown text={message.text} />
+                  <AgentMarkdown text={message.text} animate={revealOnArrival} onRevealProgress={onRevealGrow} />
                   {imageAttachments.length === 0 && reactionChipItems ? (
                     <ReactionChipRow isOwnMessage={isOwnMessage}>
                       {reactionChipItems}

@@ -31,7 +31,14 @@ import {
 import {createReplyQueue, type ReplyQueue} from '../../lib/agents/reply-queue';
 import {RECALL_STATUS_MS, REPLY_STATUS, actionStatus} from '../../lib/agents/reply-status';
 import {describeCapabilities, type OrgMemoryAccess} from '../../lib/agents/capability-brief';
-import {MAX_LOOKUP_ROUNDS, lookupFollowUp, orgMemoryAccessFor} from '../../lib/agents/chat-action-run';
+import {
+  CONTINUE_PROMPT,
+  MAX_CONTINUATIONS,
+  MAX_LOOKUP_ROUNDS,
+  joinContinuation,
+  lookupFollowUp,
+  orgMemoryAccessFor,
+} from '../../lib/agents/chat-action-run';
 import {ORG_PERM_MEMORY_READ, ORG_PERM_MEMORY_WRITE} from '@socialproof/memory/account';
 import {parseActionProposal, type ChatActionProposal} from '../../lib/agents/chat-actions';
 import {fetchOrganizationMemoryPermissions, fetchSubAgentByObjectId} from '../../lib/agents/social-api';
@@ -422,6 +429,20 @@ export function useAgentMemoryReply(
               });
               vault.assertCurrent(epoch);
             }
+          }
+          // A reply that hit the output limit stops mid-thought. Ask for the rest and stitch it on,
+          // rather than posting half an answer.
+          for (let part = 0; result?.truncated && part < MAX_CONTINUATIONS; part += 1) {
+            setStatus(REPLY_STATUS.finishing);
+            const rest = await askAgent(memory, {
+              question: CONTINUE_PROMPT,
+              history: [...turns.slice(-10), {role: 'user', content: text}, {role: 'assistant', content: result.answer}],
+              agentProfile,
+              recall: false,
+              idempotencyKey: await turnIdempotencyKey(groupId, `${text}\u0000continue${part}`),
+            });
+            vault.assertCurrent(epoch);
+            result = {...rest, answer: joinContinuation(result.answer, rest.answer)};
           }
           if (result) {
           // A recall that comes back empty is indistinguishable from "never stored" in the

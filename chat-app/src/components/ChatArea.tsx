@@ -834,7 +834,16 @@ function ChatView({
    * Without this, the next message that lands mid-animation would skip its scroll.
    */
   const programmaticScrollUntilRef = useRef(0);
+  /** Whether the reader is at the bottom, readable without waiting for a render. */
+  const atBottomRef = useRef(true);
+  atBottomRef.current = isAtBottom;
   const PROGRAMMATIC_SCROLL_MS = 800;
+  /** A reply typing itself out grows the thread; a reader at the bottom stays at the bottom. */
+  const revealGrow = useCallback(() => {
+    if (!atBottomRef.current) return;
+    const el = scrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, []);
   const scrollToBottomSmooth = useCallback(() => {
     const el = scrollRef.current;
     if (!el) return;
@@ -1300,6 +1309,7 @@ function ChatView({
                         : null
                     }
                     onAnchor={anchoringAvailable ? anchorMessage : undefined}
+                    onRevealGrow={revealGrow}
                     anchored={anchoredByMessage.get(msg.messageId)}
                     showAgentOrb={
                       Boolean(msg.isAgentMessage) ||

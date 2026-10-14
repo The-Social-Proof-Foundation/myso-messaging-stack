@@ -4,6 +4,7 @@ export const REPLY_STATUS = {
   saving: 'Saving to memory…',
   recalling: 'Searching memory…',
   thinking: 'Thinking…',
+  finishing: 'Finishing the reply…',
   sending: 'Writing reply…',
 } as const;
 

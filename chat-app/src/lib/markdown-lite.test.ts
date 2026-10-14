@@ -92,3 +92,72 @@ describe('emphasis runs', () => {
     ]);
   });
 });
+
+import {truncateBlocks, visibleLength} from './markdown-lite';
+
+describe('progressive reveal', () => {
+  const doc = parseMarkdown('Hello **bold** world\n\n- one\n- two\n\n```\ncode\n```');
+
+  it('counts only what a reader sees', () => {
+    // "Hello bold world" 16 + "one" 3 + "two" 3 + "code" 4
+    expect(visibleLength(doc)).toBe(26);
+    expect(visibleLength(parseMarkdown('a\nb'))).toBe(3);
+    expect(visibleLength(parseMarkdown('---'))).toBe(1);
+    expect(visibleLength([])).toBe(0);
+  });
+
+  it('cuts inside a paragraph without ever showing a half-written marker', () => {
+    const cut = truncateBlocks(doc, 9);
+    expect(cut).toHaveLength(1);
+    expect(cut[0]).toEqual({t: 'p', c: [text('Hello '), {t: 'strong', c: [text('bol')]}]});
+  });
+
+  it('shows nothing past the cut, and everything at or beyond the full length', () => {
+    expect(truncateBlocks(doc, 0)).toEqual([]);
+    expect(truncateBlocks(doc, -5)).toEqual([]);
+    expect(truncateBlocks(doc, 26)).toEqual(doc);
+    expect(truncateBlocks(doc, 9999)).toEqual(doc);
+  });
+
+  it('does not open a container it has no room to fill', () => {
+    const bold = parseMarkdown('ab **cd**');
+    expect(truncateBlocks(bold, 3)).toEqual([{t: 'p', c: [text('ab ')]}]);
+    expect(truncateBlocks(bold, 4)).toEqual([{t: 'p', c: [text('ab '), {t: 'strong', c: [text('c')]}]}]);
+  });
+
+  it('reveals a list item by item, and a code block as it is typed', () => {
+    const list = truncateBlocks(doc, 16 + 3 + 1);
+    expect(list.map((b) => b.t)).toEqual(['p', 'ul']);
+    expect((list[1] as {items: unknown[]}).items).toHaveLength(2);
+    const code = truncateBlocks(doc, 16 + 3 + 3 + 2);
+    expect(code[2]).toEqual({t: 'code', v: 'co', lang: ''});
+  });
+
+  it('counts a line break as one character', () => {
+    const two = parseMarkdown('ab\ncd');
+    expect(truncateBlocks(two, 3)).toEqual([{t: 'p', c: [text('ab'), {t: 'br'}]}]);
+    expect(truncateBlocks(two, 4)).toEqual([{t: 'p', c: [text('ab'), {t: 'br'}, text('c')]}]);
+  });
+
+  it('never splits an emoji', () => {
+    const cut = truncateBlocks(parseMarkdown('a😀b'), 2);
+    expect(cut).toEqual([{t: 'p', c: [text('a😀')]}]);
+  });
+
+  it('keeps links and inline code intact while cutting their text', () => {
+    const cut = truncateBlocks(parseMarkdown('see [docs here](https://x.dev) and `npm i`'), 8);
+    expect(cut[0]).toEqual({t: 'p', c: [text('see '), {t: 'link', href: 'https://x.dev', c: [text('docs')]}]});
+  });
+
+  it('grows monotonically: each step only adds', () => {
+    const total = visibleLength(doc);
+    let last = 0;
+    for (let n = 0; n <= total; n += 1) {
+      const now = visibleLength(truncateBlocks(doc, n));
+      expect(now).toBeGreaterThanOrEqual(last);
+      expect(now).toBeLessThanOrEqual(n);
+      last = now;
+    }
+    expect(last).toBe(total);
+  });
+});

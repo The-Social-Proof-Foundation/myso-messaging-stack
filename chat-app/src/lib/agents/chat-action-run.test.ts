@@ -1,6 +1,6 @@
 import {describe, expect, it} from 'vitest';
 import {CAP} from './capabilities';
-import {MAX_LOOKUP_ROUNDS, lookupFollowUp} from './chat-action-run';
+import {MAX_CONTINUATIONS, MAX_LOOKUP_ROUNDS, joinContinuation, lookupFollowUp} from './chat-action-run';
 import {MAX_AGENT_DEPTH, planPermissionChange, assertBuyerCanSettle, assertCanHostChild, assertOpenOfferFor, clampWindowMs, formatRecall, formatTaskList, isDescendantOf, isSelfOrDescendant, mergeTasks, orgMemoryAccessFor} from './chat-action-run';
 import type {AgentTaskInfo} from './social-api';
 
@@ -158,6 +158,29 @@ describe('chat action run helpers', () => {
     it('is bounded', () => {
       expect(MAX_LOOKUP_ROUNDS).toBeGreaterThan(0);
       expect(MAX_LOOKUP_ROUNDS).toBeLessThanOrEqual(5);
+    });
+  });
+
+  describe('joinContinuation', () => {
+    it('joins mid-sentence with a single space', () => {
+      expect(joinContinuation('So the pattern', 'is clear: nothing happened.')).toBe('So the pattern is clear: nothing happened.');
+    });
+    it('does not double a space or add one before punctuation', () => {
+      expect(joinContinuation('It stopped ', 'here.')).toBe('It stopped here.');
+      expect(joinContinuation('It stopped', ', then resumed.')).toBe('It stopped, then resumed.');
+      expect(joinContinuation('It stopped', '.')).toBe('It stopped.');
+    });
+    it('keeps a paragraph break the model started with', () => {
+      expect(joinContinuation('First paragraph.', '\n\nSecond paragraph.')).toBe('First paragraph.\n\nSecond paragraph.');
+    });
+    it('drops a leading ellipsis, ignores an empty continuation, and handles an empty start', () => {
+      expect(joinContinuation('It was', '… cut here.')).toBe('It was cut here.');
+      expect(joinContinuation('Whole answer.', '   ')).toBe('Whole answer.');
+      expect(joinContinuation('', 'only this')).toBe('only this');
+    });
+    it('is bounded', () => {
+      expect(MAX_CONTINUATIONS).toBeGreaterThan(0);
+      expect(MAX_CONTINUATIONS).toBeLessThanOrEqual(3);
     });
   });
 });

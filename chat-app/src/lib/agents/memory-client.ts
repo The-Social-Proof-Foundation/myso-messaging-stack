@@ -51,6 +51,8 @@ export interface AskResult {
   memories_used: number;
   memories: AskMemory[];
   amount_mist: number | null;
+  /** The reply hit the server's output limit and stops mid-thought. */
+  truncated?: boolean;
 }
 
 export interface LlmModelOption {
@@ -408,6 +410,7 @@ export async function askAgent(
     memory.request<{
       answer?: string;
       memories_used?: number;
+      truncated?: boolean;
       memories?: AskMemory[] | RecallMemory[];
       amount_mist?: number;
     }>('POST', '/api/ask', {
@@ -438,6 +441,7 @@ export async function askAgent(
       memories_used: body.memories_used ?? memories.length,
       memories,
       amount_mist: typeof body.amount_mist === 'number' ? body.amount_mist : null,
+      truncated: body.truncated === true,
     };
   } catch (error) {
     throw classifyMemoryError(error);

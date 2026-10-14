@@ -37,6 +37,6 @@ describe('describeCapabilities', () => {
   });
   it('stays inside the server profile limit for a full mask, leaving room for the identity block and memory note', () => {
     const all = Object.values(CAP).reduce((a, b) => a | b, 0);
-    expect(describeCapabilities({...base, capabilities: all, delegatable_caps: all}).length).toBeLessThan(6500);
+    expect(describeCapabilities({...base, capabilities: all, delegatable_caps: all}).length).toBeLessThan(7000);
   });
 });

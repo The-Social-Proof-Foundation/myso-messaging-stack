@@ -1,12 +1,22 @@
 import {describe, expect, it} from 'vitest';
 import {CAP} from './capabilities';
+import type {ChatActionName} from './chat-actions';
 import {availableChatActions, chatActionProtocol, describeProposal, parseActionProposal} from './chat-actions';
 
 const task = {capabilities: CAP.TASK_TRADE};
 const nothing = {capabilities: CAP.REACT};
 const ID = '0x' + 'ab'.repeat(32);
 /** Read-only lookups open to every agent; the capability tests below look past them. */
-const OPEN_TO_ALL = ['query_social_graphql', 'social_api_get', 'social_schema'];
+const OPEN_TO_ALL = [
+  'find_profile',
+  'account_balance',
+  'recent_transactions',
+  'lookup_transaction',
+  'lookup_object',
+  'query_social_graphql',
+  'social_api_get',
+  'social_schema',
+];
 const gatedNames = (agent: {capabilities: number}) =>
   availableChatActions(agent).map((a) => a.name).filter((n) => !OPEN_TO_ALL.includes(n));
 
@@ -220,8 +230,8 @@ describe('chat actions', () => {
   it('offers the indexer lookups to every agent, as reads that feed the answer', () => {
     const nobody = {capabilities: 0};
     const names = availableChatActions(nobody).map((a) => a.name);
-    expect(names).toEqual(expect.arrayContaining(['query_social_graphql', 'social_api_get', 'social_schema']));
-    for (const name of ['query_social_graphql', 'social_api_get', 'social_schema'] as const) {
+    expect(names).toEqual(expect.arrayContaining(OPEN_TO_ALL));
+    for (const name of OPEN_TO_ALL as ChatActionName[]) {
       const def = availableChatActions(nobody).find((a) => a.name === name)!;
       expect(def.risk).toBe('auto');
       expect(def.feedsBack).toBe(true);
@@ -248,5 +258,30 @@ describe('chat actions', () => {
     expect(parseActionProposal('[[action:social_schema {"typeName":"Profile"}]]', agent).proposal?.params.typeName).toBe('Profile');
     expect(parseActionProposal('[[action:social_schema {}]]', agent).proposal?.params).toEqual({});
     expect(parseActionProposal('[[action:social_schema {"typeName":"a b; drop"}]]', agent).proposal).toBeNull();
+  });
+
+  it('parses the purpose-built lookups and rejects bad input', () => {
+    const agent = {capabilities: 0};
+    const ADMIN = '0x2458950181e415250823d6ce1d55f2b3427826a111939e0d6d38e9a1397411d8';
+    const run = (name: string, body: object) => parseActionProposal(`[[action:${name} ${JSON.stringify(body)}]]`, agent);
+
+    expect(run('find_profile', {username: '@MySo_Admin'}).proposal?.params).toEqual({username: 'myso_admin'});
+    expect(run('find_profile', {address: ADMIN}).proposal?.params.address).toBe(ADMIN);
+    expect(run('find_profile', {}).proposal).toBeNull();
+    expect(run('find_profile', {username: 'a b c'}).proposal).toBeNull();
+
+    expect(run('account_balance', {address: '0xabc'}).proposal?.params.address).toBe('0x' + '0'.repeat(61) + 'abc');
+    expect(run('account_balance', {address: 'nope'}).proposal).toBeNull();
+
+    const txs = run('recent_transactions', {address: ADMIN, limit: 3, involvement: 'affected'});
+    expect(txs.proposal?.params).toMatchObject({address: ADMIN, limit: 3, involvement: 'affected'});
+    expect(run('recent_transactions', {address: ADMIN}).proposal?.params.involvement).toBe('sent');
+    expect(run('recent_transactions', {address: ADMIN, limit: 50}).proposal).toBeNull();
+    expect(run('recent_transactions', {address: ADMIN, involvement: 'all'}).proposal).toBeNull();
+
+    expect(run('lookup_transaction', {digest: 'BxB2sutfu9s3DSF2nU1QYWpiRpKJUxVT4u3jbxoUzDbh'}).proposal?.name).toBe('lookup_transaction');
+    expect(run('lookup_transaction', {digest: 'short'}).proposal).toBeNull();
+    expect(run('lookup_object', {objectId: ADMIN}).proposal?.params.objectId).toBe(ADMIN);
+    expect(run('lookup_object', {}).proposal).toBeNull();
   });
 });

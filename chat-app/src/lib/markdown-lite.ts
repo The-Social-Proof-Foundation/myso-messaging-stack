@@ -220,3 +220,123 @@ export function parseMarkdown(source: string): Block[] {
   }
   return blocks;
 }
+
+// ---------------------------------------------------------------------------------------------
+// Progressive reveal
+//
+// To type a reply out, the formatted tree is cut to a number of *visible* characters rather than
+// the source text being sliced. Slicing the source would flash half-written markers (`**bol`)
+// before they turn bold; cutting the tree keeps bold, lists and code blocks in their final shape
+// while the words arrive.
+// ---------------------------------------------------------------------------------------------
+
+const codePoints = (text: string): string[] => Array.from(text);
+
+/** First `count` code points of `text`, never splitting a surrogate pair. */
+function takeChars(text: string, count: number): string {
+  return codePoints(text).slice(0, Math.max(0, count)).join('');
+}
+
+function inlineLength(nodes: readonly Inline[]): number {
+  let total = 0;
+  for (const node of nodes) {
+    if (node.t === 'text') total += codePoints(node.v).length;
+    else if (node.t === 'code') total += codePoints(node.v).length;
+    else if (node.t === 'br') total += 1;
+    else total += inlineLength(node.c);
+  }
+  return total;
+}
+
+/** How many characters a reader can see in these blocks: text, code and line breaks. */
+export function visibleLength(blocks: readonly Block[]): number {
+  let total = 0;
+  for (const block of blocks) {
+    switch (block.t) {
+      case 'p':
+      case 'quote':
+      case 'h':
+        total += inlineLength(block.c);
+        break;
+      case 'ul':
+      case 'ol':
+        for (const item of block.items) total += inlineLength(item);
+        break;
+      case 'code':
+        total += codePoints(block.v).length;
+        break;
+      case 'hr':
+        total += 1;
+        break;
+    }
+  }
+  return total;
+}
+
+/** Cut inline nodes to `budget` visible characters. Containers that would be empty are dropped. */
+function cutInlines(nodes: readonly Inline[], budget: number): {nodes: Inline[]; used: number} {
+  const out: Inline[] = [];
+  let used = 0;
+  for (const node of nodes) {
+    const left = budget - used;
+    if (left <= 0) break;
+    if (node.t === 'text' || node.t === 'code') {
+      const length = codePoints(node.v).length;
+      out.push(length <= left ? node : {...node, v: takeChars(node.v, left)});
+      used += Math.min(length, left);
+    } else if (node.t === 'br') {
+      out.push(node);
+      used += 1;
+    } else {
+      const inner = cutInlines(node.c, left);
+      if (inner.nodes.length > 0) out.push({...node, c: inner.nodes});
+      used += inner.used;
+    }
+  }
+  return {nodes: out, used};
+}
+
+/**
+ * The first `limit` visible characters of a document, structure intact. Blocks after the cut are
+ * left out; the block the cut falls in is shown partway.
+ */
+export function truncateBlocks(blocks: readonly Block[], limit: number): Block[] {
+  const out: Block[] = [];
+  let left = Math.max(0, Math.floor(limit));
+  for (const block of blocks) {
+    if (left <= 0) break;
+    switch (block.t) {
+      case 'p':
+      case 'quote':
+      case 'h': {
+        const cut = cutInlines(block.c, left);
+        if (cut.nodes.length > 0) out.push({...block, c: cut.nodes});
+        left -= cut.used;
+        break;
+      }
+      case 'ul':
+      case 'ol': {
+        const items: Inline[][] = [];
+        for (const item of block.items) {
+          if (left <= 0) break;
+          const cut = cutInlines(item, left);
+          if (cut.nodes.length > 0) items.push(cut.nodes);
+          left -= cut.used;
+        }
+        if (items.length > 0) out.push({...block, items});
+        break;
+      }
+      case 'code': {
+        const length = codePoints(block.v).length;
+        out.push(length <= left ? block : {...block, v: takeChars(block.v, left)});
+        left -= Math.min(length, left);
+        break;
+      }
+      case 'hr':
+        out.push(block);
+        left -= 1;
+        break;
+    }
+  }
+  return out;
+}

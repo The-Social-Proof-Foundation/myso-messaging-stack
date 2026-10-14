@@ -171,6 +171,29 @@ export async function socialGet(path: string, base: string, fetchImpl: FetchLike
   return truncateResult(JSON.stringify(json));
 }
 
+/**
+ * Run a read-only query and hand back the parsed `data`. A query the server rejects outright throws;
+ * partial data with field errors is returned, with the errors under `errors`.
+ */
+export async function runGraphql<T = Record<string, any>>(
+  query: string,
+  variables: Record<string, unknown> | undefined,
+  url: string,
+  fetchImpl: FetchLike = fetch,
+): Promise<{data: T; errors: string[]}> {
+  assertReadOnlyGraphql(query, variables);
+  const json = (await request(fetchImpl, url, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json', Accept: 'application/json'},
+    body: JSON.stringify({query, ...(variables ? {variables} : {})}),
+  })) as {data?: T | null; errors?: {message?: string}[]};
+  const errors = (json.errors ?? []).map((e) => e.message ?? 'error');
+  if (json.data == null) {
+    throw new SocialReadError(`The query was rejected: ${errors.join('; ').slice(0, 500) || 'no data'}`);
+  }
+  return {data: json.data, errors};
+}
+
 export async function socialGraphql(
   query: string,
   variables: Record<string, unknown> | undefined,

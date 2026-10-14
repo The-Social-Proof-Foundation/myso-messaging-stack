@@ -1,6 +1,7 @@
 import {CAPABILITY_LABELS, CAPABILITY_NAMES, hasCapability, type CapabilityName} from './capabilities';
 import {MODEL_FAMILY_LABEL} from './jury';
 import {assertReadOnlyGraphql, normalizeSocialPath} from './social-read';
+import {cleanDigest, cleanUsername, fullAddress, MAX_TRANSACTIONS} from './chain-read';
 import {AUTOMATION_RULES, KEEPER_DUTIES, WORKER_DELEGATE_DAYS, ruleSummary, type AutomationRule} from './automation-chat';
 import type {KeeperDuty} from './automation-job';
 
@@ -24,6 +25,11 @@ export type ChatActionName =
   | 'rename_agent'
   | 'update_agent_permissions'
   | 'automate_agent'
+  | 'find_profile'
+  | 'account_balance'
+  | 'recent_transactions'
+  | 'lookup_transaction'
+  | 'lookup_object'
   | 'query_social_graphql'
   | 'social_api_get'
   | 'social_schema'
@@ -59,6 +65,13 @@ export interface ChatActionParams {
   /** Whether the target may pass granted permissions on to agents it creates. */
   delegate?: boolean;
   modelFamily?: number;
+  /** `find_profile`, `account_balance`, `recent_transactions`, `lookup_transaction`, `lookup_object`. */
+  username?: string;
+  address?: string;
+  limit?: number;
+  involvement?: 'sent' | 'affected';
+  digest?: string;
+  objectId?: string;
   /** `query_social_graphql`, `social_api_get`, `social_schema`: read-only indexer lookups. */
   graphql?: string;
   variables?: Record<string, unknown>;
@@ -412,6 +425,88 @@ export const CHAT_ACTIONS: Record<ChatActionName, ChatActionDef> = {
       return {agentId: objectId(raw, 'agentId'), grant, revoke, delegate: raw.delegate === false ? false : true};
     },
   },
+  find_profile: {
+    name: 'find_profile',
+    feedsBack: true,
+    signs: false,
+    capability: null,
+    risk: 'auto',
+    title: 'Look up a profile',
+    usage:
+      'find_profile {"username":"myso_admin"} or {"address":"0x…"} — who someone is: handle, bio, created date, followers, posts, ' +
+      'balance, AI credits, sub-agents, organizations. Works from a username alone.',
+    effect: () => 'Reads a public profile from the social indexer. Nothing is signed.',
+    rows: () => [],
+    validate: (raw) => {
+      const username = typeof raw.username === 'string' && raw.username.trim() ? cleanUsername(raw.username) : undefined;
+      const address = typeof raw.address === 'string' && raw.address.trim() ? fullAddress(raw.address) : undefined;
+      if (!username && !address) throw new Error('give a username or an address.');
+      return {...(username ? {username} : {}), ...(address ? {address} : {})};
+    },
+  },
+  account_balance: {
+    name: 'account_balance',
+    feedsBack: true,
+    signs: false,
+    capability: null,
+    risk: 'auto',
+    title: 'Check an account’s balance',
+    usage: 'account_balance {"address":"0x…"} — how much MySo an address holds.',
+    effect: () => 'Reads an account balance from the chain. Nothing is signed.',
+    rows: () => [],
+    validate: (raw) => ({address: fullAddress(typeof raw.address === 'string' ? raw.address : '')}),
+  },
+  recent_transactions: {
+    name: 'recent_transactions',
+    feedsBack: true,
+    signs: false,
+    capability: null,
+    risk: 'auto',
+    title: 'List recent transactions',
+    usage:
+      'recent_transactions {"address":"0x…","limit":5,"involvement":"sent"} — newest first, with time, status, what it did and the MySo ' +
+      'change. involvement "sent" (default) is what the address signed; "affected" also includes payments it received. limit up to 10. ' +
+      'Resolve a username with find_profile first.',
+    effect: () => 'Reads recent transactions from the chain. Nothing is signed.',
+    rows: () => [],
+    validate: (raw) => {
+      const involvement = raw.involvement ?? 'sent';
+      if (involvement !== 'sent' && involvement !== 'affected') throw new Error('involvement must be "sent" or "affected".');
+      const limit = raw.limit;
+      if (limit !== undefined && limit !== null && (typeof limit !== 'number' || !Number.isInteger(limit) || limit < 1 || limit > MAX_TRANSACTIONS)) {
+        throw new Error(`limit must be a whole number from 1 to ${MAX_TRANSACTIONS}.`);
+      }
+      return {
+        address: fullAddress(typeof raw.address === 'string' ? raw.address : ''),
+        involvement,
+        ...(typeof limit === 'number' ? {limit} : {}),
+      };
+    },
+  },
+  lookup_transaction: {
+    name: 'lookup_transaction',
+    feedsBack: true,
+    signs: false,
+    capability: null,
+    risk: 'auto',
+    title: 'Look up a transaction',
+    usage: 'lookup_transaction {"digest":"…"} — status, time, sender, what it did, gas and the MySo that moved.',
+    effect: () => 'Reads a transaction from the chain. Nothing is signed.',
+    rows: () => [],
+    validate: (raw) => ({digest: cleanDigest(typeof raw.digest === 'string' ? raw.digest : '')}),
+  },
+  lookup_object: {
+    name: 'lookup_object',
+    feedsBack: true,
+    signs: false,
+    capability: null,
+    risk: 'auto',
+    title: 'Look up an on-chain object',
+    usage: 'lookup_object {"objectId":"0x…"} — what an object is (its type), who owns it, and its contents.',
+    effect: () => 'Reads an object from the chain. Nothing is signed.',
+    rows: () => [],
+    validate: (raw) => ({objectId: fullAddress(typeof raw.objectId === 'string' ? raw.objectId : '')}),
+  },
   query_social_graphql: {
     name: 'query_social_graphql',
     feedsBack: true,
@@ -422,7 +517,8 @@ export const CHAT_ACTIONS: Record<ChatActionName, ChatActionDef> = {
     usage:
       'query_social_graphql {"query":"{ profile(address: \"0x…\") { username } }","variables":{}} — read-only GraphQL over the ' +
       'social indexer (profiles, posts, organizations, sub-agents, juries, governance, messaging and task config). ' +
-      'Ask for few fields and a small limit. Use social_schema first if you are unsure of a field name.',
+      'Only for questions the purpose-built lookups above cannot answer. Ask for few fields and a small limit; use social_schema first ' +
+      'if you are unsure of a field name (search a word, e.g. "username"), and do not conclude something does not exist until you have searched.',
     effect: () => 'Reads public data from the social indexer. Nothing is signed.',
     rows: () => [],
     validate: (raw) => {
