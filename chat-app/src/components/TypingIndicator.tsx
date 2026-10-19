@@ -77,7 +77,7 @@ export function TypingIndicator({
                 agentKey={primary.address}
                 size={AVATAR_SIZE}
                 label={primary.label}
-                state="listening"
+                state="thinking"
               />
             ) : undefined
           }

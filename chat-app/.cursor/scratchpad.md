@@ -13,6 +13,8 @@ Chat-app stored proofs in sessionStorage, always called the Groth16 prover after
 - [x] Auth never salt-derives a keypair for zkLogin sessions
 
 ## Executor's Feedback
-Chat-app still talks to the public prover URL (no Next `/api/zklogin/prove` proxy). SessionStorage `mysocial_zklogin_current` is a same-tab cache only; IndexedDB is the source of truth.
+The chat key is sealed in IndexedDB (`mysocial-zklogin-session`) under a non-extractable AES-256-GCM device key. Proof expiry clears the proof only. The same OAuth subject reuses that key, so group membership survives a new login. `sessionStorage` no longer holds `secretKey` or the address seed. A different subject deletes the previous ciphertext and starts a new key. Auth-popup `signingKey` is ignored.
 
-Logout / OAuth expiry only clears in-memory zk state. IndexedDB proof + account flag stay so the same `sub` can sign back in and skip the prover until maxEpoch.
+Logout clears the decrypted cache and keeps the ciphertext.
+
+Read receipts and online status render only when another non-agent member is in the chat.

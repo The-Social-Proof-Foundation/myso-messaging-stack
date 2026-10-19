@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { defineConfig, loadEnv, type Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
+import typegpu from 'unplugin-typegpu/vite';
 import {memoryRepoRoot, memorySdkSourceDir, memorySdkAliases, memorySdkEntries, sharedMySoDependencies} from './local-memory-sdk';
 
 const rootDir = path.dirname(fileURLToPath(import.meta.url));
@@ -51,7 +52,7 @@ export default defineConfig(({ mode }) => {
   };
 
   return {
-    plugins: [tailwindcss(), react(), vaultCsp],
+    plugins: [tailwindcss(), react(), typegpu({}), vaultCsp],
     resolve: {
       alias: [...memorySdkAliases, {find: '@', replacement: path.resolve(rootDir, 'src')}],
       dedupe: sharedMySoDependencies,

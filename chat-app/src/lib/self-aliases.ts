@@ -1,13 +1,10 @@
 /**
- * Addresses that are all "you".
+ * Addresses that are all "you", for display.
  *
- * A zkLogin session signs messages with a fresh ephemeral key, so every sign-in gives the messaging
- * identity a new address. Messages and memberships from earlier sign-ins sit under old addresses
- * that can never match the new one, and would read as someone else's. This remembers, per account,
- * every signer address used, plus any address the user says is theirs, so history stays theirs.
- *
- * It only changes how things are shown. An alias holds no keys and grants no access: it cannot sign
- * for the old address, and the chain still sees them as separate addresses.
+ * Older zkLogin sessions used a fresh ephemeral key, so messages from those
+ * sign-ins sit under addresses that would otherwise look like someone else.
+ * New sign-ins reuse the encrypted chat key. An alias still holds no key and
+ * grants no access.
  */
 
 export interface AliasStorage {

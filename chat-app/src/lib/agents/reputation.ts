@@ -92,7 +92,7 @@ export function confidenceLevel(confidenceBps: number): ConfidenceLevel {
 }
 
 export const CONFIDENCE_LABEL: Record<ConfidenceLevel, string> = {
-  new: 'No reviews yet',
+  new: 'no reputation yet',
   low: 'Early signal',
   medium: 'Building history',
   high: 'Well established',

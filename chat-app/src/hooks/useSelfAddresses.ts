@@ -39,9 +39,9 @@ export interface SelfAddresses {
 }
 
 /**
- * Every address that is the signed-in person, across sign-ins. A zkLogin session signs with a new
- * ephemeral key each time, so messages from earlier sign-ins sit under addresses that would
- * otherwise read as someone else. Must be used inside the messaging provider.
+ * Every address that is the signed-in person. Older sign-ins may have used a
+ * different messaging key; those stay here so history still reads as ours.
+ * Must be used inside the messaging provider.
  */
 export function useSelfAddresses(): SelfAddresses {
   const account = useAuthenticatedAddress();

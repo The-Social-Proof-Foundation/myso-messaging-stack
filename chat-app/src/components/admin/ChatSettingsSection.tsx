@@ -1,6 +1,6 @@
 /**
- * Per-conversation notification, read-receipt, and online-visibility toggles
- * (Chat Details). Visible to every member — not admin-gated.
+ * Per-conversation notification toggle, plus read receipts and online status
+ * when the chat includes another person.
  */
 
 import { IosToggle } from '../IosToggle';
@@ -16,6 +16,8 @@ interface ChatSettingsSectionProps {
   readReceiptsEnabled: boolean;
   /** Show online in this chat (inverse of hideOnlinePresence). */
   onlinePresenceEnabled: boolean;
+  /** Read receipts and online status. Only when another human is in the chat. */
+  showPresenceSettings: boolean;
   loading: boolean;
   savingKey: ChatSettingsSavingKey;
   error: string | null;
@@ -28,6 +30,7 @@ export function ChatSettingsSection({
   notificationsEnabled,
   readReceiptsEnabled,
   onlinePresenceEnabled,
+  showPresenceSettings,
   loading,
   savingKey,
   error,
@@ -52,22 +55,26 @@ export function ChatSettingsSection({
           saving={savingKey === 'notifications'}
           onChange={onToggleNotifications}
         />
-        <ToggleRow
-          label="Read receipts"
-          helper="Let others see when you’ve read messages"
-          checked={readReceiptsEnabled}
-          disabled={busy}
-          saving={savingKey === 'readReceipts'}
-          onChange={onToggleReadReceipts}
-        />
-        <ToggleRow
-          label="Show online status"
-          helper="Let others see when you’re online in this chat"
-          checked={onlinePresenceEnabled}
-          disabled={busy}
-          saving={savingKey === 'onlinePresence'}
-          onChange={onToggleOnlinePresence}
-        />
+        {showPresenceSettings ? (
+          <>
+            <ToggleRow
+              label="Read receipts"
+              helper="Let others see when you’ve read messages"
+              checked={readReceiptsEnabled}
+              disabled={busy}
+              saving={savingKey === 'readReceipts'}
+              onChange={onToggleReadReceipts}
+            />
+            <ToggleRow
+              label="Show online status"
+              helper="Let others see when you’re online in this chat"
+              checked={onlinePresenceEnabled}
+              disabled={busy}
+              saving={savingKey === 'onlinePresence'}
+              onChange={onToggleOnlinePresence}
+            />
+          </>
+        ) : null}
       </div>
 
       {error ? (

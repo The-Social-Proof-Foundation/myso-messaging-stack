@@ -84,11 +84,11 @@ export function AgentChartNodeCard({
       />
 
       <div className="flex flex-col gap-3 p-4">
-        <div className="flex min-w-0 items-center gap-2.5">
-          <div className="relative size-10 shrink-0">
+        <div className="flex min-w-0 items-start gap-3">
+          <div className="relative size-12 shrink-0">
             <AgentOrb
               agentKey={node.fullAddress}
-              size={40}
+              size={48}
               label={node.name}
               className="border border-border"
             />
@@ -125,7 +125,7 @@ export function AgentChartNodeCard({
 
         <dl className="grid grid-cols-3 gap-1.5">
           <CardStat label="Balance" value={stats?.balanceMist} />
-          <CardStat label="AI spent" value={stats?.spentMist} />
+          <CardStat label="Spent" value={stats?.spentMist} />
           <PnlStat pnl={pnl} />
         </dl>
 
@@ -177,7 +177,7 @@ function PnlStat({pnl}: Readonly<{pnl: AgentPnl | null}>) {
     ? [
         `Earned as seller: ${formatMistAmount(pnl.revenueMist)} MySo (${pnl.soldCount} task${pnl.soldCount === 1 ? '' : 's'})`,
         `Paid as buyer: ${formatMistAmount(pnl.taskSpendMist)} MySo (${pnl.boughtCount} task${pnl.boughtCount === 1 ? '' : 's'})`,
-        `AI spent: ${formatMistAmount(pnl.aiSpentMist)} MySo`,
+        `Spent: ${formatMistAmount(pnl.aiSpentMist)} MySo`,
       ].join('\n')
     : 'Profit and loss: task earnings minus task spend minus AI spend';
   return (

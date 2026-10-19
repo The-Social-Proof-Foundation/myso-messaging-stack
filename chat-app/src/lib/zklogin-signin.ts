@@ -17,7 +17,18 @@ import { getCurrentNetwork } from './network-utils';
 import { signAndExecuteTransactionAndWait } from './sign-and-wait';
 import { getAuthSessionRaw, setAuthSessionRaw } from './mysocial-auth-storage';
 import {
+  loginIdentityAction,
+  oauthTokenFromAuthResult,
+  readLegacySessionCopy,
+  serializePendingLogin,
+  shouldMintMessagingKey,
+  stripLegacyPendingSecret,
+  type LegacySessionCopy,
+} from './zklogin/identity';
+import {
+  clearZkLoginProof,
   clearZkLoginSigner as clearPersistedZkLoginSigner,
+  forgetDecryptedZkLoginSigner,
   loadZkLoginSigner,
   saveZkLoginSigner,
   type ZkLoginRestoreRecord,
@@ -38,6 +49,14 @@ const CLOCK_CACHE_MS = 60_000;
 
 export const ZKLOGIN_PROOF_EXPIRED_EVENT = 'mysocial-zklogin-expired';
 export type ZkLoginRestoreStatus = 'ok' | 'expired' | 'missing' | 'clock-unavailable' | 'invalid';
+
+/** This OAuth subject is not the person whose chat key is stored on this browser. */
+export class ZkLoginAccountSwitchError extends Error {
+  constructor() {
+    super('This sign-in is for a different account.');
+    this.name = 'ZkLoginAccountSwitchError';
+  }
+}
 
 type ChainClock = { epoch: number; epochDurationMs: number; maxEpochDelta: number | null };
 
@@ -76,6 +95,7 @@ type AuthResult = {
   signingKey?: string;
 };
 
+const ACCOUNT_SWITCH_FLAG = 'mysocial_zklogin_account_switch';
 const PROOF_KEY = 'mysocial_zklogin_proving';
 
 let pending: Pending | null = null;
@@ -144,47 +164,41 @@ export function zkLoginChainAddress(): string | null {
 }
 
 function persistSessionCache(): void {
-  if (!current || typeof window === 'undefined') return;
-  sessionStorage.setItem(
-    CURRENT_KEY,
-    JSON.stringify({
-      secretKey: current.ephemeral.getSecretKey(),
-      address: current.address,
-      addressSeed: current.addressSeed,
-      maxEpoch: current.maxEpoch,
-      proofPoints: current.proof.proofPoints,
-      issBase64Details: current.proof.issBase64Details,
-      headerBase64: current.proof.headerBase64,
-      proofVersion: current.proof.proofVersion,
-    }),
-  );
-  localStorage.setItem(ACCOUNT_FLAG, '1');
+  if (typeof window === 'undefined') return;
+  // The chat key and address seed live only in the encrypted IndexedDB record.
+  sessionStorage.removeItem(CURRENT_KEY);
+  if (current) localStorage.setItem(ACCOUNT_FLAG, '1');
 }
 
-function readLegacySessionProof(): { secret: string; record: ZkLoginRestoreRecord } | null {
-  if (typeof window === 'undefined') return null;
+function legacyCopyToRecord(copy: LegacySessionCopy): ZkLoginRestoreRecord | null {
+  if (!copy.address || !copy.addressSeed || !copy.proofPoints || !copy.issBase64Details) return null;
+  if (!copy.headerBase64 || copy.maxEpoch == null) return null;
+  return {
+    address: copy.address,
+    addressSeed: copy.addressSeed,
+    maxEpoch: copy.maxEpoch,
+    proofPoints: copy.proofPoints,
+    issBase64Details: copy.issBase64Details,
+    headerBase64: copy.headerBase64,
+    proofVersion: copy.proofVersion ?? PROOF_VERSION,
+    sub: copy.sub,
+  };
+}
+
+/**
+ * One-time move of a plaintext sessionStorage chat key into the encrypted store.
+ * The sessionStorage copy is removed in the same turn, even when IndexedDB already has a key.
+ */
+async function adoptLegacySessionCopy(): Promise<void> {
+  if (typeof window === 'undefined') return;
   const raw = sessionStorage.getItem(CURRENT_KEY);
-  if (!raw) return null;
-  try {
-    const saved = JSON.parse(raw) as Partial<ZkLoginRestoreRecord> & { secretKey?: string };
-    if (!saved.secretKey || !saved.address || !saved.proofPoints || !saved.addressSeed) return null;
-    if (!saved.issBase64Details || !saved.headerBase64 || saved.maxEpoch == null) return null;
-    return {
-      secret: saved.secretKey,
-      record: {
-        address: saved.address,
-        addressSeed: saved.addressSeed,
-        maxEpoch: saved.maxEpoch,
-        proofPoints: saved.proofPoints,
-        issBase64Details: saved.issBase64Details,
-        headerBase64: saved.headerBase64,
-        proofVersion: saved.proofVersion ?? PROOF_VERSION,
-        sub: saved.sub,
-      },
-    };
-  } catch {
-    return null;
-  }
+  if (!raw) return;
+  sessionStorage.removeItem(CURRENT_KEY);
+  const copy = readLegacySessionCopy(raw);
+  if (!copy) return;
+  const existing = await loadZkLoginSigner().catch(() => null);
+  if (existing?.secret) return;
+  await saveZkLoginSigner(copy.secret, legacyCopyToRecord(copy), copy.sub);
 }
 
 /**
@@ -292,14 +306,15 @@ export async function zkLoginPersonalMessageSignature(bytes: Uint8Array): Promis
 }
 
 /**
- * Drop in-memory / sessionStorage zkLogin state only.
- * The IndexedDB proof and account flag stay so the same user can sign back in
- * and reuse the proof without calling the prover.
+ * Drop in-memory zkLogin state and the decrypted key cache.
+ * The encrypted IndexedDB key stays so the same user signs back in as the same chat member.
+ * Pending OAuth state is removed too — call this only when leaving the sign-in attempt.
  */
 export function clearZkLoginSessionMemory(): void {
   current = null;
   pending = null;
   proofGaveUp = false;
+  forgetDecryptedZkLoginSigner();
   if (typeof window !== 'undefined') {
     sessionStorage.removeItem(PENDING_KEY);
     sessionStorage.removeItem(CURRENT_KEY);
@@ -309,8 +324,7 @@ export function clearZkLoginSessionMemory(): void {
 
 /**
  * End the active zkLogin session in this tab.
- * Does **not** delete the persisted proof — logout / OAuth expiry must keep it
- * for re-auth. Only {@link discardUnusableProof} removes IndexedDB (expired/invalid).
+ * Does **not** delete the encrypted chat key. Logout keeps it for the next sign-in.
  */
 export function clearZkLoginSigner(): void {
   clearZkLoginSessionMemory();
@@ -485,19 +499,27 @@ export async function fetchZkLoginSalt(accessToken: string): Promise<string> {
   return body.salt;
 }
 
-function restorePending(): Pending | null {
+async function restorePending(): Promise<Pending | null> {
   if (pending) return pending;
+  if (typeof window === 'undefined') return null;
   const raw = sessionStorage.getItem(PENDING_KEY);
   if (!raw) return null;
-  const saved = JSON.parse(raw) as {
-    secretKey: string;
+  const stripped = stripLegacyPendingSecret(raw);
+  if (stripped.secret) {
+    sessionStorage.setItem(PENDING_KEY, stripped.pending);
+    const existing = await loadZkLoginSigner().catch(() => null);
+    if (!existing?.secret) await saveZkLoginSigner(stripped.secret, null);
+  }
+  const saved = JSON.parse(stripped.pending) as {
     randomness: string;
     maxEpoch: number;
     nonce: string;
     clock?: ChainClock;
   };
+  const stored = await loadZkLoginSigner().catch(() => null);
+  if (!stored?.secret) return null;
   pending = {
-    ephemeral: Ed25519Keypair.fromSecretKey(saved.secretKey),
+    ephemeral: Ed25519Keypair.fromSecretKey(stored.secret),
     randomness: saved.randomness,
     maxEpoch: saved.maxEpoch,
     nonce: saved.nonce,
@@ -508,8 +530,15 @@ function restorePending(): Pending | null {
 
 async function beginZkLogin(): Promise<{ nonce: string; state: string }> {
   proofGaveUp = false;
-  void loadZkLoginSigner();
-  const ephemeral = new Ed25519Keypair();
+  await adoptLegacySessionCopy();
+  const stored = await loadZkLoginSigner().catch(() => null);
+  let ephemeral: Ed25519Keypair;
+  if (!shouldMintMessagingKey(Boolean(stored?.secret))) {
+    ephemeral = Ed25519Keypair.fromSecretKey(stored!.secret);
+  } else {
+    ephemeral = new Ed25519Keypair();
+    await saveZkLoginSigner(ephemeral.getSecretKey(), null);
+  }
   const randomness = generateRandomness();
   const clock = await chainClock();
   const maxEpoch = clock.epoch + horizonEpochs(clock.epochDurationMs, clock.maxEpochDelta);
@@ -518,14 +547,7 @@ async function beginZkLogin(): Promise<{ nonce: string; state: string }> {
   const state = crypto.randomUUID().replace(/-/g, '');
   sessionStorage.setItem(
     PENDING_KEY,
-    JSON.stringify({
-      secretKey: ephemeral.getSecretKey(),
-      randomness,
-      maxEpoch,
-      nonce,
-      state,
-      clock,
-    }),
+    serializePendingLogin({ randomness, maxEpoch, nonce, state, clock }),
   );
   return { nonce, state };
 }
@@ -551,13 +573,13 @@ function proofAcceptable(proof: ZkProof): boolean {
   );
 }
 
-/** Proof is expired or corrupt — wipe IndexedDB so we do not keep a dead signer. */
+/** Proof is expired or corrupt. Drop the proof and keep the messaging secret. */
 async function discardUnusableProof(): Promise<void> {
-  clearZkLoginSessionMemory();
+  current = null;
   if (typeof window !== 'undefined') {
-    localStorage.removeItem(ACCOUNT_FLAG);
+    sessionStorage.removeItem(CURRENT_KEY);
   }
-  await clearPersistedZkLoginSigner();
+  await clearZkLoginProof();
 }
 
 function notifyZkLoginProofExpired(): void {
@@ -569,18 +591,22 @@ async function persistCurrent(sub?: string): Promise<void> {
   if (!current) return;
   persistSessionCache();
   try {
-    await saveZkLoginSigner(current.ephemeral.getSecretKey(), {
-      address: current.address,
-      addressSeed: current.addressSeed,
-      maxEpoch: current.maxEpoch,
-      proofPoints: current.proof.proofPoints,
-      issBase64Details: current.proof.issBase64Details,
-      headerBase64: current.proof.headerBase64,
-      proofVersion: current.proof.proofVersion,
+    await saveZkLoginSigner(
+      current.ephemeral.getSecretKey(),
+      {
+        address: current.address,
+        addressSeed: current.addressSeed,
+        maxEpoch: current.maxEpoch,
+        proofPoints: current.proof.proofPoints,
+        issBase64Details: current.proof.issBase64Details,
+        headerBase64: current.proof.headerBase64,
+        proofVersion: current.proof.proofVersion,
+        sub,
+      },
       sub,
-    });
+    );
   } catch (error) {
-    console.warn('[zkLogin] failed to persist proof to IndexedDB:', error);
+    console.warn('[zkLogin] failed to persist the encrypted chat key:', error);
   }
 }
 
@@ -621,6 +647,19 @@ async function activateLoadedProof(loaded: {
   return 'ok';
 }
 
+async function proofStillUsable(record: ZkLoginRestoreRecord | null): Promise<boolean> {
+  if (!record?.proofPoints || !record.addressSeed || record.maxEpoch == null || !record.headerBase64) return false;
+  const clock = await chainClock().catch(() => null);
+  if (!clock) return false;
+  if (zkLoginProofExpiredOnChain(clock.epoch, record.maxEpoch, clock.maxEpochDelta)) return false;
+  return proofAcceptable({
+    proofPoints: record.proofPoints,
+    issBase64Details: record.issBase64Details,
+    headerBase64: record.headerBase64,
+    proofVersion: record.proofVersion ?? PROOF_VERSION,
+  });
+}
+
 export async function restoreZkLoginSignerStatus(): Promise<ZkLoginRestoreStatus> {
   if (current) {
     const clock = await chainClock().catch(() => null);
@@ -635,34 +674,19 @@ export async function restoreZkLoginSignerStatus(): Promise<ZkLoginRestoreStatus
     }
     return 'ok';
   }
-  // A pending OAuth nonce must not hide a still-valid IndexedDB proof (re-auth reuse).
-  const loaded = (await loadZkLoginSigner().catch(() => null)) ?? readLegacySessionProof();
-  if (!loaded) return 'missing';
-  return activateLoadedProof(loaded);
+  await adoptLegacySessionCopy();
+  const loaded = await loadZkLoginSigner().catch(() => null);
+  if (!loaded?.secret) return 'missing';
+  if (!loaded.record) return 'expired';
+  return activateLoadedProof({ secret: loaded.secret, record: loaded.record });
 }
 
 export async function restoreZkLoginSigner(): Promise<boolean> {
   return (await restoreZkLoginSignerStatus()) === 'ok';
 }
 
-async function reuseStoredProofForSubject(sub: string): Promise<string | null> {
-  const loaded = (await loadZkLoginSigner().catch(() => null)) ?? readLegacySessionProof();
-  // Same OAuth subject only — never hand another account a stored proof.
-  if (!loaded?.record.sub || loaded.record.sub !== sub) return null;
-  if ((await activateLoadedProof(loaded)) !== 'ok') return null;
-  await persistCurrent(sub);
-  return loaded.record.address;
-}
-
-async function reuseStoredProofForAddress(address: string): Promise<boolean> {
-  const loaded = (await loadZkLoginSigner().catch(() => null)) ?? readLegacySessionProof();
-  if (!loaded) return false;
-  if (loaded.record.address.toLowerCase() !== address.toLowerCase()) return false;
-  return (await activateLoadedProof(loaded)) === 'ok';
-}
-
 async function completeZkLogin(input: { jwt: string; accessToken: string }): Promise<string> {
-  const active = restorePending();
+  const active = await restorePending();
   if (!active) throw new Error('zkLogin nonce expired. Sign in again.');
   if (jwtClaims(input.jwt).nonce !== active.nonce) {
     throw new Error('OAuth token nonce does not match zkLogin.');
@@ -671,21 +695,37 @@ async function completeZkLogin(input: { jwt: string; accessToken: string }): Pro
   if (!decoded.sub || !decoded.iss || !decoded.aud) {
     throw new Error('OAuth token is missing zkLogin claims.');
   }
-  const reused = await reuseStoredProofForSubject(decoded.sub);
-  if (reused) {
-    pending = null;
-    sessionStorage.removeItem(PENDING_KEY);
-    persistSessionCache();
-    return reused;
+  const loaded = await loadZkLoginSigner().catch(() => null);
+  if (
+    loaded?.secret &&
+    Ed25519Keypair.fromSecretKey(loaded.secret).toMySoAddress() !== active.ephemeral.toMySoAddress()
+  ) {
+    throw new Error('Sign in again to refresh zkLogin.');
   }
   const salt = await saltFor(input.accessToken, decoded.iss, decoded.aud);
   const addressSeed = genAddressSeed(salt, 'sub', decoded.sub, decoded.aud).toString();
   const address = jwtToAddress(input.jwt, salt, false);
-  if (await reuseStoredProofForAddress(address)) {
-    pending = null;
-    sessionStorage.removeItem(PENDING_KEY);
-    await persistCurrent(decoded.sub);
-    return address;
+  const action = loginIdentityAction(
+    loaded?.secret
+      ? {
+          secret: loaded.secret,
+          sub: loaded.sub ?? loaded.record?.sub,
+          zkAddress: loaded.record?.address,
+          proofUsable: await proofStillUsable(loaded.record),
+        }
+      : null,
+    decoded.sub,
+    address,
+  );
+  if (action === 'account-switch') throw new ZkLoginAccountSwitchError();
+  if (action === 'reuse-proof' && loaded?.record) {
+    const status = await activateLoadedProof({ secret: loaded.secret, record: loaded.record });
+    if (status === 'ok') {
+      pending = null;
+      sessionStorage.removeItem(PENDING_KEY);
+      await persistCurrent(decoded.sub);
+      return loaded.record.address;
+    }
   }
   const proveUrl = PROVER_URL.endsWith('/prove') ? PROVER_URL : `${PROVER_URL.replace(/\/$/, '')}/prove`;
   const prove = await fetch(proveUrl, {
@@ -880,7 +920,12 @@ export async function resumePendingZkLogin(): Promise<{ address: string; keypair
   const accessToken = session.session_access_token || session.access_token;
   if (!session.id_token || !accessToken) return null;
   if (session.user?.address && zkLoginEphemeralKeypair()) return null;
-  return finishZkLogin(session, accessToken);
+  try {
+    return await finishZkLogin(session, accessToken);
+  } catch (err) {
+    if (err instanceof ZkLoginAccountSwitchError) await clearPersistedZkLoginSigner();
+    throw err;
+  }
 }
 
 /**
@@ -888,6 +933,19 @@ export async function resumePendingZkLogin(): Promise<{ address: string; keypair
  * chain nonce, OAuth from the hosted picker, then a proof from the prover.
  */
 export async function signInWithZkLogin(
+  provider: 'google' | 'apple' | 'none' = 'none',
+  options?: { onAuthWindowClosed?: () => void },
+): Promise<{ address: string; keypair: Ed25519Keypair }> {
+  try {
+    return await runZkLoginPopup(provider, options);
+  } catch (err) {
+    if (!(err instanceof ZkLoginAccountSwitchError)) throw err;
+    await clearPersistedZkLoginSigner();
+    return runZkLoginPopup(provider, options);
+  }
+}
+
+async function runZkLoginPopup(
   provider: 'google' | 'apple' | 'none' = 'none',
   options?: { onAuthWindowClosed?: () => void },
 ): Promise<{ address: string; keypair: Ed25519Keypair }> {
@@ -945,19 +1003,10 @@ export async function signInWithZkLogin(
   }
   if (message.type === 'MYSOCIAL_AUTH_ERROR') throw new Error(message.error || 'Sign-in failed.');
   if (message.nonce !== nonce || message.state !== state) throw new Error('Sign-in nonce did not match.');
-  const accessToken = message.session_access_token || message.access_token;
-  if (message.signingKey && accessToken) {
-    options?.onAuthWindowClosed?.();
-    clearZkLoginSigner();
-    storeSession(message, accessToken, message.user?.address);
-    return {
-      address: message.user?.address || '',
-      keypair: Ed25519Keypair.fromSecretKey(message.signingKey),
-    };
-  }
-  if (!message.id_token || !accessToken) throw new Error('Sign-in did not return an OAuth token.');
+  const token = oauthTokenFromAuthResult(message);
+  if (!token) throw new Error('Sign-in did not return an OAuth token.');
   options?.onAuthWindowClosed?.();
-  return finishZkLogin(message, accessToken);
+  return finishZkLogin(message, token.accessToken);
 }
 
 /** Mobile sign-in. The zkLogin nonce is in the OAuth request so the callback can prove. */
@@ -1021,7 +1070,18 @@ export async function completeZkLoginRedirect(): Promise<boolean> {
       },
       accessToken,
     );
+    sessionStorage.removeItem(ACCOUNT_SWITCH_FLAG);
   } catch (err) {
+    if (err instanceof ZkLoginAccountSwitchError) {
+      if (sessionStorage.getItem(ACCOUNT_SWITCH_FLAG) === '1') {
+        sessionStorage.removeItem(ACCOUNT_SWITCH_FLAG);
+        throw err;
+      }
+      sessionStorage.setItem(ACCOUNT_SWITCH_FLAG, '1');
+      await clearPersistedZkLoginSigner();
+      await startZkLoginRedirect('none');
+      return false;
+    }
     console.warn('[zkLogin] proof did not finish; keeping the OAuth session', err);
   }
   return true;

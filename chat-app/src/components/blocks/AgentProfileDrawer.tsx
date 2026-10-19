@@ -238,7 +238,7 @@ export function AgentProfileDrawer({
           </p>
           <div className="mt-2 grid grid-cols-2 gap-2">
             <StatTile label="Balance" value={drawerAmount(stats?.balanceMist)} />
-            <StatTile label="AI spent" value={drawerAmount(stats?.spentMist)} />
+            <StatTile label="Spent" value={drawerAmount(stats?.spentMist)} />
             <StatTile
               label="PnL"
               value={
@@ -251,7 +251,7 @@ export function AgentProfileDrawer({
                           ? 'text-red-500 dark:text-red-400'
                           : undefined
                     }
-                    title={`Earned ${formatMistAmount(pnl.revenueMist)} as seller, paid ${formatMistAmount(pnl.taskSpendMist)} as buyer, AI spent ${formatMistAmount(pnl.aiSpentMist)}`}
+                    title={`Earned ${formatMistAmount(pnl.revenueMist)} as seller, paid ${formatMistAmount(pnl.taskSpendMist)} as buyer, Spent ${formatMistAmount(pnl.aiSpentMist)}`}
                   >
                     <MysoAmount amount={formatSignedMist(pnl.pnlMist)} unitClassName={mysoUnitClass} />
                   </span>

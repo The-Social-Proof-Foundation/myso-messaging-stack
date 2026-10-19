@@ -5,6 +5,7 @@
 import { useState, useEffect, useCallback, useRef, type ReactNode } from 'react';
 import { ChevronLeft } from 'lucide-react';
 import { useRequiredMessagingClient } from '../contexts/MessagingClientContext';
+import { useAuthenticatedAddress } from '../contexts/MySocialAuthContext';
 import { grantMessagingPermission } from '../lib/agents/agent-chat-permissions';
 import { zkLoginChainAddress } from '../lib/zklogin-signin';
 import { signAndExecuteTransactionAndWait } from '../lib/sign-and-wait';
@@ -16,6 +17,8 @@ import {
   type ReportReason,
 } from '../lib/report-conversation';
 import { dmPeerAddress } from '../lib/wallet-profile';
+import { chatHasAnotherHuman } from '../lib/chat-has-another-human';
+import { getSelfAliases } from '../lib/self-aliases';
 import type { Permissions } from '../hooks/usePermissions';
 import { GroupNameSection } from './admin/GroupNameSection';
 import { MemberList } from './admin/MemberList';
@@ -108,6 +111,7 @@ export function AdminPanel({
   onPrefsChanged,
 }: Readonly<AdminPanelProps>) {
   const { client, signer } = useRequiredMessagingClient();
+  const accountAddress = useAuthenticatedAddress();
   const isMobileNav = useIsMobileNav();
 
   const [members, setMembers] = useState<MemberWithPermissions[]>([]);
@@ -526,6 +530,19 @@ export function AdminPanel({
       )
     : undefined;
 
+  const showPresenceSettings =
+    membersLoaded &&
+    chatHasAnotherHuman({
+      memberAddresses: members.map((member) => member.address),
+      selfAddresses: [
+        signer.toMySoAddress(),
+        zkLoginChainAddress(),
+        accountAddress,
+        ...getSelfAliases(accountAddress),
+      ],
+      isAgent: (address) => isAgentAddress?.(address) ?? false,
+    });
+
   async function handleReport(input: { reason: ReportReason; note?: string }) {
     await submitConversationReport(signer, {
       groupId,
@@ -635,6 +652,7 @@ export function AdminPanel({
           notificationsEnabled={notificationsEnabled}
           readReceiptsEnabled={readReceiptsEnabled}
           onlinePresenceEnabled={onlinePresenceEnabled}
+          showPresenceSettings={showPresenceSettings}
           loading={prefsLoading}
           savingKey={prefsSavingKey}
           error={prefsError}

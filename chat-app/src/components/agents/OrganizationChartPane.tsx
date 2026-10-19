@@ -207,7 +207,7 @@ export function OrganizationChartPane({
                       <StatTile label="Actions" value={formatCount(stats.totalActionsExecuted)} />
                       <StatTile label="AI events" value={formatCount(stats.aiCreditUsageEvents)} />
                       <StatTile
-                        label="AI spent"
+                        label="Spent"
                         value={
                           <MysoAmount
                             amount={formatMistAmount(graphqlNumber(stats.aiCreditSpentMist))}
