@@ -1,5 +1,11 @@
 # @socialproof/myso-messaging-stack
 
+## 0.2.0
+
+### Minor Changes
+
+- minor fixes
+
 ## 0.0.2
 
 ### Patch Changes
