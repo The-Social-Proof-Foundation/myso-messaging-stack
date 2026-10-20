@@ -68,10 +68,16 @@ export function ReputationBadge({
               ? `${formatStars(view.asBuyer.scoreMilli)}★ (${formatReviewCount(view.asBuyer.reviewCount)})`
               : 'no reviews'}
           </span>
-          <span className="block">
-            {CONFIDENCE_LABEL[view.level]}
-            {data.credibility ? ` · credibility ${formatCredibility(data.credibility.credibilityBps)}` : ''}
-          </span>
+          {view.level === 'new' ? (
+            data.credibility ? (
+              <span className="block">credibility {formatCredibility(data.credibility.credibilityBps)}</span>
+            ) : null
+          ) : (
+            <span className="block">
+              {CONFIDENCE_LABEL[view.level]}
+              {data.credibility ? ` · credibility ${formatCredibility(data.credibility.credibilityBps)}` : ''}
+            </span>
+          )}
         </span>
       ) : null}
     </span>

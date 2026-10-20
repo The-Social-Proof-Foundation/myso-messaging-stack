@@ -20,6 +20,7 @@ import { dmPeerAddress } from '../lib/wallet-profile';
 import { chatHasAnotherHuman } from '../lib/chat-has-another-human';
 import { getSelfAliases } from '../lib/self-aliases';
 import type { Permissions } from '../hooks/usePermissions';
+import { OrganizationRow } from './agents/OrganizationRow';
 import { GroupNameSection } from './admin/GroupNameSection';
 import { MemberList } from './admin/MemberList';
 import { AddMemberDialog } from './admin/AddMemberDialog';
@@ -82,6 +83,9 @@ interface AdminPanelProps {
   labelFor?: (address: string) => string;
   ringFor?: (address: string) => WalletRingBits;
   isAgentAddress?: (address: string) => boolean;
+  /** Organization this room belongs to, shown above members. */
+  organization?: { name: string; detail: string } | null;
+  onOpenOrganization?: () => void;
   /** Fired after a successful prefs PUT so the open thread can sync receiptMode. */
   onPrefsChanged?: (prefs: {
     notificationsEnabled: boolean;
@@ -108,6 +112,8 @@ export function AdminPanel({
   labelFor,
   ringFor,
   isAgentAddress,
+  organization = null,
+  onOpenOrganization,
   onPrefsChanged,
 }: Readonly<AdminPanelProps>) {
   const { client, signer } = useRequiredMessagingClient();
@@ -609,6 +615,25 @@ export function AdminPanel({
             onRename={handleRename}
           />
         )}
+
+        {organization && onOpenOrganization ? (
+          <section className="border-b border-secondary-100 p-4 dark:border-secondary-700">
+            <h4 className="font-chakra mb-2 text-left text-sm font-medium capitalize tracking-wide text-secondary-500 dark:text-secondary-400">
+              Organization
+            </h4>
+            <div className="overflow-hidden rounded-xl border border-secondary-200 bg-secondary-100 dark:border-secondary-700 dark:bg-secondary-800">
+              <OrganizationRow
+                inset
+                name={organization.name}
+                detail={organization.detail}
+                onClick={() => {
+                  onClose();
+                  onOpenOrganization();
+                }}
+              />
+            </div>
+          </section>
+        ) : null}
 
         <MemberList
           members={members}

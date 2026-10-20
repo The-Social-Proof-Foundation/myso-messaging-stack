@@ -13,8 +13,13 @@ type HoldSignOutButtonProps = {
   holdDuration?: number;
   text?: string;
   holdText?: string;
-  icon?: ReactNode;
+  /** Pass `null` to show the label alone. */
+  icon?: ReactNode | null;
   className?: string;
+  contentClassName?: string;
+  disabled?: boolean;
+  /** While holding, paint the button with the accent color. Turn off when the button already has its own fill. */
+  accentOnHold?: boolean;
   /** Fill color for the hold progress bar (mysocial: `bg-[var(--destructive-foreground)]`). */
   progressBarClassName?: string;
 };
@@ -30,6 +35,9 @@ export function HoldSignOutButton({
   holdText = 'Keep holding...',
   icon = <LogOut className="mx-2 h-4 w-4 shrink-0" />,
   className = '',
+  contentClassName = '',
+  disabled = false,
+  accentOnHold = true,
   progressBarClassName = 'bg-[var(--destructive-foreground)]',
 }: Readonly<HoldSignOutButtonProps>) {
   const [isHolding, setIsHolding] = useState(false);
@@ -46,6 +54,7 @@ export function HoldSignOutButton({
     e: MouseEvent<HTMLButtonElement> | TouchEvent<HTMLButtonElement>,
   ) => {
     e.stopPropagation();
+    if (disabled) return;
     actionFiredRef.current = false;
     holdingRef.current = true;
     setIsHolding(true);
@@ -73,8 +82,9 @@ export function HoldSignOutButton({
     <button
       ref={buttonRef}
       type="button"
-      className={`relative w-full touch-none overflow-hidden ${className}`}
-      style={isHolding ? { backgroundColor: 'var(--accent)' } : undefined}
+      disabled={disabled}
+      className={`relative w-full touch-none overflow-hidden disabled:opacity-50 ${className}`}
+      style={isHolding && accentOnHold ? { backgroundColor: 'var(--accent)' } : undefined}
       onMouseDown={handleHoldStart}
       onMouseUp={handleHoldEnd}
       onMouseLeave={handleHoldEnd}
@@ -93,7 +103,7 @@ export function HoldSignOutButton({
           transitionDuration: isHolding ? `${holdDuration}ms` : '100ms',
         }}
       />
-      <span className="relative z-10 flex w-full select-none items-center gap-2">
+      <span className={`relative z-10 flex w-full select-none items-center gap-2 ${contentClassName}`}>
         {icon}
         <span>{isHolding ? holdText : text}</span>
       </span>

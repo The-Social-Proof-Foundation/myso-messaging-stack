@@ -97,6 +97,9 @@ interface ChatAreaProps {
   ) => ReactNode;
   /** Agent-chat creator addresses, so foreign agents still get an orb. */
   agentCreatorActors?: readonly (string | null | undefined)[];
+  /** Organization this room belongs to, shown above members in the info panel. */
+  organization?: { name: string; detail: string } | null;
+  onOpenOrganization?: () => void;
 }
 
 /** Case-insensitive MySo address compare (0x-prefixed hex). */
@@ -159,6 +162,8 @@ export function ChatArea({
   devAgentPanel,
   roomVerifier,
   agentCreatorActors,
+  organization,
+  onOpenOrganization,
 }: Readonly<ChatAreaProps>) {
   if (!selectedGroup) {
     return (
@@ -216,6 +221,8 @@ export function ChatArea({
       devAgentPanel={devAgentPanel}
       roomVerifier={roomVerifier}
       agentCreatorActors={agentCreatorActors}
+      organization={organization}
+      onOpenOrganization={onOpenOrganization}
     />
   );
 }
@@ -379,6 +386,8 @@ function ChatView({
   devAgentPanel,
   roomVerifier,
   agentCreatorActors = [],
+  organization = null,
+  onOpenOrganization,
 }: Readonly<{
   group: StoredGroup;
   onLeaveGroup?: () => void;
@@ -394,6 +403,8 @@ function ChatView({
     helpers: { labelFor: (address: string) => string; onSelectMessage: (messageId: string) => void },
   ) => ReactNode;
   agentCreatorActors?: readonly (string | null | undefined)[];
+  organization?: { name: string; detail: string } | null;
+  onOpenOrganization?: () => void;
 }>) {
   const { client, signer } = useRequiredMessagingClient();
   const myAddress = signer.toMySoAddress();
@@ -1488,6 +1499,8 @@ function ChatView({
         labelFor={memberLabelFor}
         ringFor={ringFor}
         isAgentAddress={agentAddress}
+        organization={organization}
+        onOpenOrganization={onOpenOrganization}
         onPrefsChanged={({ receiptMode: next }) => {
           setReceiptModeOverride(next);
         }}

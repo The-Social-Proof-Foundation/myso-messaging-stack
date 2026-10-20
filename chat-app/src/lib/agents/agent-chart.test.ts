@@ -51,6 +51,7 @@ describe('agentForestToChart', () => {
     expect(chart[0]?.depth).toBe(0);
     expect(chart[0]?.children?.[0]?.depth).toBe(1);
     expect(chart[0]?.children?.[0]?.parentName).toBe('Research lead');
+    expect(chart[0]?.children?.[0]?.parentAddress).toBe(chart[0]?.fullAddress);
     expect(chart[0]?.children?.[0]?.children?.[0]?.name).toBe('leaf');
     expect(chart[0]?.children?.[0]?.children?.[0]?.depth).toBe(2);
     expect(chart[1]?.children).toBeUndefined();

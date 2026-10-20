@@ -22,7 +22,8 @@ export {
   useProfileAuditLogs,
   useProfileSpendApprovals,
 } from './useEnterpriseReads';
-export {useAgentRooms, useGroupDigests} from './useAgentRooms';
+export {useAgentRooms, useGroupDigests, useOrganizationRooms} from './useAgentRooms';
+export {useAgentChatsForAgent} from './useAgentChats';
 export {
   useAgentReceipts,
   useAgentReputation,

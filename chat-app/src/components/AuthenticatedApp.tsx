@@ -2,6 +2,7 @@ import { useRecordSignerAddress } from '../hooks/useSelfAddresses';
 import {useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import {useLocation, useNavigate} from 'react-router-dom';
 
+import {IosPushStack} from './IosPushStack';
 import {Sidebar} from './Sidebar';
 import {ChatArea} from './ChatArea';
 import {CreateGroupModal} from './CreateGroupModal';
@@ -44,6 +45,7 @@ import {
   updateChatProgress,
 } from '../lib/agents/chat-progress';
 import {classifyAgentChatError} from '../lib/agents/format-agent-chat-error';
+import {agentCountLabel} from '../lib/agents/profile-graphql';
 import {AGENT_CHAT_STAGE_LABEL} from '../hooks/agents/useAgentChatActions';
 
 interface AuthenticatedAppProps {
@@ -51,6 +53,12 @@ interface AuthenticatedAppProps {
 }
 
 type ListView = 'chats' | 'agents' | 'rooms';
+
+const LIST_LEVEL: Record<ListView, number> = {
+  chats: 0,
+  agents: 1,
+  rooms: 2,
+};
 
 export function AuthenticatedApp({
   isUsingDevMessengerSigner,
@@ -107,6 +115,8 @@ export function AuthenticatedApp({
   const [listView, setListView] = useState<ListView>(() =>
     restoredOrganizationId() ? 'agents' : 'chats',
   );
+  /** Organization whose rooms are showing. Null is the principal-wide rooms list. */
+  const [roomsOrganizationId, setRoomsOrganizationId] = useState<string | null>(null);
   const [selectedOrganizationId, setSelectedOrganizationId] = useState<string | null>(
     restoredOrganizationId,
   );
@@ -157,6 +167,15 @@ export function AuthenticatedApp({
       setSelectedAgentObjectId(null);
     },
     [address],
+  );
+
+  const openOrganizationRooms = useCallback(
+    (organizationId: string) => {
+      setRoomsOrganizationId(organizationId);
+      setListView('rooms');
+      selectOrganization(organizationId);
+    },
+    [selectOrganization],
   );
 
   // Show the create flow's current step on the Chat button that started it.
@@ -238,6 +257,7 @@ export function AuthenticatedApp({
   useEffect(() => {
     const params = new URLSearchParams(location.search);
     if (params.get('view') === 'rooms') {
+      setRoomsOrganizationId(null);
       setListView('rooms');
       params.delete('view');
       const nextRooms = params.toString();
@@ -259,7 +279,13 @@ export function AuthenticatedApp({
 
   // `/agents` → "Chat" hands the agent over through router state.
   useEffect(() => {
-    const state = location.state as { openAgentObjectId?: string } | null;
+    const state = location.state as { openAgentObjectId?: string; openGroupKey?: string } | null;
+    if (state?.openGroupKey) {
+      setListView('chats');
+      selectGroup(state.openGroupKey);
+      navigate(location.pathname, { replace: true, state: null });
+      return;
+    }
     const requested = state?.openAgentObjectId;
     if (!requested) return;
     setSelectedAgentObjectId(requested);
@@ -267,12 +293,17 @@ export function AuthenticatedApp({
     setSelectedGroupKey(address, null);
     setSelectedUuid(null);
     navigate(location.pathname, { replace: true, state: null });
-  }, [location.state, location.pathname, navigate, address]);
+  }, [location.state, location.pathname, navigate, address, selectGroup]);
 
   const isMobileNav = useIsMobileNav();
   const { setHideAppHeader } = useMobileChatNav();
+  // Organization rooms are a sidebar stack. On a phone, keep that list on screen
+  // until a room (or another thread) is actually open.
+  const mobileRoomsList =
+    isMobileNav && listView === 'rooms' && !selectedUuid && !selectedAgentRow;
   const mobileChatOpen =
     isMobileNav &&
+    !mobileRoomsList &&
     (Boolean(selectedUuid) || Boolean(selectedAgentRow) || Boolean(selectedOrganizationId));
 
   // Hide AppHeader only while a mobile chat thread is open.
@@ -322,6 +353,22 @@ export function AuthenticatedApp({
     groups.find(
       (g) => g.uuid === selectedUuid || g.groupId === selectedUuid,
     ) ?? null;
+
+  const roomOrganization = useMemo(() => {
+    if (!selectedGroup) return null;
+    const organizationId = chatIndex.refs.find(
+      (ref) => ref.groupId === selectedGroup.groupId,
+    )?.organizationId;
+    if (!organizationId) return null;
+    const org = profileOverview.data?.organizations.find(
+      (row) => row.organizationId.toLowerCase() === organizationId.toLowerCase(),
+    );
+    return {
+      id: organizationId,
+      name: org?.name?.trim() || 'Untitled',
+      detail: agentCountLabel(org?.statistics?.totalAgents, org?.statistics?.totalAgents),
+    };
+  }, [selectedGroup, chatIndex.refs, profileOverview.data]);
 
   // One user-feed socket per wallet drives sidebar badges, cross-device
   // read-state sync, and group discovery. Polling remains as reconciliation.
@@ -398,37 +445,54 @@ export function AuthenticatedApp({
               isMobileNav ? undefined : { width: CHAT_LIST_WIDTH_PX }
             }
           >
-            {listView === 'rooms' ? (
-              <RoomsPanel
-                selectedGroupId={selectedGroup?.groupId ?? null}
-                onBack={() => setListView('chats')}
-                onSelectRoom={(room) => void openRoom(room)}
-                onNewRoom={() => setShowNewRoom(true)}
-              />
-            ) : listView === 'agents' ? (
-              <AgentListView
-                selectedOrganizationId={selectedOrganizationId}
-                onBack={() => setListView('chats')}
-                onSelectOrganization={selectOrganization}
-                onNewOrganization={() => setShowNewOrganization(true)}
-              />
-            ) : (
-              <Sidebar
-                groups={sortedGroups}
-                selectedUuid={selectedUuid}
-                unreadCounts={activity.counts}
-                latestOrders={activity.latestOrders}
-                paidDmGroupIds={paidDmGroupIds}
-                onSelectGroup={selectGroup}
-                loading={discoveryLoading}
-                agentCreatorActors={agentCreatorActors}
-              />
-            )}
+            <IosPushStack
+              view={listView}
+              level={LIST_LEVEL[listView]}
+              render={(view) =>
+                view === 'rooms' ? (
+                  <RoomsPanel
+                    selectedGroupId={selectedGroup?.groupId ?? null}
+                    organizationId={roomsOrganizationId}
+                    backLabel={roomsOrganizationId ? 'Organizations' : 'Chats'}
+                    onBack={() => {
+                      if (roomsOrganizationId) {
+                        setListView('agents');
+                        if (isMobileNav) setSelectedOrganizationId(null);
+                        return;
+                      }
+                      setListView('chats');
+                    }}
+                    onSelectRoom={(room) => void openRoom(room)}
+                    onNewRoom={() => setShowNewRoom(true)}
+                  />
+                ) : view === 'agents' ? (
+                  <AgentListView
+                    selectedOrganizationId={selectedOrganizationId}
+                    onBack={() => setListView('chats')}
+                    onSelectOrganization={openOrganizationRooms}
+                    onNewOrganization={() => setShowNewOrganization(true)}
+                  />
+                ) : (
+                  <Sidebar
+                    groups={sortedGroups}
+                    selectedUuid={selectedUuid}
+                    unreadCounts={activity.counts}
+                    latestOrders={activity.latestOrders}
+                    paidDmGroupIds={paidDmGroupIds}
+                    onSelectGroup={selectGroup}
+                    loading={discoveryLoading}
+                    agentCreatorActors={agentCreatorActors}
+                  />
+                )
+              }
+            />
           </div>
         </div>
         <div
           className={
-            isMobileNav && !selectedUuid && !selectedAgentRow && !selectedOrganizationId
+            isMobileNav &&
+            (mobileRoomsList ||
+              (!selectedUuid && !selectedAgentRow && !selectedOrganizationId))
               ? 'hidden md:flex md:min-w-0 md:flex-1 md:flex-col'
               : 'flex min-h-0 min-w-0 flex-1 flex-col'
           }
@@ -438,6 +502,10 @@ export function AuthenticatedApp({
               organizationId={selectedOrganizationId}
               onCreateAgent={() => setShowNewAgent(true)}
               onChat={(agent) => void startAgentChat(agent)}
+              onOpenChat={(uuid) => {
+                setListView('chats');
+                selectGroup(uuid);
+              }}
               onMobileBack={isMobileNav ? () => setSelectedOrganizationId(null) : undefined}
             />
           ) : !selectedGroup && selectedAgentRow ? (
@@ -465,6 +533,12 @@ export function AuthenticatedApp({
                 isMobileNav ? () => selectGroup(null) : undefined
               }
               agentCreatorActors={agentCreatorActors}
+              organization={roomOrganization}
+              onOpenOrganization={
+                roomOrganization
+                  ? () => openOrganizationRooms(roomOrganization.id)
+                  : undefined
+              }
               roomVerifier={
                 selectedGroup &&
                 chatIndex.refs.some((ref) => ref.groupId === selectedGroup.groupId)

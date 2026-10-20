@@ -5,6 +5,7 @@ import {
   threadSafetyActions,
   type ReportReason,
 } from '../../lib/report-conversation';
+import { HoldSignOutButton } from '../HoldSignOutButton';
 
 const REPORT_REASON_LABELS: Record<ReportReason, string> = {
   spam: 'Spam',
@@ -44,16 +45,13 @@ export function GroupActionsSection({
   onReport,
   onBlock,
 }: Readonly<GroupActionsSectionProps>) {
-  const [showArchiveConfirm, setShowArchiveConfirm] = useState(false);
   const [archiving, setArchiving] = useState(false);
-  const [showLeaveConfirm, setShowLeaveConfirm] = useState(false);
   const [showReport, setShowReport] = useState(false);
   const [reason, setReason] = useState<ReportReason>('spam');
   const [note, setNote] = useState('');
   const [reporting, setReporting] = useState(false);
   const [reportError, setReportError] = useState<string | null>(null);
   const [reportSent, setReportSent] = useState(false);
-  const [showBlockConfirm, setShowBlockConfirm] = useState(false);
   const [blocking, setBlocking] = useState(false);
   const [blockError, setBlockError] = useState<string | null>(null);
 
@@ -64,7 +62,6 @@ export function GroupActionsSection({
     setArchiving(true);
     try {
       await onArchive();
-      setShowArchiveConfirm(false);
     } finally {
       setArchiving(false);
     }
@@ -73,7 +70,6 @@ export function GroupActionsSection({
   async function handleLeave() {
     try {
       await onLeave();
-      setShowLeaveConfirm(false);
     } catch {
       // Parent surfaces leaveError
     }
@@ -102,7 +98,6 @@ export function GroupActionsSection({
     setBlockError(null);
     try {
       await onBlock();
-      setShowBlockConfirm(false);
     } catch (err) {
       setBlockError(err instanceof Error ? err.message : 'Failed to block this person.');
     } finally {
@@ -126,41 +121,18 @@ export function GroupActionsSection({
         </button>
       )}
 
-      {canArchive &&
-        (showArchiveConfirm ? (
-          <div className="mb-2 rounded-lg border border-danger-300 p-3 dark:border-danger-700">
-            <p className="mb-2 text-xs text-danger-600 dark:text-danger-400">
-              This action is permanent. The group will be paused and no new
-              messages can be sent.
-            </p>
-            <div className="flex gap-2">
-              <button
-                type="button"
-                onClick={() => setShowArchiveConfirm(false)}
-                disabled={archiving}
-                className="flex-1 rounded py-1 text-xs text-secondary-500 hover:bg-secondary-100 disabled:opacity-50 dark:text-secondary-400 dark:hover:bg-secondary-700"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={handleArchive}
-                disabled={archiving}
-                className="flex-1 rounded bg-danger-500 py-1 text-xs font-medium text-white hover:bg-danger-600 disabled:opacity-50"
-              >
-                {archiving ? 'Archiving...' : 'Confirm Archive'}
-              </button>
-            </div>
-          </div>
-        ) : (
-          <button
-            type="button"
-            onClick={() => setShowArchiveConfirm(true)}
-            className="mb-2 w-full rounded-lg bg-[#E6E3EA] py-2 text-xs font-medium text-[#2D2D32] hover:bg-[#DDD9E4] active:bg-[#D2CDD9] dark:bg-[#3D3A45] dark:text-white dark:hover:bg-[#494653] dark:active:bg-[#34313B]"
-          >
-            Archive Group
-          </button>
-        ))}
+      {canArchive && (
+        <HoldSignOutButton
+          text={archiving ? 'Archiving...' : 'Archive Group'}
+          icon={null}
+          disabled={archiving}
+          accentOnHold={false}
+          contentClassName="justify-center"
+          className="mb-2 rounded-lg bg-[#E6E3EA] py-2 text-xs font-medium text-[#2D2D32] hover:bg-[#DDD9E4] active:bg-[#D2CDD9] dark:bg-[#3D3A45] dark:text-white dark:hover:bg-[#494653] dark:active:bg-[#34313B]"
+          progressBarClassName="bg-black/15 dark:bg-white/25"
+          onConfirm={() => void handleArchive()}
+        />
+      )}
 
       {safety?.report &&
         (showReport ? (
@@ -237,78 +209,31 @@ export function GroupActionsSection({
           </button>
         ))}
 
-      {safety?.block &&
-        (showBlockConfirm ? (
-          <div className="mb-2 rounded-lg border border-danger-300 p-3 dark:border-danger-700">
-            <p className="mb-2 text-xs text-danger-600 dark:text-danger-400">
-              Block this person? They will not be able to message you, and you
-              will leave this chat.
-            </p>
-            <div className="flex gap-2">
-              <button
-                type="button"
-                onClick={() => setShowBlockConfirm(false)}
-                disabled={blocking}
-                className="flex-1 rounded py-1 text-xs text-secondary-500 hover:bg-secondary-100 disabled:opacity-50 dark:text-secondary-400 dark:hover:bg-secondary-700"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={() => void handleBlock()}
-                disabled={blocking}
-                className="flex-1 rounded bg-danger-500 py-1 text-xs font-medium text-white hover:bg-danger-600 disabled:opacity-50"
-              >
-                {blocking ? 'Blocking...' : 'Confirm Block'}
-              </button>
-            </div>
-          </div>
-        ) : (
-          <button
-            type="button"
-            onClick={() => setShowBlockConfirm(true)}
-            disabled={blocking}
-            className="mb-2 w-full rounded-lg bg-[#C97A7A] py-2 text-xs font-medium text-white hover:bg-[#D58787] active:bg-[#B96C6C] disabled:opacity-50 dark:bg-[#9A5C5C] dark:hover:bg-[#A96969] dark:active:bg-[#875050]"
-          >
-            Block
-          </button>
-        ))}
+      {safety?.block && (
+        <HoldSignOutButton
+          text={blocking ? 'Blocking...' : 'Block'}
+          icon={null}
+          disabled={blocking}
+          accentOnHold={false}
+          contentClassName="justify-center"
+          className="mb-2 rounded-lg bg-[#C97A7A] py-2 text-xs font-medium text-white hover:bg-[#D58787] active:bg-[#B96C6C] dark:bg-[#9A5C5C] dark:hover:bg-[#A96969] dark:active:bg-[#875050]"
+          progressBarClassName="bg-black/15 dark:bg-white/25"
+          onConfirm={() => void handleBlock()}
+        />
+      )}
 
-      {safety?.leave &&
-        (showLeaveConfirm ? (
-          <div className="rounded-lg border border-danger-300 p-3 dark:border-danger-700">
-            <p className="mb-2 text-xs text-danger-600 dark:text-danger-400">
-              Leave this group? You will no longer receive messages here.
-            </p>
-            <div className="flex gap-2">
-              <button
-                type="button"
-                onClick={() => setShowLeaveConfirm(false)}
-                disabled={leaving}
-                className="flex-1 rounded py-1 text-xs text-secondary-500 hover:bg-secondary-100 disabled:opacity-50 dark:text-secondary-400 dark:hover:bg-secondary-700"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={() => void handleLeave()}
-                disabled={leaving}
-                className="flex-1 rounded bg-danger-500 py-1 text-xs font-medium text-white hover:bg-danger-600 disabled:opacity-50"
-              >
-                {leaving ? 'Leaving...' : 'Confirm Leave'}
-              </button>
-            </div>
-          </div>
-        ) : (
-          <button
-            type="button"
-            onClick={() => setShowLeaveConfirm(true)}
-            disabled={leaving}
-            className="w-full rounded-lg bg-[#C97A7A] py-2 text-xs font-medium text-white hover:bg-[#D58787] active:bg-[#B96C6C] disabled:opacity-50 dark:bg-[#9A5C5C] dark:hover:bg-[#A96969] dark:active:bg-[#875050]"
-          >
-            Leave Group
-          </button>
-        ))}
+      {safety?.leave && (
+        <HoldSignOutButton
+          text={leaving ? 'Leaving...' : 'Leave Group'}
+          icon={null}
+          disabled={leaving}
+          accentOnHold={false}
+          contentClassName="justify-center"
+          className="rounded-lg bg-[#C97A7A] py-2 text-xs font-medium text-white hover:bg-[#D58787] active:bg-[#B96C6C] dark:bg-[#9A5C5C] dark:hover:bg-[#A96969] dark:active:bg-[#875050]"
+          progressBarClassName="bg-black/15 dark:bg-white/25"
+          onConfirm={() => void handleLeave()}
+        />
+      )}
 
       {(actionError || leaveError || blockError) && (
         <p className="mt-2 text-xs text-danger-500 dark:text-danger-400">

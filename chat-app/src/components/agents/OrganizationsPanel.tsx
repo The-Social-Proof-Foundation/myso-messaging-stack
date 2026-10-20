@@ -1,4 +1,5 @@
 import {Children, useEffect, useMemo, useState, type ReactNode} from 'react';
+import {useNavigate} from 'react-router-dom';
 import {ORG_PERM_MEMORY_READ, ORG_PERM_MEMORY_WRITE} from '@socialproof/memory/account';
 
 import {buttonClass, cardClass, fieldClass, sectionTitleClass} from './chrome';
@@ -126,6 +127,7 @@ export function OrganizationsPanel() {
 }
 
 function OrganizationDetail({organizationId}: Readonly<{organizationId: string}>) {
+  const navigate = useNavigate();
   const account = useMemoryAccount();
   const org = useOrganization(organizationId);
   const agents = useAllSubAgents();
@@ -316,6 +318,7 @@ function OrganizationDetail({organizationId}: Readonly<{organizationId: string}>
           roots={chartRoots}
           organizationId={organizationId}
           onAgentCreated={() => void agents.refetch()}
+          onOpenChat={(uuid) => navigate('/', {state: {openGroupKey: uuid}})}
         />
       )}
       {!agents.complete && !agents.isLoading && !agents.isError ? (

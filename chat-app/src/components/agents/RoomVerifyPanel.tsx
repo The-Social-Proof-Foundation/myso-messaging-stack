@@ -76,7 +76,7 @@ export function RoomVerifyPanel({
   return (
     <section className="border-b border-secondary-100 p-4 dark:border-secondary-700">
       <h4 className="font-chakra mb-2 text-sm font-medium capitalize tracking-wide text-secondary-500 dark:text-secondary-400">
-        Verified messages ({digests.isInitialLoading ? '…' : summary.total})
+        Verified messages ({digests.isInitialLoading && rows.length === 0 ? '…' : summary.total})
         {summary.failed > 0 && (
           <span className="ml-2 text-danger-500 dark:text-danger-400">{summary.failed} failed</span>
         )}

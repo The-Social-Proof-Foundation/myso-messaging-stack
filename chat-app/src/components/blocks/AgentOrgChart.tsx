@@ -29,6 +29,7 @@ interface AgentOrgChartProps {
   actions?: ReactNode;
   details?: ReactNode;
   onChat?: (agent: AgentChartNode) => void;
+  onOpenChat?: (groupUuid: string) => void;
   /** Replaces the built-in empty state (the inline create card). */
   emptyState?: ReactNode;
   /** Called after the inline create card registers an agent. */
@@ -70,6 +71,7 @@ export function AgentOrgChart({
   actions,
   details,
   onChat,
+  onOpenChat,
   emptyState,
   onAgentCreated,
 }: Readonly<AgentOrgChartProps>) {
@@ -321,6 +323,11 @@ export function AgentOrgChart({
                 organizationId={organizationId}
                 onClose={() => setDrawerOpen(false)}
                 onChat={onChat ? () => onChat(selected) : undefined}
+                onOpenChat={onOpenChat}
+                onOpenAgent={(agentId) => {
+                  const next = agents.find((item) => item.id === agentId);
+                  if (next) selectAgent(next);
+                }}
               />
             </div>
           </div>

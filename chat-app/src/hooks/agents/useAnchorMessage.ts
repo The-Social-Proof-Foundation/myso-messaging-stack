@@ -6,9 +6,10 @@ import {useQueryClient} from '@tanstack/react-query';
 import {useAgentVault} from '../../contexts/AgentKeyVaultContext';
 import {useMessagingClient} from '../../contexts/MessagingClientContext';
 import {useMySocialAuth} from '../../contexts/MySocialAuthContext';
-import {anchorDedupeKey, anchorNonce, anchorUri, contentDigestV2} from '../../lib/agents/anchor';
+import {anchorDedupeKey, anchorNonce, anchorUri, contentDigestV2, expectedDigestHex} from '../../lib/agents/anchor';
 import {hasCapability} from '../../lib/agents/capabilities';
 import {executeAsAgent} from '../../lib/agents/execute';
+import {rememberAnchoredDigest} from '../../lib/agents/pending-digests';
 import {anchorAgentMessageTx} from '../../lib/agents/tx';
 import {agentKeys} from './query-keys';
 import {useAgentChatPlatform} from './useAgentChatPlatform';
@@ -65,6 +66,7 @@ export function useAnchorMessage(
       const derived = await vault.getAgent(agent);
       vault.assertCurrent(epoch);
 
+      const contentUri = anchorUri(groupUuid, message.messageId);
       const messaging = client.messaging;
       const tx = anchorAgentMessageTx(messaging.packageConfig, {
         groupId: messaging.derive.groupId({uuid: groupUuid}),
@@ -73,7 +75,7 @@ export function useAnchorMessage(
         memoryAccountId: agent.account_id,
         recipient,
         contentDigest: contentDigestV2(message.text, groupUuid, message.messageId),
-        contentUri: anchorUri(groupUuid, message.messageId),
+        contentUri,
         dedupeKey: anchorDedupeKey(groupUuid, message.messageId),
         nonce: anchorNonce(),
       });
@@ -84,6 +86,20 @@ export function useAnchorMessage(
         tx,
         derived.signal,
       );
+      rememberAnchoredDigest({
+        groupId,
+        seq: 0,
+        sender: agent.derived_address,
+        recipient,
+        contentDigest: expectedDigestHex(message.text, {
+          version: 2,
+          groupUuid,
+          messageId: message.messageId,
+        }),
+        contentUri,
+        createdAtMs: Date.now(),
+        transactionId: digest,
+      });
       for (const delay of REFETCH_DELAYS_MS) {
         window.setTimeout(
           () => void queryClient.invalidateQueries({queryKey: agentKeys.groupDigests(groupId)}),

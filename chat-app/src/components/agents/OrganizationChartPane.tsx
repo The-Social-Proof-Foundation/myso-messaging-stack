@@ -4,6 +4,7 @@ import {ChevronLeft, Ellipsis} from 'lucide-react';
 
 import {AgentOrgChart} from '../blocks/AgentOrgChart';
 import {Button} from '../Button';
+import {OrganizationToolsDialog, type OrgTool} from './OrganizationToolsDialog';
 import {ListError} from './ListStates';
 import {agentForestToChart} from '../../lib/agents/agent-chart';
 import {buildAgentTree} from '../../lib/agents/agent-tree';
@@ -23,11 +24,13 @@ import {useProfileOverview} from '../../hooks/agents/useProfileOverview';
 import {MysoAmount} from './MysoAmount';
 import {formatMistAmount} from '../../lib/agents/format';
 import {StatTile, mysoUnitClass} from './StatTile';
+import {HoldSignOutButton} from '../HoldSignOutButton';
 
 interface OrganizationChartPaneProps {
   organizationId: string;
   onCreateAgent: () => void;
   onChat: (agent: SubAgentRow) => void;
+  onOpenChat?: (groupUuid: string) => void;
   onMobileBack?: () => void;
 }
 
@@ -51,6 +54,7 @@ export function OrganizationChartPane({
   organizationId,
   onCreateAgent,
   onChat,
+  onOpenChat,
   onMobileBack,
 }: Readonly<OrganizationChartPaneProps>) {
   const overview = useProfileOverview();
@@ -61,6 +65,7 @@ export function OrganizationChartPane({
   const agents = useAllSubAgents();
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [orgTool, setOrgTool] = useState<OrgTool | null>(null);
 
   const graphqlOrg: ProfileOrganization | undefined = overview.data?.organizations.find((org) =>
     sameId(org.organizationId, organizationId),
@@ -132,6 +137,24 @@ export function OrganizationChartPane({
                       sideOffset={6}
                       className="z-50 min-w-52 overflow-hidden rounded-lg border border-secondary-200 bg-white p-1 shadow-lg dark:border-secondary-700 dark:bg-secondary-900"
                     >
+                      {(
+                        [
+                          ['people', 'People'],
+                          ['roles', 'Roles'],
+                          ['invitations', 'Invitations'],
+                          ['approvals', 'Spend approvals'],
+                          ['spend', 'Agent spend'],
+                          ['audit', 'Audit log'],
+                        ] as const
+                      ).map(([id, label]) => (
+                        <DropdownMenu.Item
+                          key={id}
+                          className={moreItemClass}
+                          onSelect={() => setOrgTool(id)}
+                        >
+                          {label}
+                        </DropdownMenu.Item>
+                      ))}
                       <DropdownMenu.Item
                         disabled={Boolean(busy) || Boolean(groupId) || !account.data}
                         className={moreItemClass}
@@ -153,18 +176,27 @@ export function OrganizationChartPane({
                       </DropdownMenu.Item>
                       {active && account.data ? (
                         <DropdownMenu.Item
-                          disabled={Boolean(busy)}
-                          className={`${moreItemClass} text-danger-600 focus:text-danger-600 dark:text-danger-400 dark:focus:text-danger-400`}
-                          onSelect={() => {
-                            void run('deact', () =>
-                              actions.deactivateOrganization({
-                                accountId: account.data!.account_id,
-                                organizationId,
-                              }),
-                            );
+                          asChild
+                          onSelect={(event) => {
+                            event.preventDefault();
                           }}
                         >
-                          {busy === 'deact' ? 'Deactivating…' : 'Deactivate'}
+                          <div className="p-0">
+                            <HoldSignOutButton
+                              text={busy === 'deact' ? 'Deactivating…' : 'Deactivate'}
+                              icon={null}
+                              disabled={Boolean(busy)}
+                              className="cursor-pointer rounded-md border-none bg-transparent px-3 py-2 text-left text-sm text-danger-600 outline-none hover:bg-secondary-50 dark:text-danger-400 dark:hover:bg-secondary-800"
+                              onConfirm={() => {
+                                void run('deact', () =>
+                                  actions.deactivateOrganization({
+                                    accountId: account.data!.account_id,
+                                    organizationId,
+                                  }),
+                                );
+                              }}
+                            />
+                          </div>
                         </DropdownMenu.Item>
                       ) : null}
                     </DropdownMenu.Content>
@@ -233,9 +265,17 @@ export function OrganizationChartPane({
               const match = orgAgents.find((agent) => sameId(agent.agent_object_id, node.id));
               if (match) onChat(match);
             }}
+            onOpenChat={onOpenChat}
           />
         )}
       </div>
+      {orgTool ? (
+        <OrganizationToolsDialog
+          tool={orgTool}
+          organizationId={organizationId}
+          onClose={() => setOrgTool(null)}
+        />
+      ) : null}
     </div>
   );
 }

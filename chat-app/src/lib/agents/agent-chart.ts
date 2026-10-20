@@ -31,6 +31,8 @@ export interface AgentChartNode {
   parentId?: string;
   parentName?: string;
   parentRole?: string;
+  /** Derived address of the agent this one reports to. Drives that agent's avatar. */
+  parentAddress?: string;
   /** 0 is the organization root. Each child is one deeper. */
   depth: number;
   children?: AgentChartNode[];
@@ -83,7 +85,7 @@ function descendantCount(node: AgentTreeNode): number {
 
 function toChartNode(
   node: AgentTreeNode,
-  parent?: {id: string; name: string; role: string},
+  parent?: {id: string; name: string; role: string; address: string},
   depth = 0,
 ): AgentChartNode {
   const agent = node.agent;
@@ -101,13 +103,18 @@ function toChartNode(
     parentId: parent?.id,
     parentName: parent?.name,
     parentRole: parent?.role,
+    parentAddress: parent?.address,
     depth,
   };
 
   const team = teammates(node);
   if (team.length > 0) {
     chart.children = team.map((child) =>
-      toChartNode(child, {id: chart.id, name: chart.name, role: chart.role}, depth + 1),
+      toChartNode(
+        child,
+        {id: chart.id, name: chart.name, role: chart.role, address: chart.fullAddress},
+        depth + 1,
+      ),
     );
   }
 

@@ -1,5 +1,5 @@
 import {useMemo} from 'react';
-import {ChevronLeft, ChevronRight, Plus} from 'lucide-react';
+import {ChevronLeft, Plus} from 'lucide-react';
 
 import {agentCountLabel, graphqlNumber, type ProfileOrganization} from '../../lib/agents/profile-graphql';
 import {useNewKeys} from '../../hooks/useNewKeys';
@@ -7,6 +7,7 @@ import {useProfileOverview} from '../../hooks/agents/useProfileOverview';
 import {Button} from '../Button';
 import {sidebarShellClass} from '../SidebarShell';
 import {ListError} from './ListStates';
+import {OrganizationRow} from './OrganizationRow';
 
 interface AgentListViewProps {
   selectedOrganizationId: string | null;
@@ -51,6 +52,11 @@ export function AgentListView({
 
   return (
     <aside className={sidebarShellClass}>
+      <div className="shrink-0 border-b border-secondary-200 py-1.5 dark:border-secondary-700">
+        <p className="text-center text-[11px] font-medium tracking-wide text-secondary-900 dark:text-white">
+          Agents & Organizations
+        </p>
+      </div>
       <div className="flex shrink-0 items-center gap-1 border-b border-secondary-200 px-2 py-2 dark:border-secondary-700">
         <button
           type="button"
@@ -102,29 +108,12 @@ export function AgentListView({
                   freshOrganizations.has(org.organizationId.toLowerCase()) ? 'created-row-in' : ''
                 }`}
               >
-                <button
-                  type="button"
+                <OrganizationRow
+                  name={org.name?.trim() || 'Untitled'}
+                  detail={agentCountLabel(org.statistics?.totalAgents, org.statistics?.totalAgents)}
+                  selected={selected}
                   onClick={() => onSelectOrganization(org.organizationId)}
-                  className={`flex w-full items-center gap-2 px-4 py-3 text-left transition-colors ${
-                    selected
-                      ? 'bg-secondary-100 dark:bg-secondary-800'
-                      : 'hover:bg-secondary-50 dark:hover:bg-secondary-700/50'
-                  }`}
-                >
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-sm font-medium text-secondary-900 dark:text-secondary-50">
-                      {org.name?.trim() || 'Untitled'}
-                    </span>
-                    <span className="mt-0.5 block truncate text-xs text-secondary-500 dark:text-secondary-400">
-                      {agentCountLabel(org.statistics?.totalAgents, org.statistics?.totalAgents)}
-                    </span>
-                  </span>
-                  <ChevronRight
-                    className="h-4 w-4 shrink-0 text-secondary-400 dark:text-secondary-500"
-                    strokeWidth={2}
-                    aria-hidden
-                  />
-                </button>
+                />
               </li>
             );
           })}

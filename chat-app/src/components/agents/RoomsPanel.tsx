@@ -1,31 +1,85 @@
+import {useCallback, useMemo} from 'react';
 import {ChevronLeft, ChevronRight, Plus} from 'lucide-react';
 
 import type {AgentRoomInfo} from '../../lib/agents/social-api';
 import {roomKindLabel, roomTaskLink, roomTitle} from '../../lib/agents/rooms';
 import {truncateAddress} from '../../lib/agents/format';
-import {useAgentRooms} from '../../hooks/agents';
+import {isKnownAgentAddress, knownAgentAddressSet} from '../../lib/agents/agent-display-name';
+import {useAgentRooms, useOrganizationRooms} from '../../hooks/agents';
+import {useAgentNamesByAddress} from '../../hooks/agents/useSubAgents';
+import {useAuthenticatedAddress} from '../../contexts/MySocialAuthContext';
+import {useMessagingMemberAddress} from '../../contexts/MessagingClientContext';
+import {useSidebarGroupMembers} from '../../hooks/useSidebarGroupMembers';
+import {useWalletAvatarMap} from '../../hooks/useWalletAvatarMap';
 import {Button} from '../Button';
+import {ConversationAvatar} from '../ConversationAvatar';
 import {sidebarShellClass} from '../SidebarShell';
 import {ListError, LoadMoreRow} from './ListStates';
 
 interface RoomsPanelProps {
   selectedGroupId: string | null;
   onBack: () => void;
+  /** Label on the back control. Organization rooms return to the org list. */
+  backLabel?: string;
+  /** When set, the list is this organization's rooms instead of every room. */
+  organizationId?: string | null;
   onSelectRoom: (room: AgentRoomInfo) => void;
   onNewRoom: () => void;
 }
 
-/** Rooms sidebar: one row per agent room created by the signed-in principal's agents. */
+/** Rooms sidebar: one row per room, either for one organization or for the signed-in principal. */
+function roomFaces(members: readonly string[] | undefined, creatorActor: string): string[] {
+  if (members && members.length > 0) return [...members];
+  return creatorActor ? [creatorActor] : [];
+}
+
 export function RoomsPanel({
   selectedGroupId,
   onBack,
+  backLabel = 'Chats',
+  organizationId = null,
   onSelectRoom,
   onNewRoom,
 }: Readonly<RoomsPanelProps>) {
-  const rooms = useAgentRooms();
+  const principalRooms = useAgentRooms({enabled: !organizationId});
+  const organizationRooms = useOrganizationRooms(organizationId);
+  const rooms = organizationId ? organizationRooms : principalRooms;
+  const address = useAuthenticatedAddress();
+  const messagingAddress = useMessagingMemberAddress();
+  const selfAddresses = useMemo(() => [messagingAddress, address], [messagingAddress, address]);
+  const groupIds = useMemo(() => rooms.rooms.map((room) => room.groupId), [rooms.rooms]);
+  const membersByGroup = useSidebarGroupMembers(groupIds);
+  const profileAddresses = useMemo(() => {
+    const addrs = new Set<string>();
+    for (const members of membersByGroup.values()) {
+      for (const member of members) {
+        if (selfAddresses.some((self) => self && member.toLowerCase() === self.toLowerCase())) continue;
+        addrs.add(member);
+      }
+    }
+    for (const room of rooms.rooms) {
+      if (room.creatorActor) addrs.add(room.creatorActor);
+    }
+    return [...addrs];
+  }, [membersByGroup, rooms.rooms, selfAddresses]);
+  const profiles = useWalletAvatarMap(profileAddresses);
+  const agentNames = useAgentNamesByAddress();
+  const knownAgents = useMemo(
+    () => knownAgentAddressSet([...agentNames.keys()], rooms.rooms.map((room) => room.creatorActor)),
+    [agentNames, rooms.rooms],
+  );
+  const isAgentAddress = useCallback(
+    (member: string) => isKnownAgentAddress(member, knownAgents),
+    [knownAgents],
+  );
 
   return (
     <aside className={sidebarShellClass}>
+      <div className="shrink-0 border-b border-secondary-200 py-1.5 dark:border-secondary-700">
+        <p className="text-center text-[11px] font-medium tracking-wide text-secondary-900 dark:text-white">
+          Rooms
+        </p>
+      </div>
       <div className="flex shrink-0 items-center gap-1 border-b border-secondary-200 px-2 py-2 dark:border-secondary-700">
         <button
           type="button"
@@ -33,7 +87,7 @@ export function RoomsPanel({
           className="inline-flex items-center gap-1 rounded-md px-2 py-1.5 text-sm text-secondary-600 transition-colors hover:bg-secondary-100 dark:text-secondary-300 dark:hover:bg-secondary-700"
         >
           <ChevronLeft className="h-4 w-4" strokeWidth={2} aria-hidden />
-          Chats
+          {backLabel}
         </button>
         <span className="min-w-0 flex-1" />
         <Button
@@ -73,27 +127,35 @@ export function RoomsPanel({
                   onClick={() => onSelectRoom(room)}
                   disabled={!room.groupUuid}
                   title={room.groupUuid ? undefined : 'Room not indexed yet'}
-                  className={`flex w-full items-center gap-2 px-4 py-3 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
+                  className={`w-full py-3 pl-[13px] pr-2 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
                     selected
-                      ? 'bg-secondary-100 dark:bg-secondary-800'
-                      : 'hover:bg-secondary-50 dark:hover:bg-secondary-700/50'
+                      ? 'bg-bubble-sent/10 text-secondary-900 dark:bg-secondary-700 dark:text-secondary-50'
+                      : 'text-secondary-700 hover:bg-secondary-50 dark:text-secondary-300 dark:hover:bg-secondary-700/50'
                   }`}
                 >
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-sm font-medium text-secondary-900 dark:text-secondary-50">
-                      {roomTitle(room)}
+                  <div className="flex items-center gap-2.5">
+                    <ConversationAvatar
+                      memberAddresses={roomFaces(membersByGroup.get(room.groupId), room.creatorActor)}
+                      selfAddress={selfAddresses}
+                      profiles={profiles}
+                      isAgentAddress={isAgentAddress}
+                    />
+                    <span className="min-w-0 flex-1 pt-px">
+                      <span className="block translate-y-px truncate text-sm font-medium leading-tight text-secondary-900 dark:text-secondary-50">
+                        {roomTitle(room)}
+                      </span>
+                      <span className="mt-0.5 block truncate text-xs font-medium leading-snug tracking-tight text-secondary-400 dark:text-secondary-500">
+                        {roomKindLabel(room.roomKind)}
+                        {task ? ` · task ${truncateAddress(task)}` : ''}
+                        {room.groupUuid ? '' : ' · not indexed yet'}
+                      </span>
                     </span>
-                    <span className="mt-0.5 block truncate text-xs text-secondary-500 dark:text-secondary-400">
-                      {roomKindLabel(room.roomKind)}
-                      {task ? ` · task ${truncateAddress(task)}` : ''}
-                      {room.groupUuid ? '' : ' · not indexed yet'}
-                    </span>
-                  </span>
-                  <ChevronRight
-                    className="h-4 w-4 shrink-0 text-secondary-400 dark:text-secondary-500"
-                    strokeWidth={2}
-                    aria-hidden
-                  />
+                    <ChevronRight
+                      className="h-4 w-4 shrink-0 text-secondary-400 dark:text-secondary-500"
+                      strokeWidth={2}
+                      aria-hidden
+                    />
+                  </div>
                 </button>
               </li>
             );

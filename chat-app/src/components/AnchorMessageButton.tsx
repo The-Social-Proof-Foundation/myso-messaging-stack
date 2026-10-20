@@ -42,7 +42,7 @@ export function AnchorMessageButton({anchored, onAnchor}: Readonly<AnchorMessage
         Copied
       </span>
     ) : (
-      <div className="w-56 space-y-2.5">
+      <div className="w-64 space-y-2.5">
         <div className="flex items-center justify-between gap-3">
           <span className="flex items-center gap-1.5 font-medium text-emerald-300">
             <CheckCircle2 className="h-3.5 w-3.5" aria-hidden />
@@ -54,16 +54,22 @@ export function AnchorMessageButton({anchored, onAnchor}: Readonly<AnchorMessage
         </div>
         <dl className="space-y-2">
           <div>
-            <dt className="text-[10.5px] uppercase tracking-wide text-secondary-400">Digest</dt>
+            <dt className="text-[10.5px] uppercase tracking-wide text-secondary-400">Message hash</dt>
             <dd className="mt-0.5 font-mono text-[11.5px] tracking-tight text-secondary-100">
               {abbreviate(anchored.contentDigest)}
             </dd>
+            <p className="mt-0.5 text-[10.5px] leading-snug text-secondary-400">
+              Fingerprint of this message. It proves the text was not changed.
+            </p>
           </div>
           <div>
-            <dt className="text-[10.5px] uppercase tracking-wide text-secondary-400">Transaction</dt>
+            <dt className="text-[10.5px] uppercase tracking-wide text-secondary-400">Chain transaction</dt>
             <dd className="mt-0.5 font-mono text-[11.5px] tracking-tight text-secondary-100">
               {abbreviate(anchored.transactionId)}
             </dd>
+            <p className="mt-0.5 text-[10.5px] leading-snug text-secondary-400">
+              The record that published that hash. Click the shield to copy it.
+            </p>
           </div>
         </dl>
       </div>

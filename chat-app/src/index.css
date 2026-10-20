@@ -505,7 +505,60 @@
 
 @media (prefers-reduced-motion: reduce) {
   .created-in,
-  .created-row-in {
+  .created-row-in,
+  .ios-push-over,
+  .ios-push-under,
+  .ios-pop-over,
+  .ios-pop-under,
+  .ios-dim-in,
+  .ios-dim-out {
     animation: none;
   }
+}
+
+/* iOS navigation push: incoming screen from the right, the one underneath drifts left. */
+@keyframes ios-push-in {
+  from { transform: translate3d(100%, 0, 0); }
+  to { transform: translate3d(0, 0, 0); }
+}
+@keyframes ios-push-under {
+  from { transform: translate3d(0, 0, 0); }
+  to { transform: translate3d(-28%, 0, 0); }
+}
+@keyframes ios-pop-out {
+  from { transform: translate3d(0, 0, 0); }
+  to { transform: translate3d(100%, 0, 0); }
+}
+@keyframes ios-pop-under {
+  from { transform: translate3d(-28%, 0, 0); }
+  to { transform: translate3d(0, 0, 0); }
+}
+@keyframes ios-dim-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes ios-dim-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+
+.ios-push-over {
+  animation: ios-push-in 220ms cubic-bezier(0.32, 0.72, 0, 1) both;
+  box-shadow: -10px 0 22px rgb(0 0 0 / 0.18);
+}
+.ios-push-under {
+  animation: ios-push-under 220ms cubic-bezier(0.32, 0.72, 0, 1) both;
+}
+.ios-pop-over {
+  animation: ios-pop-out 220ms cubic-bezier(0.32, 0.72, 0, 1) both;
+  box-shadow: -10px 0 22px rgb(0 0 0 / 0.18);
+}
+.ios-pop-under {
+  animation: ios-pop-under 220ms cubic-bezier(0.32, 0.72, 0, 1) both;
+}
+.ios-dim-in {
+  animation: ios-dim-in 220ms cubic-bezier(0.32, 0.72, 0, 1) both;
+}
+.ios-dim-out {
+  animation: ios-dim-out 220ms cubic-bezier(0.32, 0.72, 0, 1) both;
 }
