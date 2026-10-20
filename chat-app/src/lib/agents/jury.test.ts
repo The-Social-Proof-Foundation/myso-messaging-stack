@@ -1,6 +1,6 @@
 import {describe, expect, it} from 'vitest';
 
-import {CAP_JURY, hasJuryCapability, isSuspended, sortDuties} from './jury';
+import {CAP_JURY, hasJuryCapability, isSuspended, rosterHealthLine, sortDuties} from './jury';
 import type {JurorAssignmentInfo} from './social-api';
 
 function duty(over: Partial<JurorAssignmentInfo>): JurorAssignmentInfo {
@@ -52,5 +52,16 @@ describe('duty order', () => {
     const rows = [duty({caseId: '0xb', deadlineMs: 5}), duty({caseId: '0xa', deadlineMs: 5})];
     expect(sortDuties(rows).map((r) => r.caseId)).toEqual(['0xa', '0xb']);
     expect(rows[0]!.caseId).toBe('0xb');
+  });
+});
+
+describe('rosterHealthLine', () => {
+  it('counts owners, not agents, against the floor', () => {
+    const thin = rosterHealthLine({active: 12, suspended: 0, eligibleOwners: 3, minimum: 5});
+    expect(thin.thin).toBe(true);
+    expect(thin.text).toBe('3 independent owners eligible (5 needed): juries may be unavailable and proposals wait up to 30 days.');
+    const ok = rosterHealthLine({active: 1, suspended: 0, eligibleOwners: 1, minimum: 1});
+    expect(ok.thin).toBe(false);
+    expect(ok.text).toBe('1 independent owner eligible (1 needed) across 1 active juror.');
   });
 });

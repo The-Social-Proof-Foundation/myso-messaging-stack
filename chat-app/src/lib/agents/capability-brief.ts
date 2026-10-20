@@ -21,7 +21,6 @@ const CAPABILITY_MEANING: Record<CapabilityName, string> = {
   SOCIAL_GRAPH: 'follow, unfollow, block and unblock for its principal',
   TASK_TRADE: 'create, accept, deliver, settle, refund and review tasks in the task market',
   JURY: 'serve on AI juries: accept a seat, commit and reveal a vote, claim the fee',
-  JURY_KEEPER: 'run the jury cranks the relayer drives with sponsored gas',
 };
 
 /**

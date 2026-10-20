@@ -7,17 +7,16 @@ import {agentKeys} from '../../hooks/agents/query-keys';
 import {useAutomationDelegates, useCreateAutomationJob} from '../../hooks/agents/useAutomationJobs';
 import {delegateKeyRef} from '../../lib/agents/automation-delegate';
 import {
-  JURY_KEEPER_CRANK_LABELS,
+  JURY_CRANK_KINDS,
+  JURY_CRANK_LABELS,
   JUROR_AUTOMATION_LABELS,
   JobFormError,
-  KEEPER_CRANK_KINDS,
   MIN_WEBHOOK_SECRET,
+  buildCrankJobInput,
   buildJurorJobInput,
-  buildKeeperJobInput,
   requiredJurorActions,
-  requiredKeeperAction,
   type JurorAutomationChoice,
-  type KeeperCrank,
+  type JuryCrank,
 } from '../../lib/agents/automation-job';
 
 type JurorKind = JurorAutomationChoice['kind'];
@@ -26,41 +25,39 @@ const labelClass = 'flex flex-col gap-1 text-xs text-secondary-500';
 
 /**
  * Jury automation: let a juror agent take its seats, judge and vote, and collect its fee, and let
- * a keeper run the cranks that keep every case moving, all without anyone at the keyboard.
+ * the crank operator run the cranks that keep every case moving, all without anyone at the keyboard.
  *
- * Jobs sign as a juror or jury keeper delegate. Those delegates spend nothing and expire on their
- * own, so the worst a leaked key can do is vote or crank as itself until it is revoked.
+ * Juror jobs sign as a juror delegate, which spends nothing and expires on its own. Crank jobs sign
+ * with the operator's crank key; the relayer accepts them only from the crank operator's account.
  */
 export function JurorAutomationForm({agent}: Readonly<{agent: SubAgentRow}>) {
   const queryClient = useQueryClient();
   const {create, accountId, enabled} = useCreateAutomationJob(agent);
   const {query: delegates} = useAutomationDelegates(agent);
   const jurors = (delegates.data ?? []).filter((row) => row.delegate_class === 'juror');
-  const keepers = (delegates.data ?? []).filter((row) => row.delegate_class === 'jury_keeper');
 
   const [name, setName] = useState('');
-  const [role, setRole] = useState<'juror' | 'keeper'>('juror');
+  const [role, setRole] = useState<'juror' | 'operator'>('juror');
   const [delegate, setDelegate] = useState('');
   const [kind, setKind] = useState<JurorKind>('accept_duty');
-  const [crank, setCrank] = useState<KeeperCrank>('select_due');
+  const [crank, setCrank] = useState<JuryCrank>('select_due');
   const [webhookUrl, setWebhookUrl] = useState('');
   const [webhookSecret, setWebhookSecret] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState<string | null>(null);
 
-  const pool = role === 'juror' ? jurors : keepers;
-  const chosen = pool.find((row) => row.delegate_ref === delegate) ?? pool[0];
+  const chosen = jurors.find((row) => row.delegate_ref === delegate) ?? jurors[0];
 
   async function submit() {
-    if (!chosen) return;
+    if (role === 'juror' && !chosen) return;
     setError(null);
     setDone(null);
     setBusy(true);
     try {
-      const registered = chosen.allowed_action_ids ?? [];
       let input;
-      if (role === 'juror') {
+      if (role === 'juror' && chosen) {
+        const registered = chosen.allowed_action_ids ?? [];
         const picked: JurorAutomationChoice =
           kind === 'judge' ? {kind, webhookUrl, webhookSecret} : {kind};
         const missing = requiredJurorActions(picked).filter((id) => !registered.includes(id));
@@ -74,16 +71,7 @@ export function JurorAutomationForm({agent}: Readonly<{agent: SubAgentRow}>) {
           delegateKeyRef: delegateKeyRef(chosen.delegate_ref),
         });
       } else {
-        const needed = requiredKeeperAction(crank);
-        if (!registered.includes(needed)) {
-          throw new JobFormError(`"${chosen.delegate_ref}" is not registered to run ${needed}.`);
-        }
-        input = buildKeeperJobInput({
-          name,
-          crank,
-          targetAgentObjectId: agent.agent_object_id,
-          delegateKeyRef: delegateKeyRef(chosen.delegate_ref),
-        });
+        input = buildCrankJobInput({name, crank, targetAgentObjectId: agent.agent_object_id});
       }
       await create(input);
       setDone(`"${name.trim()}" is on. It acts the next time a matching jury event arrives.`);
@@ -95,18 +83,6 @@ export function JurorAutomationForm({agent}: Readonly<{agent: SubAgentRow}>) {
     } finally {
       setBusy(false);
     }
-  }
-
-  if (jurors.length === 0 && keepers.length === 0) {
-    return (
-      <div className="border-t border-secondary-100 px-4 py-4 dark:border-secondary-800">
-        <h3 className="text-sm font-medium text-secondary-800 dark:text-secondary-100">Jury automation</h3>
-        <p className="mt-1 text-xs text-secondary-500">
-          Create a <strong>juror</strong> or <strong>jury keeper</strong> delegate below first. Jury
-          jobs sign as one; both spend nothing and expire on their own.
-        </p>
-      </div>
-    );
   }
 
   return (
@@ -128,28 +104,39 @@ export function JurorAutomationForm({agent}: Readonly<{agent: SubAgentRow}>) {
             className={fieldClass}
             value={role}
             onChange={(e) => {
-              setRole(e.target.value as 'juror' | 'keeper');
+              setRole(e.target.value as 'juror' | 'operator');
               setDelegate('');
             }}
           >
             <option value="juror" disabled={jurors.length === 0}>
               juror
             </option>
-            <option value="keeper" disabled={keepers.length === 0}>
-              jury keeper
-            </option>
+            <option value="operator">crank operator</option>
           </select>
         </label>
-        <label className={labelClass}>
-          Runs as
-          <select className={fieldClass} value={chosen?.delegate_ref ?? ''} onChange={(e) => setDelegate(e.target.value)}>
-            {pool.map((row) => (
-              <option key={row.delegate_ref} value={row.delegate_ref}>
-                {row.delegate_ref}
-              </option>
-            ))}
-          </select>
-        </label>
+        {role === 'juror' ? (
+          <label className={labelClass}>
+            Runs as
+            <select className={fieldClass} value={chosen?.delegate_ref ?? ''} onChange={(e) => setDelegate(e.target.value)}>
+              {jurors.map((row) => (
+                <option key={row.delegate_ref} value={row.delegate_ref}>
+                  {row.delegate_ref}
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : (
+          <p className="self-end text-xs text-secondary-500">
+            Signs with the platform's crank key. Only the crank operator's account may turn this on;
+            anyone else can run the same cranks from the public feed with their own wallet.
+          </p>
+        )}
+
+        {role === 'juror' && jurors.length === 0 ? (
+          <p className="text-xs text-secondary-500 sm:col-span-2">
+            Create a <strong>juror</strong> delegate below first. It spends nothing and expires on its own.
+          </p>
+        ) : null}
 
         {role === 'juror' ? (
           <label className={labelClass}>
@@ -165,10 +152,10 @@ export function JurorAutomationForm({agent}: Readonly<{agent: SubAgentRow}>) {
         ) : (
           <label className={labelClass}>
             Crank
-            <select className={fieldClass} value={crank} onChange={(e) => setCrank(e.target.value as KeeperCrank)}>
-              {KEEPER_CRANK_KINDS.map((value) => (
+            <select className={fieldClass} value={crank} onChange={(e) => setCrank(e.target.value as JuryCrank)}>
+              {JURY_CRANK_KINDS.map((value) => (
                 <option key={value} value={value}>
-                  {JURY_KEEPER_CRANK_LABELS[value]}
+                  {JURY_CRANK_LABELS[value]}
                 </option>
               ))}
             </select>
@@ -195,7 +182,7 @@ export function JurorAutomationForm({agent}: Readonly<{agent: SubAgentRow}>) {
       </div>
 
       <div className="mt-3 flex items-center gap-3">
-        <button type="button" className={buttonClass} disabled={!enabled || busy || !chosen} onClick={() => void submit()}>
+        <button type="button" className={buttonClass} disabled={!enabled || busy || (role === 'juror' && !chosen)} onClick={() => void submit()}>
           {busy ? 'Saving…' : 'Turn on'}
         </button>
         {done ? <p className="text-xs text-emerald-600 dark:text-emerald-400">{done}</p> : null}

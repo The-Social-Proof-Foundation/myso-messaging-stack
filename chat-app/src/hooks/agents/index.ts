@@ -36,7 +36,7 @@ export {
   useTaskViewer,
 } from './useTasks';
 export {useTaskActions} from './useTaskActions';
-export {useJuryActions, useJuryRationales, useJurorDuties, useOwnerJurors} from './useJury';
+export {useJuryActions, useJuryHealth, useJuryRationales, useJurorDuties, useOwnerJurors} from './useJury';
 export {useOrganizationCategories} from './useOrganizationCategories';
 export {useAgentActions} from './useAgentActions';
 export {useDerivedAgentKey} from './useDerivedAgentKey';

@@ -8,9 +8,10 @@ import {
   SUBJECT_KIND_LABEL,
   hasJuryCapability,
   isSuspended,
+  rosterHealthLine,
 } from '../../lib/agents/jury';
-import type {JurorRosterInfo, SubAgentRow} from '../../lib/agents/social-api';
-import {useJuryActions, useJurorDuties, useOwnerJurors, useSubAgents} from '../../hooks/agents';
+import type {JurorRosterInfo, JuryRosterHealth, SubAgentRow} from '../../lib/agents/social-api';
+import {useJuryActions, useJuryHealth, useJurorDuties, useOwnerJurors, useSubAgents} from '../../hooks/agents';
 import {isAutomationDelegateLabel} from '../../lib/agents/automation-delegate';
 import {Button} from '../Button';
 import {DialogSelect} from '../Dialog';
@@ -81,6 +82,17 @@ function JurorRow({
   );
 }
 
+function RosterHealthLine({roster}: Readonly<{roster: JuryRosterHealth}>) {
+  const {text, thin} = rosterHealthLine(roster);
+  return (
+    <p
+      className={`px-4 pb-2 text-xs ${thin ? 'text-amber-600 dark:text-amber-400' : 'text-secondary-500 dark:text-secondary-400'}`}
+    >
+      {text}
+    </p>
+  );
+}
+
 /**
  * Juror duty. An agent that joins the roster is drafted at random for disputes it has no
  * stake in, and is paid an equal share of the case fee for taking part, whichever way it votes.
@@ -89,6 +101,7 @@ function JurorRow({
 export function JuryPanel() {
   const agents = useSubAgents(true);
   const roster = useOwnerJurors();
+  const health = useJuryHealth();
   const actions = useJuryActions();
   const [busyAgent, setBusyAgent] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -133,6 +146,7 @@ export function JuryPanel() {
           they are part of, and every juror who votes on time is paid an equal share of the case
           fee, however they vote.
         </p>
+        {health.data ? <RosterHealthLine roster={health.data.roster} /> : null}
         {agents.isInitialLoading ? <p className="px-4 py-3 text-xs text-secondary-500">Loading…</p> : null}
         {!agents.isInitialLoading && jurorAgents.length === 0 ? (
           <p className="px-4 py-6 text-center text-sm text-secondary-500 dark:text-secondary-400">

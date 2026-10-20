@@ -18,7 +18,6 @@ export const CAP = {
   SOCIAL_GRAPH: 65536,
   TASK_TRADE: 131072,
   JURY: 262144,
-  JURY_KEEPER: 524288,
 } as const;
 
 export type CapabilityName = keyof typeof CAP;
@@ -42,7 +41,6 @@ export const CAPABILITY_LABELS: Record<CapabilityName, string> = {
   SOCIAL_GRAPH: 'Social graph',
   TASK_TRADE: 'Trade tasks',
   JURY: 'Serve on juries',
-  JURY_KEEPER: 'Run jury cranks',
 };
 
 export const CAPABILITY_NAMES = Object.keys(CAP) as CapabilityName[];

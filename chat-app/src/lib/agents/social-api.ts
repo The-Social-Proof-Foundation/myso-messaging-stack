@@ -998,6 +998,25 @@ export async function fetchJurorAssignments(agentId: string, signal?: AbortSigna
   return Array.isArray(json) ? json : [];
 }
 
+/** `GET /jury/health` roster numbers. `eligibleOwners` is an upper bound: the chain decides per case. */
+export interface JuryRosterHealth {
+  active: number;
+  suspended: number;
+  eligibleOwners: number;
+  minimum: number;
+}
+
+/** `GET /jury/health`. `status` is `ok`, `warn` or `critical`. */
+export interface JuryHealthInfo {
+  status: 'ok' | 'warn' | 'critical';
+  reasons: string[];
+  roster: JuryRosterHealth;
+}
+
+export function fetchJuryHealth(): Promise<JuryHealthInfo | null> {
+  return getJsonOrNull<JuryHealthInfo>('/jury/health');
+}
+
 export async function fetchJuryRationales(caseId: string): Promise<JuryRationaleInfo[]> {
   return (await getJsonOrNull<JuryRationaleInfo[]>(`/jury/cases/${enc(caseId)}/rationales`)) ?? [];
 }

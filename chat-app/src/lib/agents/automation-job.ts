@@ -394,8 +394,8 @@ export function buildTaskJobInput(args: {
 // ============================================================
 // Jury automation
 //
-// A juror's jobs sign as a `juror` delegate and a keeper's as a `jury_keeper` delegate; both are
-// zero-spend and expire on their own. Taking a seat and claiming the fee are registered actions the
+// A juror's jobs sign as a `juror` delegate, which is zero-spend and expires on its own. The cranks
+// are permissionless and sign with the crank operator's key (`operator:jury`), not a delegate. Taking a seat and claiming the fee are registered actions the
 // engine runs straight away. The vote itself is a judgment, so it goes to the owner's runner as a
 // webhook: the runner answers the engine's reminders with `commit_vote`, and later `reveal_vote`,
 // and the engine signs them as the delegate. A vote is never a registered action.
@@ -487,8 +487,8 @@ export function buildJurorJobInput(args: {
   };
 }
 
-/** One crank a keeper can be set to run whenever the chain says it is due. */
-export type KeeperCrank =
+/** One crank the operator can be set to run whenever the chain says it is due. */
+export type JuryCrank =
   | 'select_due'
   | 'replace_due'
   | 'round_finalize_due'
@@ -502,9 +502,10 @@ export type KeeperCrank =
   | 'apply_ready'
   | 'roster_refresh_due'
   | 'evict_due'
-  | 'sweep_due';
+  | 'sweep_due'
+  | 'vote_refund_sweep_due';
 
-export const JURY_KEEPER_CRANK_LABELS: Record<KeeperCrank, string> = {
+export const JURY_CRANK_LABELS: Record<JuryCrank, string> = {
   select_due: 'Draw a jury once evidence closes',
   replace_due: 'Replace jurors who did not accept in time',
   round_finalize_due: 'Close a voting round when it ends',
@@ -519,6 +520,7 @@ export const JURY_KEEPER_CRANK_LABELS: Record<KeeperCrank, string> = {
   roster_refresh_due: "Refresh a juror's eligibility snapshot",
   evict_due: 'Remove a juror who can no longer serve',
   sweep_due: "Return a closed governance case's unclaimed juror fees",
+  vote_refund_sweep_due: 'Return unclaimed vote refunds to the treasury',
 };
 
 const CASE_ID = '{{event.payload.case_id}}';
@@ -535,7 +537,7 @@ const PROPOSAL = {
   platformId: '{{event.payload.platform_id}}',
 };
 
-const KEEPER_CRANKS: Record<KeeperCrank, {action: string; params: Record<string, unknown>}> = {
+const JURY_CRANKS: Record<JuryCrank, {action: string; params: Record<string, unknown>}> = {
   select_due: {action: 'jury.select_jury.v1', params: {caseId: CASE_ID}},
   replace_due: {action: 'jury.replace_no_shows.v1', params: {caseId: CASE_ID}},
   round_finalize_due: {action: 'jury.finalize_round.v1', params: {caseId: CASE_ID}},
@@ -565,37 +567,38 @@ const KEEPER_CRANKS: Record<KeeperCrank, {action: string; params: Record<string,
   },
   evict_due: {action: 'jury.evict_ineligible.v1', params: {agentId: '{{event.payload.agent_id}}'}},
   sweep_due: {action: 'jury.sweep_case.v1', params: {caseId: CASE_ID}},
+  vote_refund_sweep_due: {action: 'jury.sweep_vote_refunds.v1', params: PROPOSAL},
 };
 
-export const KEEPER_CRANK_KINDS = Object.keys(KEEPER_CRANKS) as KeeperCrank[];
+export const JURY_CRANK_KINDS = Object.keys(JURY_CRANKS) as JuryCrank[];
 
-/** The keeper action a crank runs; a delegate must be registered for it. */
-export function requiredKeeperAction(crank: KeeperCrank): string {
-  return KEEPER_CRANKS[crank].action;
+/** The bridge's crank signer. The relayer accepts it only from the platform's crank operator account. */
+export const OPERATOR_KEY_REF = 'operator:jury';
+
+/** The action a crank runs. */
+export function crankAction(crank: JuryCrank): string {
+  return JURY_CRANKS[crank].action;
 }
 
 /**
- * The job that runs one crank. Keeper events are addressed to the keeper's own account, so the
+ * The job that runs one crank. Crank events are addressed to the operator's own account, so the
  * trigger carries no agent filter: the job cannot, and need not, narrow it further.
  */
-export function buildKeeperJobInput(args: {
+export function buildCrankJobInput(args: {
   name: string;
-  crank: KeeperCrank;
+  crank: JuryCrank;
   targetAgentObjectId: string;
-  /** `delegate:<name>` of a `jury_keeper` delegate. */
-  delegateKeyRef: string;
 }): CreateJobInput {
   const name = args.name.trim();
   if (!name) throw new JobFormError('Give the job a name.');
   if (name.length > MAX_JOB_NAME) throw new JobFormError(`Keep the name under ${MAX_JOB_NAME} characters.`);
-  if (!args.delegateKeyRef) throw new JobFormError('Choose a jury keeper delegate to run this job as.');
-  const template = KEEPER_CRANKS[args.crank];
-  if (!template) throw new JobFormError('Pick which crank the keeper should run.');
+  const template = JURY_CRANKS[args.crank];
+  if (!template) throw new JobFormError('Pick which crank to run.');
   return {
     name,
     trigger_set: eventTrigger(args.crank, undefined, 'jury'),
     target_agent_object_id: args.targetAgentObjectId,
-    target_agent_key_ref: args.delegateKeyRef,
+    target_agent_key_ref: OPERATOR_KEY_REF,
     action: {kind: 'registered_action', config: {action_id: template.action, params: template.params}},
     max_mist_per_run: 0,
   };

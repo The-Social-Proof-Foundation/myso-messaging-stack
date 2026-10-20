@@ -1,26 +1,27 @@
 import {describe, expect, it} from 'vitest';
 
 import {
-  JURY_KEEPER_CRANK_LABELS,
+  JURY_CRANK_LABELS,
   JUROR_AUTOMATION_LABELS,
   JobFormError,
-  KEEPER_CRANK_KINDS,
+  JURY_CRANK_KINDS,
+  OPERATOR_KEY_REF,
   KEEPER_DUTY_LABELS,
   TASK_AUTOMATION_LABELS,
   acceptPolicyToConfig,
   buildJobInput,
   buildJurorJobInput,
-  buildKeeperJobInput,
+  buildCrankJobInput,
   buildTaskJobInput,
   localTimeToUtcCron,
   requiredJurorActions,
-  requiredKeeperAction,
+  crankAction,
   requiredTaskActions,
   scheduleToTriggerSet,
   type KeeperDuty,
   type TaskAutomationChoice,
 } from './automation-job';
-import {JUROR_ACTION_IDS, KEEPER_ACTION_IDS, TASK_ACTION_IDS} from './automation-delegate';
+import {JUROR_ACTION_IDS, TASK_ACTION_IDS} from './automation-delegate';
 
 const CDT = 300; // getTimezoneOffset() for UTC-5
 const IST = -330; // UTC+5:30
@@ -379,12 +380,12 @@ describe('juror automation', () => {
   });
 });
 
-describe('jury keeper automation', () => {
-  const base = {name: 'Crank', targetAgentObjectId: '0xagent', delegateKeyRef: 'delegate:keeper'};
+describe('jury crank automation', () => {
+  const base = {name: 'Crank', targetAgentObjectId: '0xagent'};
 
   it('has a template and a label for every crank the scan can emit', () => {
     // These are the event types the social server's crank scan produces.
-    expect([...KEEPER_CRANK_KINDS].sort()).toEqual(
+    expect([...JURY_CRANK_KINDS].sort()).toEqual(
       [
         'apply_ready',
         'case_finalize_due',
@@ -400,15 +401,17 @@ describe('jury keeper automation', () => {
         'roster_refresh_due',
         'evict_due',
         'sweep_due',
+        'vote_refund_sweep_due',
       ].sort(),
     );
-    expect(Object.keys(JURY_KEEPER_CRANK_LABELS).sort()).toEqual([...KEEPER_CRANK_KINDS].sort());
+    expect(Object.keys(JURY_CRANK_LABELS).sort()).toEqual([...JURY_CRANK_KINDS].sort());
   });
 
-  it('every crank runs an action a keeper delegate is registered for, on its own event', () => {
-    for (const crank of KEEPER_CRANK_KINDS) {
-      const job = buildKeeperJobInput({...base, crank});
-      expect(KEEPER_ACTION_IDS as readonly string[], crank).toContain(requiredKeeperAction(crank));
+  it('every crank runs a jury action on its own event, signed with the operator key', () => {
+    for (const crank of JURY_CRANK_KINDS) {
+      const job = buildCrankJobInput({...base, crank});
+      expect(crankAction(crank), crank).toMatch(/^jury\.[a-z_]+\.v1$/);
+      expect(job.target_agent_key_ref).toBe(OPERATOR_KEY_REF);
       expect(job.trigger_set.triggers).toEqual([{kind: 'event', event_family: 'jury', event_type: crank}]);
       expect(job.action.kind).toBe('registered_action');
       expect(job.max_mist_per_run).toBe(0);
@@ -416,7 +419,7 @@ describe('jury keeper automation', () => {
   });
 
   it('task cranks pass the accounts and platform the scan adds to the event', () => {
-    const verdict = buildKeeperJobInput({...base, crank: 'execute_ready'});
+    const verdict = buildCrankJobInput({...base, crank: 'execute_ready'});
     expect(verdict.action.config).toMatchObject({
       action_id: 'jury.execute_task_verdict.v1',
       params: {
@@ -427,7 +430,7 @@ describe('jury keeper automation', () => {
         platformObjectId: '{{event.payload.platform_object_id}}',
       },
     });
-    const neutral = buildKeeperJobInput({...base, crank: 'neutral_due'});
+    const neutral = buildCrankJobInput({...base, crank: 'neutral_due'});
     expect(neutral.action.config).toMatchObject({
       action_id: 'jury.execute_neutral_resolution.v1',
       params: {buyerAccountId: '{{event.payload.buyer_account_id}}'},
@@ -435,23 +438,23 @@ describe('jury keeper automation', () => {
   });
 
   it('roster upkeep names the agent and its own account, and a sweep names its case', () => {
-    const refresh = buildKeeperJobInput({...base, crank: 'roster_refresh_due'});
+    const refresh = buildCrankJobInput({...base, crank: 'roster_refresh_due'});
     expect(refresh.action.config).toMatchObject({
       action_id: 'jury.refresh_roster_entry.v1',
       params: {accountId: '{{event.payload.memory_account_id}}', agentId: '{{event.payload.agent_id}}'},
     });
-    expect(buildKeeperJobInput({...base, crank: 'evict_due'}).action.config).toMatchObject({
+    expect(buildCrankJobInput({...base, crank: 'evict_due'}).action.config).toMatchObject({
       action_id: 'jury.evict_ineligible.v1',
       params: {agentId: '{{event.payload.agent_id}}'},
     });
-    expect(buildKeeperJobInput({...base, crank: 'sweep_due'}).action.config).toMatchObject({
+    expect(buildCrankJobInput({...base, crank: 'sweep_due'}).action.config).toMatchObject({
       action_id: 'jury.sweep_case.v1',
       params: {caseId: '{{event.payload.case_id}}'},
     });
   });
 
   it('proposal cranks name the registry, proposal and step, and a decision names its case', () => {
-    const escalate = buildKeeperJobInput({...base, crank: 'escalate_due'});
+    const escalate = buildCrankJobInput({...base, crank: 'escalate_due'});
     expect(escalate.action.config).toMatchObject({
       action_id: 'jury.escalate_proposal.v1',
       params: {
@@ -460,16 +463,23 @@ describe('jury keeper automation', () => {
         stage: '{{event.payload.stage}}',
       },
     });
-    const apply = buildKeeperJobInput({...base, crank: 'apply_ready'});
+    const apply = buildCrankJobInput({...base, crank: 'apply_ready'});
     expect(apply.action.config).toMatchObject({
       action_id: 'jury.apply_proposal_decision.v1',
       params: {caseId: '{{event.payload.case_id}}', proposalId: '{{event.payload.proposal_id}}'},
     });
   });
 
-  it('a keeper trigger carries no payload filter, so it matches every event for its account', () => {
-    for (const crank of KEEPER_CRANK_KINDS) {
-      expect('payload_filter' in buildKeeperJobInput({...base, crank}).trigger_set.triggers[0]!).toBe(false);
+  it('a vote refund sweep names its registry and proposal', () => {
+    expect(buildCrankJobInput({...base, crank: 'vote_refund_sweep_due'}).action.config).toMatchObject({
+      action_id: 'jury.sweep_vote_refunds.v1',
+      params: {registryId: '{{event.payload.registry_id}}', proposalId: '{{event.payload.proposal_id}}'},
+    });
+  });
+
+  it('a crank trigger carries no payload filter, so it matches every event for its account', () => {
+    for (const crank of JURY_CRANK_KINDS) {
+      expect('payload_filter' in buildCrankJobInput({...base, crank}).trigger_set.triggers[0]!).toBe(false);
     }
   });
 });

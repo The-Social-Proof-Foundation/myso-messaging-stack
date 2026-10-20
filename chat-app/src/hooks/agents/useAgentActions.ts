@@ -509,7 +509,7 @@ export function useAgentActions() {
             `"${args.parent.label}" is not allowed to create delegates yet. Open its permissions and ` +
               (delegateClass === 'task_worker'
                 ? 'allow it to register agents and to delegate memory and task trading, then try again.'
-                : delegateClass === 'juror' || delegateClass === 'jury_keeper'
+                : delegateClass === 'juror'
                   ? 'allow it to register agents and to delegate read and write memory and jury duty, then try again.'
                   : 'allow it to register agents and to delegate read and write memory, then try again.'),
           );

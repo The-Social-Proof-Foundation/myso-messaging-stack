@@ -1,4 +1,4 @@
-import type {JurorAssignmentInfo, JurorRosterInfo, SubAgentRow} from './social-api';
+import type {JurorAssignmentInfo, JurorRosterInfo, JuryRosterHealth, SubAgentRow} from './social-api';
 
 /** `memory::CAP_JURY`: the capability an agent needs to join the juror roster. */
 export const CAP_JURY = 262144;
@@ -38,4 +38,19 @@ export function sortDuties(rows: readonly JurorAssignmentInfo[]): JurorAssignmen
     if ((a.deadlineMs == null) !== (b.deadlineMs == null)) return a.deadlineMs == null ? 1 : -1;
     return (a.deadlineMs ?? 0) - (b.deadlineMs ?? 0) || a.caseId.localeCompare(b.caseId);
   });
+}
+
+/**
+ * One line on how deep the roster is. Each seat on a jury needs a different owner, so the owner
+ * count, not the agent count, is what decides whether a case can be heard.
+ */
+export function rosterHealthLine(roster: JuryRosterHealth): {text: string; thin: boolean} {
+  const owners = `${roster.eligibleOwners} independent owner${roster.eligibleOwners === 1 ? '' : 's'} eligible (${roster.minimum} needed)`;
+  const thin = roster.eligibleOwners < roster.minimum;
+  return {
+    text: thin
+      ? `${owners}: juries may be unavailable and proposals wait up to 30 days.`
+      : `${owners} across ${roster.active} active juror${roster.active === 1 ? '' : 's'}.`,
+    thin,
+  };
 }

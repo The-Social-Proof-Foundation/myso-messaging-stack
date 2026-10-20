@@ -153,9 +153,9 @@ export function AutomationDelegates({agent}: Readonly<{agent: SubAgentRow}>) {
                     <span className="rounded-full bg-sky-500/15 px-2 py-0.5 text-[10px] font-medium text-sky-600 dark:text-sky-300">
                       Task worker
                     </span>
-                  ) : row.delegate_class === 'juror' || row.delegate_class === 'jury_keeper' ? (
+                  ) : row.delegate_class === 'juror' ? (
                     <span className="rounded-full bg-violet-500/15 px-2 py-0.5 text-[10px] font-medium text-violet-600 dark:text-violet-300">
-                      {row.delegate_class === 'juror' ? 'Juror' : 'Jury keeper'}
+                      Juror
                     </span>
                   ) : null}
                 </div>

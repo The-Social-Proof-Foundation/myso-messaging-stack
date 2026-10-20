@@ -9,6 +9,7 @@ import {resolveAgentChainIds} from '../../lib/agents/chain-ids';
 import {executeAsHuman} from '../../lib/agents/execute';
 import {sortDuties} from '../../lib/agents/jury';
 import {
+  fetchJuryHealth,
   fetchJuryRationales,
   fetchJurorAssignments,
   fetchOwnerJurors,
@@ -26,6 +27,15 @@ export function useOwnerJurors() {
     queryFn: ({signal}) => fetchOwnerJurors(principal!, signal),
     enabled: Boolean(principal),
     refetchInterval: 30_000,
+  });
+}
+
+/** How many jurors and distinct owners can be drafted, against the floor a dispute needs. */
+export function useJuryHealth() {
+  return useQuery({
+    queryKey: agentKeys.juryHealth(),
+    queryFn: fetchJuryHealth,
+    refetchInterval: 60_000,
   });
 }
 
