@@ -30,8 +30,8 @@ importers:
         specifier: ^0.0.2
         version: 0.0.2
       '@socialproof/memory':
-        specifier: file:../../myso-memory/packages/sdk
-        version: file:../../myso-memory/packages/sdk(@socialproof/mydata@0.0.4(@socialproof/myso@0.0.4(typescript@5.8.3)))(@socialproof/myso@0.0.4(typescript@5.8.3))(zod@3.25.76)
+        specifier: ^0.0.6
+        version: 0.0.6(@socialproof/mydata@0.0.4(@socialproof/myso@0.0.4(typescript@5.8.3)))(@socialproof/myso@0.0.4(typescript@5.8.3))(zod@3.25.76)
       '@socialproof/mydata':
         specifier: ^0.0.4
         version: 0.0.4(@socialproof/myso@0.0.4(typescript@5.8.3))
@@ -42,8 +42,8 @@ importers:
         specifier: ^0.0.1
         version: 0.0.1(@socialproof/bcs@0.0.2)(@socialproof/myso@0.0.4(typescript@5.8.3))
       '@socialproof/myso-messaging-stack':
-        specifier: file:../ts-sdks/packages/myso-messaging-stack
-        version: file:../ts-sdks/packages/myso-messaging-stack(@socialproof/bcs@0.0.2)(@socialproof/mydata@0.0.4(@socialproof/myso@0.0.4(typescript@5.8.3)))(@socialproof/myso-groups@0.0.1(@socialproof/bcs@0.0.2)(@socialproof/myso@0.0.4(typescript@5.8.3)))(@socialproof/myso@0.0.4(typescript@5.8.3))
+        specifier: ^0.2.0
+        version: 0.2.0(@socialproof/bcs@0.0.2)(@socialproof/mydata@0.0.4(@socialproof/myso@0.0.4(typescript@5.8.3)))(@socialproof/myso-groups@0.0.1(@socialproof/bcs@0.0.2)(@socialproof/myso@0.0.4(typescript@5.8.3)))(@socialproof/myso@0.0.4(typescript@5.8.3))
       '@socialproof/mysocial-auth':
         specifier: ^0.12.4
         version: 0.12.4
@@ -1720,8 +1720,8 @@ packages:
   '@socialproof/bcs@0.0.2':
     resolution: {integrity: sha512-ahrcri+bKrOivsn6U1v5QT/3iEqi6Il0w9bQvgGJuo0eemBq/zRXXL7iOZBGwT+81bQhxwKKCORptZOxlh1oOA==}
 
-  '@socialproof/memory@file:../../myso-memory/packages/sdk':
-    resolution: {directory: ../../myso-memory/packages/sdk, type: directory}
+  '@socialproof/memory@0.0.6':
+    resolution: {integrity: sha512-DL6cUBFaAtC5MmkgSj2tDecyWOUOdd9r4/x/4ydHEKH+tcgLuAecksDBuqshK10vg+xxRxOJgneRRKpfu09LEg==}
     peerDependencies:
       '@socialproof/file-storage': '>=0.0.4'
       '@socialproof/mydata': 0.0.4
@@ -1747,8 +1747,8 @@ packages:
       '@socialproof/bcs': ^0.0.2
       '@socialproof/myso': ^0.0.4
 
-  '@socialproof/myso-messaging-stack@file:../ts-sdks/packages/myso-messaging-stack':
-    resolution: {directory: ../ts-sdks/packages/myso-messaging-stack, type: directory}
+  '@socialproof/myso-messaging-stack@0.2.0':
+    resolution: {integrity: sha512-IaB9J/9zsTDUhHLljRpitMV5W4i21E3S+JmY1vBIYuqwR1JqekZqtIVr2lEMu+4MGqDQfe0/BeCp0yjo1ibv4Q==}
     peerDependencies:
       '@socialproof/bcs': ^0.0.2
       '@socialproof/mydata': ^0.0.4
@@ -5199,7 +5199,7 @@ snapshots:
       '@scure/base': 2.0.0
       '@socialproof/utils': 0.0.2
 
-  '@socialproof/memory@file:../../myso-memory/packages/sdk(@socialproof/mydata@0.0.4(@socialproof/myso@0.0.4(typescript@5.8.3)))(@socialproof/myso@0.0.4(typescript@5.8.3))(zod@3.25.76)':
+  '@socialproof/memory@0.0.6(@socialproof/mydata@0.0.4(@socialproof/myso@0.0.4(typescript@5.8.3)))(@socialproof/myso@0.0.4(typescript@5.8.3))(zod@3.25.76)':
     dependencies:
       '@noble/ed25519': 2.3.0
       '@noble/hashes': 2.0.1
@@ -5221,7 +5221,7 @@ snapshots:
       '@socialproof/bcs': 0.0.2
       '@socialproof/myso': 0.0.4(typescript@5.8.3)
 
-  '@socialproof/myso-messaging-stack@file:../ts-sdks/packages/myso-messaging-stack(@socialproof/bcs@0.0.2)(@socialproof/mydata@0.0.4(@socialproof/myso@0.0.4(typescript@5.8.3)))(@socialproof/myso-groups@0.0.1(@socialproof/bcs@0.0.2)(@socialproof/myso@0.0.4(typescript@5.8.3)))(@socialproof/myso@0.0.4(typescript@5.8.3))':
+  '@socialproof/myso-messaging-stack@0.2.0(@socialproof/bcs@0.0.2)(@socialproof/mydata@0.0.4(@socialproof/myso@0.0.4(typescript@5.8.3)))(@socialproof/myso-groups@0.0.1(@socialproof/bcs@0.0.2)(@socialproof/myso@0.0.4(typescript@5.8.3)))(@socialproof/myso@0.0.4(typescript@5.8.3))':
     dependencies:
       '@socialproof/bcs': 0.0.2
       '@socialproof/mydata': 0.0.4(@socialproof/myso@0.0.4(typescript@5.8.3))
