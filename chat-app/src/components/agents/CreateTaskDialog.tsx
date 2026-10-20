@@ -2,12 +2,14 @@ import {useMemo, useState} from 'react';
 import {sha256} from '@noble/hashes/sha2.js';
 
 import {classifyTaskError} from '../../lib/agents/format-task-error';
-import {formatMistAmount, parseMysoToMist} from '../../lib/agents/format';
+import {formatMistAmount, parseMysoToMist, truncateAddress} from '../../lib/agents/format';
 import {feeBreakdown} from '../../lib/agents/tasks';
-import {fetchSubAgentByObjectId, type AgentRoomInfo, type TaskConfigInfo} from '../../lib/agents/social-api';
+import type {AgentRoomInfo, TaskConfigInfo} from '../../lib/agents/social-api';
 import {useAgentRooms, useTaskActions, useTaskConfig} from '../../hooks/agents';
+import {useAllSubAgents} from '../../hooks/agents/useSubAgents';
 import {Button} from '../Button';
-import {Dialog, dialogFieldClass} from '../Dialog';
+import {isAutomationDelegateLabel} from '../../lib/agents/automation-delegate';
+import {Dialog, DialogSelect, dialogFieldClass} from '../Dialog';
 import {ErrorNotice} from './ErrorNotice';
 import {ReputationBadge} from './ReputationBadge';
 import {MysoAmount} from './MysoAmount';
@@ -41,6 +43,14 @@ export function CreateTaskDialog({open, onClose, onCreated, defaultRoom = null}:
   const config = useTaskConfig();
   const rooms = useAgentRooms();
   const actions = useTaskActions();
+  const agents = useAllSubAgents({enabled: open});
+  const sellers = useMemo(
+    () =>
+      agents.items
+        .filter((agent) => agent.active && !agent.revoked_at_ms && !isAutomationDelegateLabel(agent.label))
+        .sort((a, b) => (a.label || a.agent_object_id).localeCompare(b.label || b.agent_object_id)),
+    [agents.items],
+  );
 
   const [sellerAgentId, setSellerAgentId] = useState('');
   const [title, setTitle] = useState('');
@@ -83,12 +93,10 @@ export function CreateTaskDialog({open, onClose, onCreated, defaultRoom = null}:
     }
     setBusy(true);
     setError(null);
+    const selectedSellerId = sellerAgentId || sellers[0]?.agent_object_id || '';
     try {
-      // The offer is directed at one agent; the buyer needs its account id too.
-      const id = sellerAgentId.trim();
-      const target = id ? await fetchSubAgentByObjectId(id) : null;
-      if (!target) throw new Error('No agent was found with that object id.');
-      if (!target.active) throw new Error('That agent is deactivated and cannot take new work.');
+      const target = sellers.find((agent) => agent.agent_object_id === selectedSellerId);
+      if (!target) throw new Error('Pick an active agent to send this offer to.');
       await actions.createTask({
         sellerAccountId: target.account_id,
         sellerAgentId: target.agent_object_id,
@@ -126,7 +134,7 @@ export function CreateTaskDialog({open, onClose, onCreated, defaultRoom = null}:
           <Button variant="secondary" onClick={close} disabled={busy}>
             Cancel
           </Button>
-          <Button onClick={() => void submit()} disabled={busy || !c?.active}>
+          <Button onClick={() => void submit()} disabled={busy || !c?.active || sellers.length === 0}>
             {busy ? 'Escrowing…' : 'Send offer'}
           </Button>
         </>
@@ -141,14 +149,25 @@ export function CreateTaskDialog({open, onClose, onCreated, defaultRoom = null}:
       >
         <label className="block text-sm font-medium text-secondary-700 dark:text-secondary-300">
           Seller agent
-          <input
-            value={sellerAgentId}
+          <DialogSelect
+            value={sellerAgentId || sellers[0]?.agent_object_id || ''}
             onChange={(event) => setSellerAgentId(event.target.value)}
-            placeholder="Agent object id (0x…)"
-            disabled={busy}
-            className={`mt-1 ${dialogFieldClass}`}
+            disabled={busy || sellers.length === 0}
+          >
+            {sellers.length === 0 ? (
+              <option value="">{agents.isLoading ? 'Loading agents…' : 'No active agents'}</option>
+            ) : null}
+            {sellers.map((agent) => (
+              <option key={agent.agent_object_id} value={agent.agent_object_id}>
+                {(agent.label.trim() || 'Agent') + ' · ' + truncateAddress(agent.derived_address)}
+              </option>
+            ))}
+          </DialogSelect>
+          <ReputationBadge
+            agentObjectId={sellerAgentId || sellers[0]?.agent_object_id || null}
+            variant="detailed"
+            className="mt-1"
           />
-          <ReputationBadge agentObjectId={sellerAgentId.trim() || null} variant="detailed" className="mt-1" />
         </label>
 
         <label className="block text-sm font-medium text-secondary-700 dark:text-secondary-300">
@@ -216,11 +235,10 @@ export function CreateTaskDialog({open, onClose, onCreated, defaultRoom = null}:
 
         <label className="block text-sm font-medium text-secondary-700 dark:text-secondary-300">
           Room <span className="font-normal text-secondary-400">(optional)</span>
-          <select
+          <DialogSelect
             value={roomId}
             onChange={(event) => setRoomId(event.target.value)}
             disabled={busy}
-            className={`mt-1 ${dialogFieldClass}`}
           >
             <option value="">No room</option>
             {rooms.rooms.map((room) => (
@@ -228,7 +246,7 @@ export function CreateTaskDialog({open, onClose, onCreated, defaultRoom = null}:
                 {room.groupName ?? room.groupId}
               </option>
             ))}
-          </select>
+          </DialogSelect>
         </label>
 
         <p className="text-xs text-secondary-500 dark:text-secondary-400">

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { TxStatusOverlay } from '../components/TxStatusOverlay';
+import { useSignInStatus } from '../hooks/useSignInStatus';
 import type { AuthResultMessage } from '../lib/auth-session-build';
 import {
   buildSessionFromAuthResult,
@@ -108,6 +109,7 @@ async function handlePopupFallback(): Promise<boolean> {
 
 export default function AuthCallback() {
   const [error, setError] = useState<string | null>(null);
+  const { processingText } = useSignInStatus(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -178,7 +180,7 @@ export default function AuthCallback() {
     );
   }
 
-  return <TxStatusOverlay phase="processing" processingText="Signing in" />;
+  return <TxStatusOverlay phase="processing" processingText={processingText} />;
 }
 
 export { SESSION_KEY as SESSION_STORAGE_KEY } from '../lib/mysocial-auth-storage';

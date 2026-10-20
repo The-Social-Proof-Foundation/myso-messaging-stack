@@ -41,6 +41,7 @@ import {
   withdrawRefundTx,
   type CreateTaskArgs,
 } from '../../lib/agents/tx';
+import {zkLoginChainAddress} from '../../lib/zklogin-signin';
 import {useInvalidateAgents} from './useInvalidateAgents';
 import {useMemoryAccount} from './useMemoryAccount';
 import {useAnyPlatformId} from './useTasks';
@@ -90,8 +91,15 @@ export function useTaskActions() {
   }, [account.data?.account_id]);
 
   return {
-    createTask: (args: Omit<CreateTaskArgs, 'buyerAccountId'>) =>
-      execute((ids) => createTaskTx(ids, {...args, buyerAccountId: buyerAccountId()})),
+    createTask: (args: Omit<CreateTaskArgs, 'buyerAccountId' | 'returnCoinTo'>) =>
+      execute((ids) => {
+        if (!keypair) throw new Error('Sign in before using the task market.');
+        return createTaskTx(ids, {
+          ...args,
+          buyerAccountId: buyerAccountId(),
+          returnCoinTo: args.paymentCoinId ? undefined : (zkLoginChainAddress() ?? keypair.toMySoAddress()),
+        });
+      }),
 
     acceptTask: (task: AgentTaskInfo) =>
       execute((ids) =>

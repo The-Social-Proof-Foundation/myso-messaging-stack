@@ -25,6 +25,11 @@ describe('classifyTaskError', () => {
     ['memory ESubAgentMissingCap', 'missing_capability'],
     ['memory ESubAgentSpendExceeded', 'spend_cap'],
     ['memory ESubAgentNotActive', 'agent_inactive'],
+    ['EIneligible', 'ineligible'],
+    [
+      "MoveAbort in 1st command, abort code: 9, in '0x50c1::jury::join_roster' (instruction 158)",
+      'ineligible',
+    ],
   ])('%s -> %s', (text, kind) => {
     expect(classify(text).kind).toBe(kind);
   });

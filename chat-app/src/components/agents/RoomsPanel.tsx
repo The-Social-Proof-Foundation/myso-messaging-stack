@@ -10,10 +10,14 @@ import {useAgentNamesByAddress} from '../../hooks/agents/useSubAgents';
 import {useAuthenticatedAddress} from '../../contexts/MySocialAuthContext';
 import {useMessagingMemberAddress} from '../../contexts/MessagingClientContext';
 import {useSidebarGroupMembers} from '../../hooks/useSidebarGroupMembers';
+import {useSidebarMessagePreviews} from '../../hooks/useSidebarMessagePreviews';
+import {agentReplyPreview, useAgentReplyClock} from '../../lib/agents/agent-reply-sessions';
+import type {StoredGroup} from '../../lib/group-store';
 import {useWalletAvatarMap} from '../../hooks/useWalletAvatarMap';
 import {Button} from '../Button';
 import {ConversationAvatar} from '../ConversationAvatar';
 import {sidebarShellClass} from '../SidebarShell';
+import {UnreadCountBadge, unreadCountFor, useUnreadCounts} from '../../contexts/UnreadCountsContext';
 import {ListError, LoadMoreRow} from './ListStates';
 
 interface RoomsPanelProps {
@@ -49,6 +53,18 @@ export function RoomsPanel({
   const selfAddresses = useMemo(() => [messagingAddress, address], [messagingAddress, address]);
   const groupIds = useMemo(() => rooms.rooms.map((room) => room.groupId), [rooms.rooms]);
   const membersByGroup = useSidebarGroupMembers(groupIds);
+  const previewGroups = useMemo<StoredGroup[]>(
+    () =>
+      rooms.rooms.flatMap((room) =>
+        room.groupUuid
+          ? [{uuid: room.groupUuid, name: roomTitle(room), groupId: room.groupId, createdAt: room.createdAtMs}]
+          : [],
+      ),
+    [rooms.rooms],
+  );
+  const previews = useSidebarMessagePreviews(previewGroups, {});
+  useAgentReplyClock();
+  const unread = useUnreadCounts();
   const profileAddresses = useMemo(() => {
     const addrs = new Set<string>();
     for (const members of membersByGroup.values()) {
@@ -120,6 +136,7 @@ export function RoomsPanel({
           {rooms.rooms.map((room) => {
             const selected = selectedGroupId?.toLowerCase() === room.groupId.toLowerCase();
             const task = roomTaskLink(room);
+            const preview = previews.get(room.groupId);
             return (
               <li key={room.groupId} className="border-b border-secondary-200 dark:border-secondary-700">
                 <button
@@ -144,12 +161,17 @@ export function RoomsPanel({
                       <span className="block translate-y-px truncate text-sm font-medium leading-tight text-secondary-900 dark:text-secondary-50">
                         {roomTitle(room)}
                       </span>
-                      <span className="mt-0.5 block truncate text-xs font-medium leading-snug tracking-tight text-secondary-400 dark:text-secondary-500">
-                        {roomKindLabel(room.roomKind)}
-                        {task ? ` · task ${truncateAddress(task)}` : ''}
-                        {room.groupUuid ? '' : ' · not indexed yet'}
+                      <span className="mt-0.5 line-clamp-2 text-xs font-medium leading-snug tracking-tight text-secondary-400 dark:text-secondary-500">
+                        {agentReplyPreview(room.groupId, preview ?? '') || (
+                          <>
+                            {roomKindLabel(room.roomKind)}
+                            {task ? ` · task ${truncateAddress(task)}` : ''}
+                            {room.groupUuid ? '' : ' · not indexed yet'}
+                          </>
+                        )}
                       </span>
                     </span>
+                    <UnreadCountBadge count={unreadCountFor(unread, room.groupId)} />
                     <ChevronRight
                       className="h-4 w-4 shrink-0 text-secondary-400 dark:text-secondary-500"
                       strokeWidth={2}

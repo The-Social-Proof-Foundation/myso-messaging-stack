@@ -53,7 +53,7 @@ import {
   fetchOrganizationAuditLogs,
   fetchSubAgentByObjectId,
 } from '../../lib/agents/social-api';
-import {ORG_OWNER_MASK} from '../../lib/agents/org-permissions';
+import {ORG_DASHBOARD_MASK, ORG_OWNER_MASK} from '../../lib/agents/org-permissions';
 import {
   fetchProfileOverview,
   mistBigint,
@@ -171,6 +171,39 @@ export function useAgentActions() {
         await new Promise((resolve) => setTimeout(resolve, intervalMs));
       }
     }
+  }
+
+  /**
+   * Dashboard and audit reads are signed by the messaging key, and the social server only accepts
+   * plain key signatures, so under zkLogin the server sees the messaging key's address rather
+   * than the owner wallet. That address needs the dashboard bits too, or every gated read 403s.
+   */
+  function ownerOrgGrantsTx(
+    ids: Awaited<ReturnType<typeof resolveAgentChainIds>>,
+    args: {accountId: string; organizationId: string; orgMemoryGroupId: string; ownerAddress: string},
+  ): Transaction {
+    const tx = grantOrgMemoryPermissionTx(ids, {
+      accountId: args.accountId,
+      organizationId: args.organizationId,
+      orgMemoryGroupId: args.orgMemoryGroupId,
+      memberAddress: args.ownerAddress,
+      permissionsMask: ORG_OWNER_MASK,
+    });
+    const reader = keypair?.toMySoAddress();
+    if (reader && reader.toLowerCase() !== args.ownerAddress.toLowerCase()) {
+      grantOrgMemoryPermissionTx(
+        ids,
+        {
+          accountId: args.accountId,
+          organizationId: args.organizationId,
+          orgMemoryGroupId: args.orgMemoryGroupId,
+          memberAddress: reader,
+          permissionsMask: ORG_DASHBOARD_MASK,
+        },
+        tx,
+      );
+    }
+    return tx;
   }
 
   function publishCreditBalance(deltaMist: bigint) {
@@ -839,17 +872,7 @@ export function useAgentActions() {
       const groupId =
         (await waitForOrgMemoryGroup(args.organizationId)) ?? (await orgMemoryGroupId(args.organizationId));
       if (groupId) {
-        await executeAsHuman(
-          rpc,
-          human,
-          grantOrgMemoryPermissionTx(ids, {
-            accountId: args.accountId,
-            organizationId: args.organizationId,
-            orgMemoryGroupId: groupId,
-            memberAddress: args.ownerAddress,
-            permissionsMask: ORG_OWNER_MASK,
-          }),
-        );
+        await executeAsHuman(rpc, human, ownerOrgGrantsTx(ids, {...args, orgMemoryGroupId: groupId}));
       }
       await invalidate(args.organizationId);
       return groupId;
@@ -864,17 +887,7 @@ export function useAgentActions() {
     }) {
       const {client: rpc, human} = requireClient();
       const ids = await resolveAgentChainIds();
-      await executeAsHuman(
-        rpc,
-        human,
-        grantOrgMemoryPermissionTx(ids, {
-          accountId: args.accountId,
-          organizationId: args.organizationId,
-          orgMemoryGroupId: args.orgMemoryGroupId,
-          memberAddress: args.ownerAddress,
-          permissionsMask: ORG_OWNER_MASK,
-        }),
-      );
+      await executeAsHuman(rpc, human, ownerOrgGrantsTx(ids, args));
       await waitForAuditorAccess(args.organizationId);
       await invalidate(args.organizationId);
     },

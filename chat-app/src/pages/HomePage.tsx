@@ -7,6 +7,7 @@ import {
 import { useMySocialAuth } from '../contexts/MySocialAuthContext';
 import { AuthenticatedApp } from '../components/AuthenticatedApp';
 import { TxStatusOverlay } from '../components/TxStatusOverlay';
+import { useSignInStatus } from '../hooks/useSignInStatus';
 import { clearLoginCelebration } from '../lib/mysocial-auth-storage';
 
 export function HomePage() {
@@ -32,13 +33,15 @@ export function HomePage() {
   const connected = Boolean(session?.user?.address && keypair);
   const messagingReady = Boolean(messagingClient && !messagingClientLoading);
   const celebrateLogin = loginCelebration && !signInError && !messagingClientInitError;
+  const signInStatus = useSignInStatus(connected && messagingReady);
+  const signInDone = signInStatus.phase === 'success';
 
   useEffect(() => {
-    if (!celebrateLogin || !connected || !messagingReady) return;
+    if (!celebrateLogin || !signInDone) return;
     clearLoginCelebration();
     const timer = window.setTimeout(() => finishLoginCelebration(), 1100);
     return () => window.clearTimeout(timer);
-  }, [celebrateLogin, connected, messagingReady, finishLoginCelebration]);
+  }, [celebrateLogin, signInDone, finishLoginCelebration]);
 
   if (configError) {
     return (
@@ -53,8 +56,8 @@ export function HomePage() {
   if (celebrateLogin) {
     return (
       <TxStatusOverlay
-        phase={connected && messagingReady ? 'success' : 'processing'}
-        processingText="Signing in"
+        phase={signInStatus.phase}
+        processingText={signInStatus.processingText}
       />
     );
   }
@@ -91,7 +94,9 @@ export function HomePage() {
   }
 
   if (auth && session && !walletOnlyBlocked && derivingKeypair && !keypair) {
-    return <TxStatusOverlay phase="processing" processingText="Signing in" />;
+    return (
+      <TxStatusOverlay phase="processing" processingText={signInStatus.processingText} />
+    );
   }
 
   if (

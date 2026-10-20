@@ -15,6 +15,7 @@ import { ThemeProvider } from './contexts/ThemeContext';
 import AuthCallback from './pages/AuthCallback';
 import App from './App';
 import {AgentKeyVaultProvider} from './contexts/AgentKeyVaultContext';
+import {AgentReplyEngine} from './hooks/agents/useAgentMemoryReply';
 import './index.css';
 
 function AppErrorBoundary({ children }: Readonly<{ children: ReactNode }>) {
@@ -43,6 +44,7 @@ function Root() {
         <MySocialAuthBroadcastListener />
         <MessagingClientProvider>
           <AgentKeyVaultProvider>
+          <AgentReplyEngine />
           <AppErrorBoundary>
             <App />
           </AppErrorBoundary>

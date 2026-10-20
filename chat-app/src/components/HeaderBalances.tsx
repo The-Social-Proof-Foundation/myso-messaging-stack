@@ -43,7 +43,7 @@ export function HeaderBalances() {
             aria-label="AI credit balance"
           >
             <span>{overview.isPending ? '…' : creditUsd}</span>
-            <span className="font-sans text-xs font-normal text-secondary-400">AI Credits</span>
+            <span className="font-sans text-xs font-normal text-secondary-400">Credits</span>
           </button>
         </DropdownMenu.Trigger>
         <DropdownMenu.Portal>

@@ -1,6 +1,39 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 const CHECK_PATH_LENGTH = 28;
+const TEXT_SWAP_MS = 280;
+
+function TextSwap({ text }: Readonly<{ text: string }>) {
+  const ref = useRef<HTMLSpanElement>(null);
+  const [displayText, setDisplayText] = useState(text);
+  const prevTextRef = useRef(text);
+
+  useEffect(() => {
+    if (text === prevTextRef.current) return;
+    const el = ref.current;
+    if (!el || window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      setDisplayText(text);
+      prevTextRef.current = text;
+      return;
+    }
+    el.classList.add('is-exit');
+    const timer = window.setTimeout(() => {
+      setDisplayText(text);
+      el.classList.remove('is-exit');
+      el.classList.add('is-enter-start');
+      void el.offsetHeight;
+      el.classList.remove('is-enter-start');
+      prevTextRef.current = text;
+    }, TEXT_SWAP_MS);
+    return () => window.clearTimeout(timer);
+  }, [text]);
+
+  return (
+    <span ref={ref} className="t-text-swap">
+      {displayText}
+    </span>
+  );
+}
 
 function SuccessCheck({ size = 88 }: Readonly<{ size?: number }>) {
   const ref = useRef<HTMLSpanElement>(null);
@@ -121,7 +154,7 @@ export function TxStatusOverlay({
         <div className="flex items-center justify-center gap-2 px-6">
           <LoadingSpinner />
           <p className="text-sm text-secondary-500 dark:text-secondary-400">
-            {processingText}
+            <TextSwap text={processingText} />
           </p>
         </div>
       )}

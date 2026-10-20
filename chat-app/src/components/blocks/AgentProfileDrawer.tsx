@@ -1,7 +1,7 @@
 import {useEffect, useMemo, useRef, useState, type ReactNode} from 'react';
 import {useQuery, useQueryClient} from '@tanstack/react-query';
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
-import {Check, ChevronDown, ChevronLeft, ChevronRight, Copy, ScrollText, X, Zap} from 'lucide-react';
+import {Check, ChevronDown, ChevronLeft, ChevronRight, Copy, ExternalLink, ScrollText, X, Zap} from 'lucide-react';
 
 import {IosPushStack} from '@/components/IosPushStack';
 import {LegacyAgentBackup} from '@/components/agents/LegacyAgentBackup';
@@ -21,6 +21,7 @@ import {useMessagingMemberAddress} from '@/contexts/MessagingClientContext';
 import {ConversationAvatar} from '@/components/ConversationAvatar';
 import {useSidebarGroupMembers} from '@/hooks/useSidebarGroupMembers';
 import {useSidebarMessagePreviews} from '@/hooks/useSidebarMessagePreviews';
+import {agentReplyPreview, useAgentReplyClock} from '@/lib/agents/agent-reply-sessions';
 import {useWalletAvatarMap} from '@/hooks/useWalletAvatarMap';
 import {useOwnWalletProfile} from '@/hooks/useOwnWalletProfile';
 import {useAgentNamesByAddress} from '@/hooks/agents/useSubAgents';
@@ -34,7 +35,8 @@ import type {StoredGroup} from '@/lib/group-store';
 import {MultiBubbleIcon} from '@/components/icons/MultiBubbleIcon';
 import {auditRowMentionsAgent} from '@/lib/agents/audit';
 import {ReputationBadge} from '@/components/agents/ReputationBadge';
-import {useAgentStats} from '@/hooks/agents/useAgentStats';
+import {spendableMist, useAgentStats} from '@/hooks/agents/useAgentStats';
+import {UnreadCountBadge, unreadCountFor, useUnreadCounts} from '@/contexts/UnreadCountsContext';
 import {useAgentPnl} from '@/hooks/agents/useAgentPnl';
 import {formatSignedMist} from '@/lib/agents/pnl';
 import {useDerivedAgentKey} from '@/hooks/agents/useDerivedAgentKey';
@@ -51,6 +53,7 @@ import {
 } from '@/lib/agents/capabilities';
 import {formatMistAmount} from '@/lib/agents/format';
 import {formatTimestamp, humanizeKey} from '@/lib/agents/org-display';
+import {transactionDetailsUrl} from '@/lib/chat-payments';
 import {
   createAgentMemoryClient,
   getAgentLlmModel,
@@ -123,6 +126,8 @@ export function AgentProfileDrawer({
   const chatGroupIds = useMemo(() => chatGroups.map((group) => group.groupId), [chatGroups]);
   const membersByGroup = useSidebarGroupMembers(chatGroupIds);
   const previews = useSidebarMessagePreviews(chatGroups, {});
+  useAgentReplyClock();
+  const unread = useUnreadCounts();
   const viewerAddress = useAuthenticatedAddress();
   const messagingAddress = useMessagingMemberAddress();
   const selfAddresses = useMemo(() => [messagingAddress, viewerAddress], [messagingAddress, viewerAddress]);
@@ -311,6 +316,19 @@ export function AgentProfileDrawer({
 
         <Separator />
 
+        {canPickModel && row && accountId ? (
+          <>
+            <div className="p-4">
+              <ModelControls
+                row={row}
+                accountId={accountId}
+                maxIndex={Math.max(agents.totalCount ?? 0, 32)}
+              />
+            </div>
+            <Separator />
+          </>
+        ) : null}
+
         <div className="p-4">
           <p className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
             Stats
@@ -322,11 +340,11 @@ export function AgentProfileDrawer({
                 <span
                   title={
                     stats?.budgetEnabled && stats.budgetMist != null
-                      ? 'What this agent can still spend: the smaller of its balance and the budget it has left.'
-                      : 'MySo this agent holds.'
+                      ? 'AI credits this agent can still spend under the budget you set.'
+                      : 'MySo this agent holds. Set a budget to cap its AI spending.'
                   }
                 >
-                  {drawerAmount(availableMist(stats))}
+                  {drawerAmount(spendableMist(stats))}
                 </span>
               }
             />
@@ -360,19 +378,6 @@ export function AgentProfileDrawer({
         </div>
 
         <Separator />
-
-        {canPickModel && row && accountId ? (
-          <>
-            <div className="p-4">
-              <ModelControls
-                row={row}
-                accountId={accountId}
-                maxIndex={Math.max(agents.totalCount ?? 0, 32)}
-              />
-            </div>
-            <Separator />
-          </>
-        ) : null}
 
         {agent.parentId && agent.parentName ? (
           <>
@@ -444,7 +449,7 @@ export function AgentProfileDrawer({
                       type="button"
                       disabled={!onOpenChat}
                       onClick={() => onOpenChat?.(group.uuid)}
-                      className="w-full py-3 pl-[13px] pr-2 text-left text-secondary-700 transition-colors hover:bg-secondary-50 disabled:cursor-default disabled:hover:bg-transparent dark:text-secondary-300 dark:hover:bg-secondary-700/50 dark:disabled:hover:bg-transparent"
+                      className="w-full py-2 pl-[13px] pr-2 text-left text-secondary-700 transition-colors hover:bg-secondary-50 disabled:cursor-default disabled:hover:bg-transparent dark:text-secondary-300 dark:hover:bg-secondary-700/50 dark:disabled:hover:bg-transparent"
                     >
                       <div className="flex items-center gap-2.5">
                         <ConversationAvatar
@@ -470,9 +475,10 @@ export function AgentProfileDrawer({
                             ) : null}
                           </div>
                           <p className="mt-0.5 line-clamp-2 text-xs font-medium leading-snug tracking-tight text-secondary-400 dark:text-secondary-500">
-                            {preview || 'No messages yet'}
+                            {agentReplyPreview(group.groupId, preview || 'No messages yet')}
                           </p>
                         </div>
+                        <UnreadCountBadge count={unreadCountFor(unread, group.groupId)} />
                         <ChevronRight
                           className="h-4 w-4 shrink-0 text-secondary-400 dark:text-secondary-500"
                           strokeWidth={2}
@@ -571,15 +577,6 @@ function memoryStatLabel(count: number | null | undefined): ReactNode {
 function drawerAmount(mist: bigint | null | undefined) {
   if (mist == null) return '—';
   return <MysoAmount amount={formatMistAmount(mist < 0n ? 0n : mist)} unitClassName={mysoUnitClass} />;
-}
-
-/** Spendable MySo: the balance, or the budget still left when that cap is lower. */
-function availableMist(stats: {balanceMist: bigint | null; spentMist: bigint | null; budgetMist: bigint | null; budgetEnabled: boolean} | undefined): bigint | null {
-  if (!stats || stats.balanceMist == null) return stats?.balanceMist ?? null;
-  if (!stats.budgetEnabled || stats.budgetMist == null) return stats.balanceMist;
-  const left = stats.budgetMist - (stats.spentMist ?? 0n);
-  const room = left > 0n ? left : 0n;
-  return stats.balanceMist < room ? stats.balanceMist : room;
 }
 
 function AutomationDetail({
@@ -809,11 +806,9 @@ function ModelControls({
     <div>
       <p className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">Model</p>
       {body}
-      {derived.data && !models.isPending && !current.isPending && !current.isError ? (
+      {selectedIsDefault && derived.data && !models.isPending && !current.isPending && !current.isError ? (
         <p className="mt-1.5 text-xs text-muted-foreground">
-          {selectedIsDefault
-            ? 'No model chosen yet — the server default is answering. Pick one to fix it for this agent.'
-            : 'Saved for this agent.'}
+          No model chosen yet — the server default is answering. Pick one to fix it for this agent.
         </p>
       ) : null}
       {error ? <p className="mt-2 text-xs text-destructive">{error}</p> : null}
@@ -1038,6 +1033,50 @@ function GrantAuditAccess({organizationId}: Readonly<{organizationId: string | n
   );
 }
 
+/** Opens the explorer when `VITE_EXPLORER_TX_URL` is configured; otherwise copies the digest. */
+function AuditTxLink({digest}: Readonly<{digest: string}>) {
+  const [copied, setCopied] = useState(false);
+  const url = transactionDetailsUrl(digest);
+  const className =
+    'relative inline-flex size-3 shrink-0 items-center justify-center rounded-sm text-muted-foreground transition-[color,transform] duration-150 ease-out after:absolute after:-inset-1.5 hover:text-foreground active:scale-[0.9] focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring';
+
+  if (url) {
+    return (
+      <a
+        href={url}
+        target="_blank"
+        rel="noopener noreferrer"
+        title={`View transaction ${digest}`}
+        aria-label="View transaction"
+        className={className}
+      >
+        <ExternalLink className="size-2.5" strokeWidth={2} aria-hidden />
+      </a>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      title={copied ? 'Copied' : `Copy transaction ${digest}`}
+      aria-label={copied ? 'Transaction digest copied' : 'Copy transaction digest'}
+      className={className}
+      onClick={() => {
+        void navigator.clipboard.writeText(digest).then(() => {
+          setCopied(true);
+          window.setTimeout(() => setCopied(false), 1600);
+        });
+      }}
+    >
+      {copied ? (
+        <Check className="size-2.5 text-emerald-500" strokeWidth={2} aria-hidden />
+      ) : (
+        <Copy className="size-2.5" strokeWidth={2} aria-hidden />
+      )}
+    </button>
+  );
+}
+
 function AuditLogList({
   audit,
   rows,
@@ -1063,14 +1102,33 @@ function AuditLogList({
           No audit entries for this agent{audit.hasNextPage ? ' in the entries loaded so far.' : '.'}
         </p>
       ) : null}
-      <ul className="flex flex-col gap-3">
-        {rows.map((entry) => (
-          <li key={entry.id}>
-            <p className="text-sm text-foreground">{humanizeKey(entry.action)}</p>
-            <p className="text-xs text-muted-foreground">{formatTimestamp(entry.time)}</p>
-          </li>
-        ))}
-      </ul>
+      {rows.length > 0 ? (
+        <ul className="divide-y divide-border overflow-hidden rounded-lg border border-border bg-secondary-100 dark:bg-secondary-800">
+          {rows.map((entry) => {
+            const detail = [entry.source, entry.target_type].filter(Boolean).map(humanizeKey).join(' · ');
+            return (
+              <li key={entry.id} className="flex items-center gap-3 px-3 py-2">
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-medium text-foreground">{humanizeKey(entry.action)}</p>
+                  {detail || entry.tx_digest ? (
+                    <div className="mt-0.5 flex min-w-0 items-center gap-1 text-xs text-muted-foreground">
+                      {entry.tx_digest ? <AuditTxLink digest={entry.tx_digest} /> : null}
+                      <span className="truncate">{detail}</span>
+                    </div>
+                  ) : null}
+                </div>
+                <time
+                  dateTime={entry.time}
+                  title={new Date(entry.time).toLocaleString()}
+                  className="shrink-0 text-right text-xs tabular-nums text-muted-foreground"
+                >
+                  {formatTimestamp(entry.time)}
+                </time>
+              </li>
+            );
+          })}
+        </ul>
+      ) : null}
       {audit.hasNextPage ? (
         <button
           type="button"

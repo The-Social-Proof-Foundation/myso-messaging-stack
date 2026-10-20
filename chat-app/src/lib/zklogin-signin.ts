@@ -97,6 +97,8 @@ type AuthResult = {
 
 const ACCOUNT_SWITCH_FLAG = 'mysocial_zklogin_account_switch';
 const PROOF_KEY = 'mysocial_zklogin_proving';
+const PROOF_RECOVERED_KEY = 'mysocial_zklogin_proof_recovered';
+const proofRecoveredListeners = new Set<() => void>();
 
 let pending: Pending | null = null;
 let current: ZkSession | null = null;
@@ -121,6 +123,32 @@ function clearProofInFlight(): void {
   } catch {
     // ignore
   }
+}
+
+function setProofRecovered(next: boolean): void {
+  try {
+    if (next) sessionStorage.setItem(PROOF_RECOVERED_KEY, '1');
+    else sessionStorage.removeItem(PROOF_RECOVERED_KEY);
+  } catch {
+    // ignore quota / private mode
+  }
+  proofRecoveredListeners.forEach((listener) => listener());
+}
+
+/** True when this tab's sign-in reused the on-device proof instead of calling the prover. Survives the redirect reload. */
+export function zkLoginProofRecovered(): boolean {
+  try {
+    return sessionStorage.getItem(PROOF_RECOVERED_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+export function subscribeZkLoginProofRecovered(onStoreChange: () => void): () => void {
+  proofRecoveredListeners.add(onStoreChange);
+  return () => {
+    proofRecoveredListeners.delete(onStoreChange);
+  };
 }
 
 /** True while this page is still waiting on the zkLogin prover. */
@@ -530,6 +558,7 @@ async function restorePending(): Promise<Pending | null> {
 
 async function beginZkLogin(): Promise<{ nonce: string; state: string }> {
   proofGaveUp = false;
+  setProofRecovered(false);
   await adoptLegacySessionCopy();
   const stored = await loadZkLoginSigner().catch(() => null);
   let ephemeral: Ed25519Keypair;
@@ -721,6 +750,7 @@ async function completeZkLogin(input: { jwt: string; accessToken: string }): Pro
   if (action === 'reuse-proof' && loaded?.record) {
     const status = await activateLoadedProof({ secret: loaded.secret, record: loaded.record });
     if (status === 'ok') {
+      setProofRecovered(true);
       pending = null;
       sessionStorage.removeItem(PENDING_KEY);
       await persistCurrent(decoded.sub);

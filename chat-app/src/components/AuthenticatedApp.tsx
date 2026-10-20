@@ -12,6 +12,7 @@ import {AgentListView} from './agents/AgentListView';
 import {CreateRoomDialog, type CreateRoomRequest} from './agents/CreateRoomDialog';
 import {RoomVerifyPanel} from './agents/RoomVerifyPanel';
 import {RoomsPanel} from './agents/RoomsPanel';
+import {UnreadCountsProvider} from '../contexts/UnreadCountsContext';
 import {CreateAgentDialog} from './agents/CreateAgentDialog';
 import {CreateOrganizationDialog} from './agents/CreateOrganizationDialog';
 import {OrganizationChartPane} from './agents/OrganizationChartPane';
@@ -416,6 +417,7 @@ export function AuthenticatedApp({
   }, [refreshGroups, selectGroup]);
 
   return (
+    <UnreadCountsProvider counts={activity.counts} selectedGroupId={selectedGroup?.groupId ?? null}>
     <>
       {isUsingDevMessengerSigner && (
         <div className="border-b border-amber-200 bg-amber-50 px-4 py-2 text-center text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-100">
@@ -593,5 +595,6 @@ export function AuthenticatedApp({
         onClose={() => setShowNewAgent(false)}
       />
     </>
+    </UnreadCountsProvider>
   );
 }

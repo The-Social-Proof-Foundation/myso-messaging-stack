@@ -14,7 +14,8 @@ import {useAllSubAgents} from '../../hooks/agents/useSubAgents';
 import {Button} from '../Button';
 import {useAgentVault} from '../../contexts/AgentKeyVaultContext';
 import type {AgentKeyEnvelopeV1} from '@socialproof/memory';
-import {dialogFieldClass} from '../Dialog';
+import {isAutomationDelegateLabel} from '../../lib/agents/automation-delegate';
+import {DialogSelect, dialogFieldClass} from '../Dialog';
 import {ErrorNotice} from './ErrorNotice';
 import {ParentGrantDialog} from './ParentGrantDialog';
 
@@ -81,7 +82,7 @@ export function AgentCreateForm({
   const hasRoot = orgAgents.some((agent) => !agent.parent_object_id);
   const kind: 'root' | 'child' = !agents.isLoading && hasRoot ? 'child' : 'root';
   const parents = useMemo(
-    () => orgAgents.filter((agent) => agent.active),
+    () => orgAgents.filter((agent) => agent.active && !isAutomationDelegateLabel(agent.label)),
     [orgAgents],
   );
   const presetId = presetForMask(mask);
@@ -123,8 +124,13 @@ export function AgentCreateForm({
   }
 
   function budgetArgs() {
-    const budgetMist = parseMysoToMist(budget);
-    if (!credit.data || budgetMist == null) return undefined;
+    const trimmed = budget.trim();
+    if (!trimmed) return undefined;
+    const budgetMist = parseMysoToMist(trimmed);
+    if (budgetMist == null) throw new Error('Enter the budget as a MySo amount, like 100.');
+    if (!credit.data) {
+      throw new Error('AI credits are still loading, so this budget cannot be saved yet. Wait a moment and try again.');
+    }
     return {
       balanceId: credit.data.balance.balance_id,
       budgetMist,
@@ -231,19 +237,18 @@ export function AgentCreateForm({
         {vault?.status !== 'ready' ? <Button variant="secondary" size="sm" disabled={!vault || vault.status==='busy'} onClick={()=>void vault?.unlock().catch(e=>setError(e.message))}>{vault?.status==='busy' ? 'Unlocking…' : 'Unlock agent keys'}</Button> : <span role="status" className="text-xs text-secondary-500 dark:text-secondary-400">Agent keys unlocked</span>}
         <Button variant="secondary" size="sm" onClick={()=>void vault?.pending().then(setDrafts).catch(e=>setError(e.message))}>Load saved incomplete setups</Button>
       </div>
-      {drafts.length ? <label className="block text-sm">Saved setup<select className={dialogFieldClass} value={draftId} onChange={e=>setDraftId(e.target.value)}>
+      {drafts.length ? <label className="block text-sm">Saved setup<DialogSelect value={draftId} onChange={e=>setDraftId(e.target.value)}>
         <option value="">New agent</option>{drafts.filter(d=>sameId(d.organizationId,selectedOrg)).map(d=><option key={d.keyId} value={d.keyId}>{d.derivedAddress.slice(0,14)}…</option>)}
-      </select></label> : null}
+      </DialogSelect></label> : null}
       {agents.isLoading ? (
         <p className="text-sm text-secondary-500">Loading agents…</p>
       ) : kind === 'root' ? null : (
         <label className="block text-sm font-medium text-secondary-700 dark:text-secondary-300">
           Parent agent
-          <select
+          <DialogSelect
             value={parentId}
             onChange={(event) => setParentId(event.target.value)}
             disabled={busy || parents.length === 0}
-            className={`mt-1 ${dialogFieldClass}`}
           >
             <option value="">{parents.length === 0 ? 'No agents yet' : 'Select…'}</option>
             {parents.map((agent) => (
@@ -251,7 +256,7 @@ export function AgentCreateForm({
                 {agent.label}
               </option>
             ))}
-          </select>
+          </DialogSelect>
         </label>
       )}
 

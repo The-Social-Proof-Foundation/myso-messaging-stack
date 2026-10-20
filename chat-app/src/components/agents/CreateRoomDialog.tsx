@@ -7,7 +7,8 @@ import type {AgentChatErrorInfo} from '../../lib/agents/format-agent-chat-error'
 import type {SubAgentRow} from '../../lib/agents/social-api';
 import {useSubAgents} from '../../hooks/agents';
 import {Button} from '../Button';
-import {Dialog, dialogFieldClass} from '../Dialog';
+import {isAutomationDelegateLabel} from '../../lib/agents/automation-delegate';
+import {Dialog, DialogSelect, dialogFieldClass} from '../Dialog';
 import {ErrorNotice} from './ErrorNotice';
 
 const OBJECT_ID = /^0x[0-9a-fA-F]{1,64}$/;
@@ -46,6 +47,7 @@ export function CreateRoomDialog({
         (agent) =>
           agent.active &&
           !agent.revoked_at_ms &&
+          !isAutomationDelegateLabel(agent.label) &&
           hasCapability(agent.capabilities, 'MESSAGE_SEND') &&
           hasCapability(agent.capabilities, 'MESSAGE_READ'),
       ),
@@ -133,11 +135,10 @@ export function CreateRoomDialog({
 
         <label className="block text-sm font-medium text-secondary-700 dark:text-secondary-300">
           Agent
-          <select
+          <DialogSelect
             value={selectedAgentId}
             onChange={(event) => setAgentId(event.target.value)}
             disabled={busy || eligible.length === 0}
-            className={`mt-1 ${dialogFieldClass}`}
           >
             {eligible.length === 0 ? <option value="">No agent can message yet</option> : null}
             {eligible.map((agent) => (
@@ -145,7 +146,7 @@ export function CreateRoomDialog({
                 {agent.label.trim() || 'Agent'}
               </option>
             ))}
-          </select>
+          </DialogSelect>
         </label>
         {eligible.length === 0 && !agents.isInitialLoading ? (
           <p className="text-xs text-secondary-500 dark:text-secondary-400">

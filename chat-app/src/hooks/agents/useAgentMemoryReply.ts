@@ -1,7 +1,5 @@
-import {useCallback, useEffect, useRef, useState} from 'react';
+import {useCallback, useEffect, useRef, useSyncExternalStore} from 'react';
 import {createAgentMessagingClient} from '@socialproof/myso-messaging-stack';
-import {useQuery} from '@tanstack/react-query';
-
 import {useMessagingClient} from '../../contexts/MessagingClientContext';
 import {useMySocialAuth, useAuthenticatedAddress} from '../../contexts/MySocialAuthContext';
 import {
@@ -28,7 +26,19 @@ import {
   turnIdempotencyKey,
   type AgentCommand,
 } from '../../lib/agents/memory-turn';
-import {createReplyQueue, type ReplyQueue} from '../../lib/agents/reply-queue';
+import {
+  enqueueAgentReply,
+  getAgentReplySession,
+  holdAgentReplyQueue,
+  patchAgentReplySession,
+  resolveAgentReplyAction,
+  resumeAgentReplyQueue,
+  setAgentReplyResolver,
+  setAgentReplyRunner,
+  subscribeAgentReplies,
+  type AgentReplyJob,
+  type PendingChatAction,
+} from '../../lib/agents/agent-reply-sessions';
 import {RECALL_STATUS_MS, REPLY_STATUS, actionStatus} from '../../lib/agents/reply-status';
 import {describeCapabilities, type OrgMemoryAccess} from '../../lib/agents/capability-brief';
 import {
@@ -40,13 +50,13 @@ import {
   orgMemoryAccessFor,
 } from '../../lib/agents/chat-action-run';
 import {ORG_PERM_MEMORY_READ, ORG_PERM_MEMORY_WRITE} from '@socialproof/memory/account';
-import {parseActionProposal, type ChatActionProposal} from '../../lib/agents/chat-actions';
+import {parseActionProposal} from '../../lib/agents/chat-actions';
 import {fetchOrganizationMemoryPermissions, fetchSubAgentByObjectId} from '../../lib/agents/social-api';
 import {isTransientMyDataError, withMyDataRetry} from '../../lib/format-relayer-error';
 import {useAgentChatPlatform} from './useAgentChatPlatform';
 import {useChatActionExecutor} from './useChatActionExecutor';
 import {useMemoryAccount} from './useMemoryAccount';
-import {useAllSubAgents, useSubAgents} from './useSubAgents';
+import {useAllSubAgents} from './useSubAgents';
 import {useOrganizations} from './useOrganizations';
 import type {SubAgentRow} from '../../lib/agents/social-api';
 
@@ -77,7 +87,7 @@ function replyError(error: unknown): string {
   if (!(error instanceof MemoryClientError)) {
     return error instanceof Error ? error.message : 'This agent could not answer.';
   }
-  if (error.kind === 'insufficient_credits') return 'This agent is out of AI credits. Deposit credits from the AI Credits menu to keep chatting.';
+  if (error.kind === 'insufficient_credits') return 'This agent is out of AI credits. Deposit credits from the Credits menu to keep chatting.';
   if (error.kind === 'approval_required') {
     return 'This ask needs a credit approval before the agent can answer.';
   }
@@ -167,13 +177,7 @@ function describeAgent(
   return lines.join('\n');
 }
 
-/** A write the agent proposed, held until the owner approves or denies it. */
-export interface PendingChatAction {
-  proposal: ChatActionProposal;
-  agent: SubAgentRow;
-  /** Posts a line into the chat as the agent. */
-  post: (text: string) => Promise<unknown>;
-}
+export type {PendingChatAction};
 
 /**
  * After the user sends in an agent group, answer as that agent.
@@ -189,69 +193,125 @@ export function useAgentMemoryReply(
   groupUuid: string,
   options: AgentMemoryReplyOptions = {},
 ) {
-  const historyLength = options.historyLength ?? 0;
+  const optionsRef = useRef(options);
+  optionsRef.current = options;
+  const session = useSyncExternalStore(
+    subscribeAgentReplies,
+    () => getAgentReplySession(groupId),
+    () => getAgentReplySession(groupId),
+  );
+  const reply = useCallback(
+    (question: string) => {
+      enqueueAgentReply({
+        groupId,
+        groupUuid,
+        question,
+        historyLength: optionsRef.current.historyLength ?? 0,
+        thread: optionsRef.current.thread ?? [],
+      });
+    },
+    [groupId, groupUuid],
+  );
+  const resolveAction = useCallback(
+    (approve: boolean) => resolveAgentReplyAction(groupId, approve),
+    [groupId],
+  );
+  return {
+    reply,
+    replying: session.replying,
+    queued: session.queued,
+    status: session.status,
+    error: session.error,
+    pendingAction: session.pending,
+    actionBusy: session.actionBusy,
+    resolveAction,
+  };
+}
+
+interface ReplyDeps {
+  client: ReturnType<typeof useMessagingClient>;
+  keypair: ReturnType<typeof useMySocialAuth>['keypair'];
+  owner: string | null | undefined;
+  vault: ReturnType<typeof useAgentVault>;
+  accountId: string | undefined;
+  organizations: ReturnType<typeof useOrganizations>['organizations'];
+  allAgents: SubAgentRow[];
+  platform: ReturnType<typeof useAgentChatPlatform>;
+  runAction: ReturnType<typeof useChatActionExecutor>;
+}
+
+/**
+ * Lives for the whole signed-in session, not for the open chat. Each chat has its own queue, so
+ * leaving a conversation does not cancel the agent that is already thinking there.
+ */
+export function AgentReplyEngine() {
   const client = useMessagingClient();
   const {keypair} = useMySocialAuth();
   const owner = useAuthenticatedAddress();
   const vault = useAgentVault();
   const account = useMemoryAccount();
-  const [replying, setReplying] = useState(false);
-  /** What the agent is doing right now, for the thinking indicator. */
-  const [status, setStatus] = useState<string | null>(null);
-  const recallTimer = useRef<number | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  const metadata = useQuery({
-    queryKey: ['agents', 'group-metadata', 'one', groupId],
-    enabled: Boolean(client && groupId),
-    staleTime: 5 * 60_000,
-    queryFn: async (): Promise<GroupMetadataLike | null> => {
-      const rows = await client!.messaging.view.groupsMetadata({
-        groupIds: [groupId],
-        refresh: false,
-      });
-      const parsed = rows[groupId];
-      return parsed ? metadataRecord(parsed) : null;
-    },
-  });
-
-  const agentChat = metadata.data
-    ? agentChatFromMetadata(groupId, metadata.data)
-    : null;
-  const runAction = useChatActionExecutor({enabled: Boolean(agentChat)});
-  const [pendingAction, setPendingAction] = useState<PendingChatAction | null>(null);
-  const [actionBusy, setActionBusy] = useState(false);
-  // The reply queue answers one question at a time, in order. While a write waits on the owner's
-  // decision it holds, so the agent answers nothing further until the proposal is settled.
-  const [queued, setQueued] = useState(0);
-  const replyOnceRef = useRef<(question: string) => Promise<void>>(async () => {});
-  const queueRef = useRef<ReplyQueue | null>(null);
-  if (queueRef.current === null) {
-    queueRef.current = createReplyQueue((text) => replyOnceRef.current(text), setQueued);
-  }
-  const setPending = useCallback((next: PendingChatAction | null) => {
-    setPendingAction(next);
-    if (next) queueRef.current?.hold();
-    else queueRef.current?.resume();
-  }, []);
-  // A proposal and a backlog both belong to one conversation; never carry them into another chat.
-  useEffect(() => {
-    queueRef.current?.clear();
-    setPending(null);
-  }, [groupId, setPending]);
-  const agents = useSubAgents(false, {enabled: Boolean(agentChat)});
-  const platform = useAgentChatPlatform({enabled: Boolean(agentChat)});
-  const allAgents = useAllSubAgents({enabled: Boolean(agentChat)});
+  const runAction = useChatActionExecutor();
+  const platform = useAgentChatPlatform();
+  const allAgents = useAllSubAgents();
   const {organizations} = useOrganizations();
+  const latest = useRef<ReplyDeps>({
+    client,
+    keypair,
+    owner,
+    vault,
+    accountId: account.data?.account_id,
+    organizations,
+    allAgents: allAgents.items,
+    platform,
+    runAction,
+  });
+  latest.current = {
+    client,
+    keypair,
+    owner,
+    vault,
+    accountId: account.data?.account_id,
+    organizations,
+    allAgents: allAgents.items,
+    platform,
+    runAction,
+  };
+  useEffect(() => {
+    setAgentReplyRunner((job) => runAgentReply(latest.current, job));
+    setAgentReplyResolver((groupId, approve) => resolveStoredAction(latest.current, groupId, approve));
+    return () => {
+      setAgentReplyRunner(null);
+      setAgentReplyResolver(null);
+    };
+  }, []);
+  return null;
+}
 
-  const replyOnce = useCallback(
-    async (question: string) => {
-      const text = question.trim();
-      if (!text || !client || !keypair) return;
-      setError(null);
+async function runAgentReply(deps: ReplyDeps, job: AgentReplyJob) {
+  const {client, keypair, owner, vault, platform, runAction} = deps;
+  const {groupId, groupUuid} = job;
+  const historyLength = job.historyLength;
+  const account = {data: deps.accountId ? {account_id: deps.accountId} : undefined};
+  const allAgents = {items: deps.allAgents};
+  const organizations = deps.organizations;
+  let recallTimer: number | null = null;
+  const setStatus = (next: string | null | ((current: string | null) => string | null)) => {
+    const current = getAgentReplySession(groupId).status;
+    patchAgentReplySession(groupId, {status: typeof next === 'function' ? next(current) : next});
+  };
+  const setError = (error: string | null) => patchAgentReplySession(groupId, {error});
+  const setReplying = (replying: boolean) => patchAgentReplySession(groupId, {replying});
+  const setPending = (pending: PendingChatAction | null) => {
+    patchAgentReplySession(groupId, {pending});
+    if (pending) holdAgentReplyQueue(groupId);
+    else resumeAgentReplyQueue(groupId);
+  };
+  const text = job.question.trim();
+  if (!text || !client || !keypair) return;
+  setError(null);
 
-      let meta = metadata.data;
-      if (!meta) {
+  let meta: GroupMetadataLike | null = null;
+  if (!meta) {
         try {
           const rows = await client.messaging.view.groupsMetadata({
             groupIds: [groupId],
@@ -362,7 +422,7 @@ export function useAgentMemoryReply(
           const decision = decideRecall(text, historyLength);
           // The user's message is already in the thread; drop it so it is not sent twice.
           const turns: AskHistoryTurn[] = [];
-          for (const m of options.thread ?? []) {
+          for (const m of job.thread) {
             const content = m.text?.trim();
             if (!content) continue;
             turns.push({
@@ -382,7 +442,7 @@ export function useAgentMemoryReply(
           if (localAnswer === null) {
             setStatus(decision.recall ? REPLY_STATUS.recalling : REPLY_STATUS.thinking);
             if (decision.recall) {
-              recallTimer.current = window.setTimeout(
+              recallTimer = window.setTimeout(
                 () => setStatus((current) => (current === REPLY_STATUS.recalling ? REPLY_STATUS.thinking : current)),
                 RECALL_STATUS_MS,
               );
@@ -395,9 +455,9 @@ export function useAgentMemoryReply(
             recall: decision.recall,
             idempotencyKey: await turnIdempotencyKey(groupId, text),
           });
-          if (recallTimer.current !== null) {
-            window.clearTimeout(recallTimer.current);
-            recallTimer.current = null;
+          if (recallTimer !== null) {
+            window.clearTimeout(recallTimer);
+            recallTimer = null;
           }
           vault.assertCurrent(epoch);
           // A lookup in the social indexer only reads, so it runs at once and its result goes back to
@@ -507,81 +567,50 @@ export function useAgentMemoryReply(
       } catch (err) {
         setError(replyError(err));
       } finally {
-        if (recallTimer.current !== null) {
-          window.clearTimeout(recallTimer.current);
-          recallTimer.current = null;
+        if (recallTimer !== null) {
+          window.clearTimeout(recallTimer);
+          recallTimer = null;
         }
         setReplying(false);
         setStatus(null);
       }
-    },
-    [
-      vault, owner,
-      account.data?.account_id,
-      agents.totalCount,
-      allAgents.items,
-      organizations,
-      options.thread,
-      client,
-      groupId,
-      historyLength,
-      groupUuid,
-      keypair,
-      metadata.data,
-      platform,
-      runAction,
-    ],
-  );
+}
 
-  // `replyOnce` closes over the latest thread and settings, so the queue always calls the newest.
-  replyOnceRef.current = replyOnce;
-
-  /**
-   * Ask the agent to answer. Safe to call while it is already working: the question joins a
-   * first-in-first-out queue and is answered after the ones ahead of it. Returns once queued, so
-   * the composer stays free while the agent works through its backlog.
-   */
-  const reply = useCallback(async (question: string) => {
-    const text = question.trim();
-    if (text) queueRef.current?.push(text);
-  }, []);
-
-  /** The owner's answer to the permission dialog. Approval is the only path to a signed write. */
-  const resolveAction = useCallback(
-    async (approve: boolean) => {
-      const pending = pendingAction;
-      if (!pending || actionBusy) return;
-      setActionBusy(true);
-      setError(null);
-      try {
-        if (!approve) {
-          await pending.post("Understood, I won't do that.");
-          setPending(null);
-          return;
-        }
-        // Re-read the agent: its permissions may have changed since it proposed this.
-        const fresh = await fetchSubAgentByObjectId(pending.agent.agent_object_id);
-        const current = fresh ? parseActionProposal(`[[action:${pending.proposal.name} ${JSON.stringify(pending.proposal.params)}]]`, fresh) : null;
-        if (!fresh || !fresh.active || !current?.proposal) {
-          throw new Error('This agent no longer has permission to do that.');
-        }
-        let message: string;
-        try {
-          message = await runAction(current.proposal, fresh);
-        } catch (err) {
-          message = `I couldn't do that: ${replyError(err)}`;
-        }
-        setPending(null);
-        await pending.post(message);
-      } catch (err) {
-        setError(replyError(err));
-        setPending(null);
-      } finally {
-        setActionBusy(false);
-      }
-    },
-    [pendingAction, actionBusy, runAction],
-  );
-
-  return {reply, replying, queued, status, error, pendingAction, actionBusy, resolveAction};
+async function resolveStoredAction(deps: ReplyDeps, groupId: string, approve: boolean) {
+  const pending = getAgentReplySession(groupId).pending;
+  const {actionBusy} = getAgentReplySession(groupId);
+  if (!pending || actionBusy) return;
+  const setError = (error: string | null) => patchAgentReplySession(groupId, {error});
+  const setPending = (next: PendingChatAction | null) => {
+    patchAgentReplySession(groupId, {pending: next});
+    if (next) holdAgentReplyQueue(groupId);
+    else resumeAgentReplyQueue(groupId);
+  };
+  patchAgentReplySession(groupId, {actionBusy: true});
+  setError(null);
+  try {
+    if (!approve) {
+      await pending.post("Understood, I won't do that.");
+      setPending(null);
+      return;
+    }
+    const fresh = await fetchSubAgentByObjectId(pending.agent.agent_object_id);
+    const current = fresh ? parseActionProposal(`[[action:${pending.proposal.name} ${JSON.stringify(pending.proposal.params)}]]`, fresh) : null;
+    if (!fresh || !fresh.active || !current?.proposal) {
+      throw new Error('This agent no longer has permission to do that.');
+    }
+    let message: string;
+    try {
+      message = await deps.runAction(current.proposal, fresh);
+    } catch (err) {
+      message = `I couldn't do that: ${replyError(err)}`;
+    }
+    setPending(null);
+    await pending.post(message);
+  } catch (err) {
+    setError(replyError(err));
+    setPending(null);
+  } finally {
+    patchAgentReplySession(groupId, {actionBusy: false});
+  }
 }

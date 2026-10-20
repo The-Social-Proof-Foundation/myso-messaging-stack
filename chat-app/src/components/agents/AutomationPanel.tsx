@@ -9,6 +9,7 @@ import {ListError} from './ListStates';
 import type {SubAgentRow} from '../../lib/agents/social-api';
 import type {AutomationJob, AutomationRun} from '../../lib/agents/automation-client';
 import {useSubAgents} from '../../hooks/agents/useSubAgents';
+import {isAutomationDelegateLabel} from '../../lib/agents/automation-delegate';
 import {
   useAutomationHealth,
   useAutomationJobs,
@@ -130,7 +131,7 @@ export function AutomationPanel({agent: fixedAgent}: Readonly<{agent?: SubAgentR
   const subAgents = useSubAgents(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
-  const agents = subAgents.agents;
+  const agents = subAgents.agents.filter((row) => !isAutomationDelegateLabel(row.label));
   useEffect(() => {
     if (fixedAgent || selectedId || agents.length === 0) return;
     setSelectedId(agents[0]!.agent_object_id);

@@ -9,7 +9,9 @@ import {AgentStatusDot} from '@/components/blocks/AgentStatusMark';
 import {ReputationBadge} from '@/components/agents/ReputationBadge';
 import {type AgentChartNode} from '@/lib/agents/agent-chart';
 import {formatMistAmount} from '@/lib/agents/format';
-import type {AgentStats} from '@/hooks/agents/useAgentStats';
+import {MysoAmount} from '@/components/agents/MysoAmount';
+import {mysoUnitClass} from '@/components/agents/StatTile';
+import {spendableMist, type AgentStats} from '@/hooks/agents/useAgentStats';
 import {useAgentPnl} from '@/hooks/agents/useAgentPnl';
 import {formatSignedMist, type AgentPnl} from '@/lib/agents/pnl';
 
@@ -123,8 +125,16 @@ export function AgentChartNodeCard({
           </div>
         </div>
 
-        <dl className="grid grid-cols-3 gap-1.5">
-          <CardStat label="Balance" value={stats?.balanceMist} />
+        <dl className="grid grid-cols-[repeat(3,minmax(max-content,1fr))] gap-1.5">
+          <CardStat
+            label="Available"
+            value={spendableMist(stats)}
+            title={
+              stats?.budgetEnabled
+                ? 'AI credits left under this agent’s budget'
+                : 'MySo this agent holds'
+            }
+          />
           <CardStat label="Spent" value={stats?.spentMist} />
           <PnlStat pnl={pnl} />
         </dl>
@@ -181,32 +191,36 @@ function PnlStat({pnl}: Readonly<{pnl: AgentPnl | null}>) {
       ].join('\n')
     : 'Profit and loss: task earnings minus task spend minus AI spend';
   return (
-    <div className="min-w-0 rounded-lg bg-muted/60 px-2 py-1.5" title={title}>
+    <div className={statCellClass} title={title}>
       <dt className="truncate text-[10px] text-muted-foreground">PnL</dt>
-      <dd className={cn('truncate text-xs font-medium tabular-nums', tone)}>
-        {pnl ? formatSignedMist(pnl.pnlMist) : '—'}
+      <dd className={cn('whitespace-nowrap text-xs font-medium tabular-nums', tone)}>
+        {pnl ? (
+          <MysoAmount amount={formatSignedMist(pnl.pnlMist)} unitClassName={mysoUnitClass} />
+        ) : (
+          '—'
+        )}
       </dd>
     </div>
   );
 }
 
+const statCellClass = 'min-w-0 rounded-md border border-border bg-muted/70 px-1.5 py-1.5';
+
 function CardStat({
   label,
   value,
-  count,
-}: Readonly<{label: string; value?: bigint | null; count?: number | null}>) {
-  const text =
-    count !== undefined
-      ? count == null
-        ? '—'
-        : count.toLocaleString()
-      : value == null
-        ? '—'
-        : formatMistAmount(value);
+  title,
+}: Readonly<{label: string; value?: bigint | null; title?: string}>) {
   return (
-    <div className="min-w-0 rounded-lg bg-muted/60 px-2 py-1.5">
+    <div className={statCellClass} title={title}>
       <dt className="truncate text-[10px] text-muted-foreground">{label}</dt>
-      <dd className="truncate text-xs font-medium tabular-nums text-foreground">{text}</dd>
+      <dd className="whitespace-nowrap text-xs font-medium tabular-nums text-foreground">
+        {value == null ? (
+          '—'
+        ) : (
+          <MysoAmount amount={formatMistAmount(value < 0n ? 0n : value)} unitClassName={mysoUnitClass} />
+        )}
+      </dd>
     </div>
   );
 }

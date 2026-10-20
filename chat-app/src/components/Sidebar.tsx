@@ -9,6 +9,7 @@ import { sidebarPreviewActivityTime, useSidebarMessagePreviews } from '../hooks/
 import { useWalletAvatarMap } from '../hooks/useWalletAvatarMap';
 import { useAgentNamesByAddress } from '../hooks/agents/useSubAgents';
 import { conversationPeerLabel, isKnownAgentAddress, knownAgentAddressSet } from '../lib/agents/agent-display-name';
+import { agentReplyPreview, useAgentReplyClock } from '../lib/agents/agent-reply-sessions';
 import {
   conversationDisplayTitle,
   dmPeerAddress,
@@ -17,6 +18,7 @@ import {
 import { ConversationAvatar } from './ConversationAvatar';
 import { SidebarPromo } from './SidebarPromo';
 import { sidebarShellClass } from './SidebarShell';
+import { UnreadCountBadge } from '../contexts/UnreadCountsContext';
 
 interface SidebarProps {
   groups: StoredGroup[];
@@ -57,6 +59,7 @@ export function Sidebar({
   const groupIds = useMemo(() => groups.map((g) => g.groupId), [groups]);
   const membersByGroup = useSidebarGroupMembers(groupIds);
   const previews = useSidebarMessagePreviews(groups, latestOrders);
+  useAgentReplyClock();
   // Most recent message first; groups without a known time keep their incoming order.
   const orderedGroups = useMemo(
     () =>
@@ -172,7 +175,7 @@ export function Sidebar({
                           ) : null}
                         </div>
                         <p className="mt-0.5 line-clamp-2 text-xs font-medium leading-snug tracking-tight text-secondary-400 dark:text-secondary-500">
-                          {preview || 'No messages yet'}
+                          {agentReplyPreview(group.groupId, preview || 'No messages yet')}
                         </p>
                       </div>
                       <div className="flex shrink-0 items-center gap-1.5 self-center">
@@ -182,9 +185,7 @@ export function Sidebar({
                               PAID
                             </span>
                           ) : (
-                            <span className="inline-flex min-w-[1.25rem] items-center justify-center rounded-full bg-bubble-sent px-1.5 py-0.5 text-[10px] font-semibold leading-none text-white dark:bg-bubble-sent-dark">
-                              {unread > 99 ? '99+' : unread}
-                            </span>
+                            <UnreadCountBadge count={unread} />
                           ))}
                         <ChevronRight
                           className="h-4 w-4 text-secondary-400 dark:text-secondary-500"

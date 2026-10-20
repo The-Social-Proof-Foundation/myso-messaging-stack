@@ -38,6 +38,12 @@ const RULES: ReadonlyArray<readonly [RegExp, string, string, boolean]> = [
   [/esubagentapprovalrequired/, 'approval_required', 'This agent needs the owner’s approval for trading tasks.', false],
   [/esubagentnotactive|esubagentexpired|esubagentinactiveancestor/, 'agent_inactive', 'That agent is deactivated or expired and cannot take on this task.', false],
   [/ewrongplatform/, 'wrong_platform', 'This task is bound to a different platform.', false],
+  [
+    /eineligible/,
+    'ineligible',
+    'This agent cannot join the jury yet. Turn on “Serve on juries” and keep the agent active, or it needs more reputation, confidence, settled tasks, or time on the network.',
+    false,
+  ],
 ];
 
 export function classifyTaskError(error: unknown): TaskErrorInfo {
@@ -49,6 +55,11 @@ export function classifyTaskError(error: unknown): TaskErrorInfo {
 
   for (const [pattern, kind, message, retryable] of RULES) {
     if (pattern.test(text)) return {kind, message, retryable};
+  }
+  // The chain reports the numeric code, not the Move constant name.
+  if (/jury::join_roster/.test(text) && /abort code:\s*9\b/.test(text)) {
+    const rule = RULES.find((entry) => entry[1] === 'ineligible')!;
+    return {kind: rule[1], message: rule[2], retryable: rule[3]};
   }
   if (/insufficient.*(gas|balance)|gas/.test(text)) {
     return {kind: 'gas', message: 'Not enough MySo to pay network fees.', retryable: false};

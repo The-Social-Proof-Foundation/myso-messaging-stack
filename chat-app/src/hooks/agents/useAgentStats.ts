@@ -22,6 +22,21 @@ const sameId = (a: string, b: string) =>
   a.replace(/^0x/i, '').toLowerCase() === b.replace(/^0x/i, '').toLowerCase();
 
 /**
+ * What the agent can still spend. A budget is an AI-credit cap, so it wins over the
+ * agent's own coin balance, which stays 0 until someone sends it MySo.
+ */
+export function spendableMist(
+  stats: Pick<AgentStats, 'balanceMist' | 'spentMist' | 'budgetMist' | 'budgetEnabled'> | undefined,
+): bigint | null {
+  if (!stats) return null;
+  if (stats.budgetEnabled && stats.budgetMist != null) {
+    const left = stats.budgetMist - (stats.spentMist ?? 0n);
+    return left > 0n ? left : 0n;
+  }
+  return stats.balanceMist;
+}
+
+/**
  * Live stats for agents in one organization: spend, calls and budget from the public indexer
  * (readable by the owner with no dashboard grant), and each agent's held MySo straight from the chain.
  * Queries are shared by key, so the chart cards and the details drawer cost one fetch.

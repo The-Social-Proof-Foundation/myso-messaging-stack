@@ -301,6 +301,8 @@ describe('agent_task builders', () => {
       platformId: null,
       paymentCoinId: PAYMENT,
     });
+    const data = tx.getData() as unknown as {commands: {$kind: string}[]};
+    expect(data.commands.some((command) => command.$kind === 'TransferObjects')).toBe(false);
     expect(lastMoveCall(tx)).toEqual({
       target: 'agent_task::create_task',
       args: [
@@ -321,6 +323,30 @@ describe('agent_task builders', () => {
         obj(CLOCK),
       ],
     });
+  });
+
+  it('returns a freshly split payment coin, because create_task only borrows it', () => {
+    const owner = `0x${'ab'.repeat(32)}`;
+    const tx = createTaskTx(TASK_IDS, {
+      buyerAccountId: BUYER_ACCOUNT,
+      sellerAccountId: SELLER_ACCOUNT,
+      sellerAgentId: SELLER_AGENT,
+      amountMist: 1_000_000_000n,
+      scopeDigest: DIGEST,
+      title: 'write the report',
+      acceptWindowMs: 86_400_000,
+      deliveryWindowMs: 172_800_000,
+      settleWindowMs: 259_200_000,
+      roomGroupId: null,
+      platformId: null,
+      returnCoinTo: owner,
+    });
+    const data = tx.getData() as unknown as {
+      commands: {$kind: string; TransferObjects?: {objects: {$kind: string}[]; address: {$kind: string}}}[];
+    };
+    const transfer = data.commands.find((command) => command.$kind === 'TransferObjects');
+    expect(transfer?.TransferObjects?.objects[0]?.$kind).not.toBe('Input');
+    expect(data.commands.at(-1)?.$kind).toBe('TransferObjects');
   });
 
   it('accept_task(config, task, memory_config, seller_account, seller_agent, terms_digest, clock)', () => {

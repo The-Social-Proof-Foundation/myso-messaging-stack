@@ -11,8 +11,10 @@ import {
 } from '../../lib/agents/jury';
 import type {JurorRosterInfo, SubAgentRow} from '../../lib/agents/social-api';
 import {useJuryActions, useJurorDuties, useOwnerJurors, useSubAgents} from '../../hooks/agents';
+import {isAutomationDelegateLabel} from '../../lib/agents/automation-delegate';
 import {Button} from '../Button';
-import {cardClass, fieldClass, sectionTitleClass} from './chrome';
+import {DialogSelect} from '../Dialog';
+import {cardClass, sectionTitleClass} from './chrome';
 import {ErrorNotice} from './ErrorNotice';
 
 function formatTime(ms: number): string {
@@ -57,19 +59,19 @@ function JurorRow({
         </Button>
       ) : (
         <>
-          <select
+          <DialogSelect
             value={family}
             onChange={(event) => setFamily(Number(event.target.value))}
             disabled={busy}
             aria-label={`Model family for ${agent.label}`}
-            className={fieldClass}
+            className="mt-0"
           >
             {Object.entries(MODEL_FAMILY_LABEL).map(([value, label]) => (
               <option key={value} value={value}>
                 {label}
               </option>
             ))}
-          </select>
+          </DialogSelect>
           <Button size="sm" disabled={busy} onClick={() => onJoin(agent, family)}>
             Join roster
           </Button>
@@ -92,7 +94,10 @@ export function JuryPanel() {
   const [error, setError] = useState<string | null>(null);
   const now = Date.now();
 
-  const jurorAgents = useMemo(() => agents.agents.filter(hasJuryCapability), [agents.agents]);
+  const jurorAgents = useMemo(
+    () => agents.agents.filter((agent) => hasJuryCapability(agent) && !isAutomationDelegateLabel(agent.label)),
+    [agents.agents],
+  );
   const without = agents.agents.length - jurorAgents.length;
   const entries = useMemo(
     () => new Map((roster.data ?? []).map((entry) => [entry.agentId, entry])),

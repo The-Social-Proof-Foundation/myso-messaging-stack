@@ -1,5 +1,5 @@
-import {useEffect, type KeyboardEvent, type ReactNode} from 'react';
-import {X} from 'lucide-react';
+import {useEffect, type KeyboardEvent, type ReactNode, type SelectHTMLAttributes} from 'react';
+import {ChevronDown, X} from 'lucide-react';
 
 interface DialogProps {
   open: boolean;
@@ -114,3 +114,26 @@ export const dialogPrimaryButtonClass =
 
 export const dialogSecondaryButtonClass =
   'inline-flex items-center justify-center rounded-lg border border-secondary-300 px-4 py-2 text-sm font-medium text-secondary-700 transition-colors hover:bg-secondary-100 disabled:opacity-50 dark:border-secondary-600 dark:text-secondary-200 dark:hover:bg-secondary-700';
+
+/** Dialog select: hides the native arrow and paints the menu with the dialog surface. */
+export function DialogSelect({
+  className = '',
+  children,
+  ...props
+}: SelectHTMLAttributes<HTMLSelectElement>) {
+  return (
+    <div className={`relative mt-1 ${className}`}>
+      <select
+        {...props}
+        className={`${dialogFieldClass} appearance-none pr-9 scheme-light dark:scheme-dark dark:[&>option]:bg-secondary-800 dark:[&>option]:text-secondary-100`}
+      >
+        {children}
+      </select>
+      <ChevronDown
+        className="pointer-events-none absolute top-1/2 right-3 h-4 w-4 -translate-y-1/2 text-secondary-400"
+        strokeWidth={2}
+        aria-hidden
+      />
+    </div>
+  );
+}

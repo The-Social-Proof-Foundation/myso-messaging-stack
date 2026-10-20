@@ -217,62 +217,6 @@ function OrganizationDetail({organizationId}: Readonly<{organizationId: string}>
 
   return (
     <div className="flex min-w-0 flex-col gap-4">
-      <section className={`${cardClass} p-4`}>
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="min-w-0">
-            <h2 className={sectionTitleClass}>{row.name || 'Untitled'}</h2>
-            <p className="mt-1 max-w-[65ch] text-sm text-secondary-500">
-              {row.description || 'No description'}
-            </p>
-            <div className="mt-2 flex flex-wrap gap-1.5">
-              <QuietChip>{organizationCategoryLabel(row.org_type)}</QuietChip>
-              <QuietChip tone={row.active ? 'neutral' : 'danger'}>
-                {row.active ? 'Active' : 'Inactive'}
-              </QuietChip>
-            </div>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <Button
-              variant="secondary"
-              size="sm"
-              disabled={Boolean(busy) || Boolean(groupId)}
-              onClick={() =>
-                void run('memory', async () => {
-                  await actions.ensureOrgMemory({
-                    accountId: account.data!.account_id,
-                    organizationId,
-                    ownerAddress: owner,
-                  });
-                })
-              }
-            >
-              {groupId
-                ? 'Shared memory enabled'
-                : busy === 'memory'
-                  ? 'Enabling…'
-                  : 'Enable shared memory'}
-            </Button>
-            {row.active ? (
-              <Button
-                variant="danger"
-                size="sm"
-                disabled={Boolean(busy)}
-                onClick={() =>
-                  void run('deact', () =>
-                    actions.deactivateOrganization({
-                      accountId: account.data!.account_id,
-                      organizationId,
-                    }),
-                  )
-                }
-              >
-                {busy === 'deact' ? 'Deactivating…' : 'Deactivate'}
-              </Button>
-            ) : null}
-          </div>
-        </div>
-      </section>
-
       {needsDashboardAccess ? (
         <section className="rounded-xl border border-amber-300 bg-amber-50 p-4 dark:border-amber-700 dark:bg-amber-950/40">
           <h3 className="font-chakra text-sm font-medium tracking-wide text-amber-900 dark:text-amber-100">
@@ -315,6 +259,50 @@ function OrganizationDetail({organizationId}: Readonly<{organizationId: string}>
       ) : (
         <AgentOrgChart
           title={row.name || 'Untitled'}
+          description={row.description}
+          active={row.active}
+          meta={organizationCategoryLabel(row.org_type)}
+          actions={
+            <>
+              <Button
+                variant="secondary"
+                size="sm"
+                disabled={Boolean(busy) || Boolean(groupId)}
+                onClick={() =>
+                  void run('memory', async () => {
+                    await actions.ensureOrgMemory({
+                      accountId: account.data!.account_id,
+                      organizationId,
+                      ownerAddress: owner,
+                    });
+                  })
+                }
+              >
+                {groupId
+                  ? 'Shared memory enabled'
+                  : busy === 'memory'
+                    ? 'Enabling…'
+                    : 'Enable shared memory'}
+              </Button>
+              {row.active ? (
+                <Button
+                  variant="danger"
+                  size="sm"
+                  disabled={Boolean(busy)}
+                  onClick={() =>
+                    void run('deact', () =>
+                      actions.deactivateOrganization({
+                        accountId: account.data!.account_id,
+                        organizationId,
+                      }),
+                    )
+                  }
+                >
+                  {busy === 'deact' ? 'Deactivating…' : 'Deactivate'}
+                </Button>
+              ) : null}
+            </>
+          }
           roots={chartRoots}
           organizationId={organizationId}
           onAgentCreated={() => void agents.refetch()}

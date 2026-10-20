@@ -607,6 +607,11 @@ export interface CreateTaskArgs {
   platformId: string | null;
   /** MYSO coin that pays the escrow. Omit to split exactly `amountMist` from the sender's coins. */
   paymentCoinId?: string;
+  /**
+   * Owner of a coin created for this call. `create_task` only borrows the coin, so a freshly
+   * split coin has to be transferred back or the transaction is rejected as unused.
+   */
+  returnCoinTo?: string;
 }
 
 export function createTaskTx(
@@ -632,11 +637,16 @@ export function createTaskTx(
       tx.pure.u64(args.acceptWindowMs),
       tx.pure.u64(args.deliveryWindowMs),
       tx.pure.u64(args.settleWindowMs),
-      tx.pure.option('address', args.roomGroupId),
+      // The room binding is an object id, not an address.
+      tx.pure.option('id', args.roomGroupId),
       tx.pure.option('address', args.platformId),
       tx.object(MYSO_CLOCK_OBJECT_ID),
     ],
   });
+  if (!args.paymentCoinId) {
+    if (!args.returnCoinTo) throw new Error('The payment coin has nowhere to return to.');
+    tx.transferObjects([payment], tx.pure.address(args.returnCoinTo));
+  }
   return tx;
 }
 
