@@ -23,8 +23,12 @@ export { WebCryptoPrimitives, getDefaultCryptoPrimitives } from './crypto-primit
 export { DEKManager } from './dek-manager.js';
 
 // MyData Policy
-export { DefaultMyDataPolicy, PrincipalMyDataOversightPolicy } from './mydata-policy.js';
-export type { PrincipalOversightPolicyOptions } from './mydata-policy.js';
+export {
+	DefaultMyDataPolicy,
+	PrincipalMyDataOversightPolicy,
+	AgentMyDataReaderPolicy,
+} from './mydata-policy.js';
+export type { PrincipalOversightPolicyOptions, AgentReaderPolicyOptions } from './mydata-policy.js';
 
 // Envelope Encryption
 export { EnvelopeEncryption, buildMessageAad } from './envelope-encryption.js';

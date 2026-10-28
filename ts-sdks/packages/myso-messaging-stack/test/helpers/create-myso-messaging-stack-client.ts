@@ -32,6 +32,9 @@ const noopTransport: RelayerTransport = {
 	fetchMessage: () => {
 		throw new Error('noopTransport: fetchMessage not implemented');
 	},
+	listMemberConversations: () => {
+		throw new Error('noopTransport: listMemberConversations not implemented');
+	},
 	updateMessage: () => {
 		throw new Error('noopTransport: updateMessage not implemented');
 	},

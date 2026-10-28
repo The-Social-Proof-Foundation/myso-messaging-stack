@@ -23,6 +23,7 @@ import type {
 	ListGroupReactionsParams,
 	ListAgentConversationsParams,
 	ListGroupsForAgentParams,
+	ListMemberConversationsParams,
 	PostGroupReceiptsParams,
 	PostGroupReactionParams,
 	PostPresenceParams,
@@ -108,6 +109,8 @@ export interface RelayerTransport {
 	listAgentConversations(params: ListAgentConversationsParams): Promise<RelayerAgentConversation[]>;
 	/** Wallet-authenticated groups where `derivedAddress` is the creator actor. */
 	listGroupsForAgent(params: ListGroupsForAgentParams): Promise<RelayerAgentConversation[]>;
+	/** Wallet-authenticated reverse membership-index lookup; recheck live chain permission before use. */
+	listMemberConversations(params: ListMemberConversationsParams): Promise<string[]>;
 	/**
 	 * Advisory DM-gate pre-check (`/v1/messaging/dm-gate`) — blocked / paid-DM
 	 * status before sending. Enforcement stays on `sendMessage` (402).

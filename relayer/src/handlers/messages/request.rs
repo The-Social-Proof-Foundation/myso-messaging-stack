@@ -76,6 +76,9 @@ pub struct CreateMessageRequest {
     /// post: "{group_id}:post:{shared_post_address}:{idempotency_key}:{encrypted_text}:{nonce}:{key_version}"
     /// token_transfer: "{group_id}:token_transfer:{digest}:{idempotency_key}:{encrypted_text}:{nonce}:{key_version}"
     pub message_signature: String,
+    /// Canonical message signature payload version; legacy requests default to v1.
+    #[serde(default = "legacy_signature_version")]
+    pub signature_version: i16,
     /// Timeline kind: `text` (default), `post`, `request_payment`, `poll`, `token_transfer`.
     #[serde(default)]
     pub kind: Option<String>,
@@ -126,10 +129,15 @@ pub struct UpdateMessageRequest {
     /// For `kind=post` edits, post + idem binds are empty:
     /// `"{group_id}:post:::{encrypted_text}:{nonce}:{key_version}"`.
     pub message_signature: String,
+    /// Canonical message signature payload version; legacy requests default to v1.
+    #[serde(default = "legacy_signature_version")]
+    pub signature_version: i16,
     /// Attachments for this message (optional)
     #[serde(default)]
     pub attachments: Vec<AttachmentRequest>,
 }
+
+fn legacy_signature_version() -> i16 { 1 }
 
 /// Query parameters for GET /messages
 #[derive(Debug, Deserialize)]

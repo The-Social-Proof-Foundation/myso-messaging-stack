@@ -13,6 +13,7 @@ import {truncateAddress} from '../../lib/agents/format';
 import {ListError, LoadMoreRow} from './ListStates';
 
 interface RoomVerifyPanelProps {
+  groupUuid: string;
   groupId: string;
   /** Messages already loaded in the open thread; matched to digests by message id, else by sender and time. */
   messages: readonly VerifiableMessage[];
@@ -45,11 +46,14 @@ function statusOf(row: DigestVerificationRow) {
       tone: 'text-danger-500 dark:text-danger-400',
     };
   }
+  if (row.contentVerified !== true) return {
+    Icon: ShieldQuestion,
+    detail: 'Signature checked. The message text is unavailable, so its on-chain content hash has not been verified.',
+    tone: 'text-secondary-400 dark:text-secondary-500',
+  };
   return {
     Icon: ShieldCheck,
-    detail: row.contentVerified
-      ? 'Verified: signed by the sender, and the text matches the on-chain digest.'
-      : "Verified: signed by the sender. The text was not available to recompute the hash.",
+    detail: 'Verified: signed by the sender, and the text matches the on-chain digest.',
     tone: 'text-emerald-500 dark:text-emerald-400',
   };
 }
@@ -61,6 +65,7 @@ const shortHash = (hex: string) => (hex.length > 16 ? `${hex.slice(0, 8)}…${he
  * the same card style as the member list.
  */
 export function RoomVerifyPanel({
+  groupUuid,
   groupId,
   messages,
   labelFor,
@@ -68,15 +73,17 @@ export function RoomVerifyPanel({
 }: Readonly<RoomVerifyPanelProps>) {
   const digests = useGroupDigests(groupId);
   const rows = useMemo(
-    () => matchDigestsToMessages(digests.digests, messages),
-    [digests.digests, messages],
+    () => matchDigestsToMessages(digests.digests, messages, {groupUuid}),
+    [digests.digests, messages, groupUuid],
   );
   const summary = useMemo(() => summarizeVerification(rows), [rows]);
 
   return (
     <section className="border-b border-secondary-100 p-4 dark:border-secondary-700">
       <h4 className="font-chakra mb-2 text-sm font-medium capitalize tracking-wide text-secondary-500 dark:text-secondary-400">
-        Verified messages ({digests.isInitialLoading && rows.length === 0 ? '…' : summary.total})
+        Message anchors ({digests.isInitialLoading && rows.length === 0 ? '…' : summary.total})
+        {summary.verified > 0 && <span className="ml-2 text-emerald-500 dark:text-emerald-400">{summary.verified} verified</span>}
+        {summary.unchecked > 0 && <span className="ml-2">{summary.unchecked} unchecked</span>}
         {summary.failed > 0 && (
           <span className="ml-2 text-danger-500 dark:text-danger-400">{summary.failed} failed</span>
         )}

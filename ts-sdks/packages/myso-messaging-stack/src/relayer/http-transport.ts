@@ -38,6 +38,7 @@ import type {
 	ListGroupReactionsParams,
 	ListAgentConversationsParams,
 	ListGroupsForAgentParams,
+	ListMemberConversationsParams,
 	NotificationMode,
 	PostGroupReceiptsParams,
 	PostGroupReactionParams,
@@ -355,6 +356,7 @@ export class HTTPRelayerTransport implements RelayerTransport {
 			nonce: toHex(params.nonce),
 			key_version: Number(params.keyVersion),
 			kind: params.kind ?? 'text',
+			signature_version: params.signatureVersion ?? 1,
 			attachments: params.attachments?.map(toWireAttachment) ?? [],
 		};
 
@@ -447,6 +449,7 @@ export class HTTPRelayerTransport implements RelayerTransport {
 			encrypted_text: toHex(params.encryptedText),
 			nonce: toHex(params.nonce),
 			key_version: Number(params.keyVersion),
+			signature_version: params.signatureVersion ?? 1,
 			attachments: params.attachments?.map(toWireAttachment) ?? [],
 		};
 
@@ -768,6 +771,23 @@ export class HTTPRelayerTransport implements RelayerTransport {
 			{ method: 'GET', headers },
 		);
 		return wire.conversations.map(fromWireAgentConversation);
+	}
+
+	async listMemberConversations(params: ListMemberConversationsParams): Promise<string[]> {
+		const headers = await createWalletHeaderAuth(params.signer);
+		const query = new URLSearchParams({
+			limit: String(params.limit ?? 100),
+		});
+		if (params.afterGroupId !== undefined) query.set('after_group_id', params.afterGroupId);
+		else query.set('offset', String(params.offset ?? 0));
+		const wire = await this.#request<{ group_ids: string[] }>(
+			this.#v1Path(`/member-conversations?${query.toString()}`),
+			{ method: 'GET', headers },
+		);
+		if (!Array.isArray(wire.group_ids) || wire.group_ids.some((id) => typeof id !== 'string')) {
+			throw new RelayerTransportError('Invalid member conversation response', 502, 'INVALID_RESPONSE');
+		}
+		return wire.group_ids;
 	}
 
 	async checkDmGate(params: CheckDmGateParams): Promise<DmGateResult> {

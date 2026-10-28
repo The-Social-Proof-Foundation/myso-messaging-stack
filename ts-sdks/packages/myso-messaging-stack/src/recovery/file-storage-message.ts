@@ -51,6 +51,7 @@ export function fromFileStorageMessage(wire: FileStorageMessageWire): RelayerMes
 		syncStatus: wire.sync_status as SyncStatus,
 		quiltPatchId: wire.quilt_patch_id,
 		signature: wire.signature ?? '',
+		signatureVersion: wire.signature_version,
 		publicKey: wire.public_key ?? '',
 		principalOwner: wire.principal_owner ?? undefined,
 		subAgentId: wire.sub_agent_id ?? undefined,

@@ -191,3 +191,73 @@ compare-and-set retries + cross-device invalidation via `read_state.updated` use
 ## License
 
 Apache-2.0
+
+## Shared room anchors and evidence
+
+The SDK now exports the chat app's versioned `myso-chat://` / `myso-chat+v2://` anchor format, content/deduplication hashes and room-evidence matching. `matchDigestsToMessages(anchors, messages, { groupUuid })` requires the selected room UUID independently of the untrusted pointer. Explicit pointers to another room or an unloaded message never fall back to sender/time matching. Legacy anchors without a chat pointer can still be correlated by sender/time.
+
+Pass chain sequence numbers as decimal strings when they exceed JavaScript's safe integer range. The matcher orders u64 sequences with `BigInt` and rejects already-rounded numbers or repeated sequences. `summarizeVerification` counts a row as verified only when both its signature and plaintext hash check succeed; unavailable plaintext is `unchecked`. Empty/whitespace plaintext is hashed exactly as stored.
+
+Callers must obtain anchors through a trusted, room-scoped chain/indexer path and messages through the SDK's membership-controlled decrypt path. These helpers do not establish finality, organization authority or truth of message claims. They provide no encrypted room API or private-knowledge entitlement on their own.
+
+The repository chat app consumes this SDK through its local package link. Build the SDK before compiling/running the chat app. No application or test run was performed as part of this extraction.
+
+
+## Strict room history for coordination
+
+`messaging.getRoomMessages({ signer, groupRef, afterOrder?, beforeOrder?, limit? })`
+and the agent wrapper's `getRoomMessages` use the existing relayer and MyData
+crypto client. They return one entry for each raw timeline row. Only
+`verified_content` includes decrypted text; `unverified_content`,
+`unavailable_content`, `system_metadata` and `deleted_metadata` contain the row
+identity/status without text. Missing keys or invalid signatures therefore cannot
+silently shorten the visible history. Invalid signatures never request decryption.
+
+This reader checks the signer's normal on-chain `MessagingReader` permission
+before and after processing, clears group DEKs when permission is denied, and
+releases no page if the second check fails. Principal oversight without a normal
+reader grant needs its separate native policy adapter. Hosted consumers must also
+bind the signer, account, agent, network and deployment, check live delegation
+capabilities, and handle session expiry/revocation; this SDK method does not
+implement those service adapters or automatically erase previously disclosed text.
+
+Pages contain at most 50 rows, 1 MiB ciphertext per row and 4 MiB ciphertext total,
+with at most four decryption requests in flight. Cursors use raw rows including
+failures, preserve finite forward-window bounds, and reject wrong rooms, duplicate
+IDs, non-advancing pages and numbers outside JavaScript's safe integer range.
+The existing relayer returns a newest window when no `afterOrder` is supplied;
+continuations then use `beforeOrder`. Forward windows continue with `afterOrder`.
+No ordering claim depends on an unverified row being decryptable.
+
+`metadataSource: 'relayer_unverified'` explicitly covers message IDs, orders,
+system/deletion state and pagination. Sender signatures bind the encrypted body,
+group, kind and sender. They do not establish historical membership, the relayer's
+agent/principal attribution, organization roles, task truth, transfer settlement,
+attachments, complete history or chain finality. This reader omits unsigned
+attribution, payment-state claims and attachment handles. `allContentVerified`
+only describes a nonempty returned page; it is never a completeness proof. A
+legacy post whose canonical signed post/idempotency fields are unavailable from
+the relayer remains unverified rather than gaining a false verified status.
+
+MySo Agents/MCP room-session adapters and UI are still being integrated. The
+coordinator has not been given a plaintext room-history tool by this SDK change.
+Source and regression code were compiled only; no messages, keys, membership
+requests, applications or tests were executed during implementation.
+
+
+For acting agents, configure `encryption.mydataPolicy` with the exported
+`AgentMyDataReaderPolicy`. Its constructor pins the original/latest messaging
+package, version, platform, memory config/account and exact derived agent
+address. It builds the existing native `mydata_approve_agent_reader` ABI, which
+checks CAP_MESSAGE_READ, actor ancestry/expiry, platform and group permission.
+The envelope layer checks this policy's session address and encryption package
+even on a DEK cache hit. Another agent or another package cannot satisfy that
+identity hook. There is no fallback from this policy to owner oversight or the
+generic reader gate.
+
+This is explicit configuration, not an automatic change to existing messaging
+clients. A long-lived MyData/DEK cache can still retain previously granted keys.
+Use a fresh caller-bound client and current service authorization for private
+room requests, and finish the logout/revocation/in-flight invalidation lifecycle
+before claiming immediate access revocation. The native policy alone cannot
+revoke already disclosed keys or plaintext.

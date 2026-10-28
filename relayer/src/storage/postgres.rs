@@ -108,6 +108,7 @@ fn row_to_message(row: &sqlx::postgres::PgRow) -> Message {
         quilt_patch_id: row.get("quilt_patch_id"),
         attachments,
         signature: row.get("signature"),
+        signature_version: row.try_get("signature_version").unwrap_or(1),
         public_key: row.get("public_key"),
         attribution: MessageAttribution {
             principal_owner: row.get("principal_owner"),
@@ -162,10 +163,10 @@ impl StorageAdapter for PostgresStorage {
             r#"INSERT INTO messages (
                 id, group_id, order_num, sender_wallet_addr, encrypted_msg, nonce,
                 key_version, created_at, updated_at, is_edited, sync_status, quilt_patch_id,
-                attachments, signature, public_key,
+                attachments, signature, signature_version, public_key,
                 principal_owner, sub_agent_id, identity_class, attribution_version,
                 kind, system_type, metadata, idempotency_key
-            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)"#,
+            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24)"#,
         )
         .bind(message.id)
         .bind(&message.group_id)
@@ -181,6 +182,7 @@ impl StorageAdapter for PostgresStorage {
         .bind(&message.quilt_patch_id)
         .bind(attachments)
         .bind(&message.signature)
+        .bind(message.signature_version)
         .bind(&message.public_key)
         .bind(&message.attribution.principal_owner)
         .bind(&message.attribution.sub_agent_id)
@@ -304,6 +306,7 @@ impl StorageAdapter for PostgresStorage {
         key_version: i64,
         attachments: Vec<Attachment>,
         signature: Vec<u8>,
+        signature_version: i16,
         public_key: Vec<u8>,
     ) -> StorageResult<Message> {
         let attachments_json = serde_json::to_value(&attachments)
@@ -317,7 +320,7 @@ impl StorageAdapter for PostgresStorage {
 
         sqlx::query(
             r#"UPDATE messages SET encrypted_msg=$2, nonce=$3, key_version=$4, attachments=$5,
-               signature=$6, public_key=$7, updated_at=$8, sync_status=$9, is_edited=TRUE WHERE id=$1"#,
+               signature=$6, signature_version=$7, public_key=$8, updated_at=$9, sync_status=$10, is_edited=TRUE WHERE id=$1"#,
         )
         .bind(id)
         .bind(encrypted_msg)
@@ -325,6 +328,7 @@ impl StorageAdapter for PostgresStorage {
         .bind(key_version)
         .bind(attachments_json)
         .bind(signature)
+        .bind(signature_version)
         .bind(public_key)
         .bind(Utc::now())
         .bind("UPDATE_PENDING")

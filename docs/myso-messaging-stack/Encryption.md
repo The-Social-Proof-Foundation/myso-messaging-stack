@@ -87,6 +87,8 @@ For `kind === "post"` creates, the canonical also binds the padded shared post a
 
 Post edits keep `kind=post` but re-bind with empty post + idem (`"{groupId}:post:::{hex}:{hex}:{keyVersion}"`).
 
+New SDK writes with attachments use signature v2: a compact JSON array beginning with `myso-message-v2` binds the normalized group, kind, post/payment reference, idempotency key, ciphertext, nonce, key version, and ordered attachment tuples (`storageId`, attachment nonce, encrypted metadata, metadata nonce). The relayer stores `signature_version` with each message and verifies this exact tuple. Legacy v1 rows remain readable; their attachment references are classified as unverified and are not downloaded or decrypted by the SDK.
+
 The sender's public key (with scheme flag prefix identifying Ed25519, Secp256k1, or Secp256r1) is stored alongside the message. All group members can independently verify that:
 
 1. The signature is valid for the canonical content

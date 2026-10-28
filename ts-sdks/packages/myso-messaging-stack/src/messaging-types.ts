@@ -63,8 +63,12 @@ export interface DecryptedMessage extends MessageAttribution {
 	syncStatus?: SyncStatus;
 	/** Resolved attachment handles with lazy data download. Empty when no attachments or not configured. */
 	attachments: AttachmentHandle[];
+	/** Attachment-reference integrity; legacy v1 attachment metadata is retained only as an unverified state. */
+	attachmentIntegrity: 'none' | 'verified' | 'legacy_unverified' | 'signature_unverified';
 	/** Whether the per-message sender signature was verified successfully. */
 	senderVerified: boolean;
+	/** Agent/principal attribution is covered by signature v2 only. */
+	attributionIntegrity: 'none' | 'verified' | 'legacy_unverified' | 'signature_unverified';
 	/** True when the relayer stored agent attribution metadata. */
 	isAgentMessage: boolean;
 	/** Defaults to `text` for legacy messages. */

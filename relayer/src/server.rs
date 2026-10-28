@@ -255,6 +255,10 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             get(agent_groups::list_agent_conversations),
         )
         .route(
+            "/member-conversations",
+            get(agent_groups::list_member_conversations),
+        )
+        .route(
             "/agent-conversations/by-agent/:derived_address",
             get(agent_groups::list_groups_for_agent),
         )

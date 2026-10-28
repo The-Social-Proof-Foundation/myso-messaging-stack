@@ -45,6 +45,9 @@ pub struct Message {
     /// 64-byte cryptographic signature over the message content.
     /// Allows receivers to independently verify the sender authored this message.
     pub signature: Vec<u8>,
+    /// Canonical signature payload version; legacy stored rows deserialize as v1.
+    #[serde(default = "legacy_signature_version")]
+    pub signature_version: i16,
     /// Sender's public key (flag byte + key bytes) for signature verification.
     pub public_key: Vec<u8>,
     /// Optional agent attribution (principal, sub-agent id, identity class).
@@ -161,6 +164,7 @@ impl Message {
             quilt_patch_id: None,
             attachments,
             signature,
+            signature_version: 1,
             public_key,
             attribution,
             kind,
@@ -204,6 +208,7 @@ impl Message {
             quilt_patch_id: None,
             attachments: Vec::new(),
             signature: Vec::new(),
+            signature_version: 1,
             public_key: Vec::new(),
             attribution: MessageAttribution::human_message(),
             kind: MessageKind::System,
@@ -253,6 +258,7 @@ impl Message {
         key_version: i64,
         attachments: Vec<Attachment>,
         signature: Vec<u8>,
+        signature_version: i16,
         public_key: Vec<u8>,
     ) {
         self.encrypted_msg = encrypted_msg;
@@ -260,12 +266,15 @@ impl Message {
         self.key_version = key_version;
         self.attachments = attachments;
         self.signature = signature;
+        self.signature_version = signature_version;
         self.public_key = public_key;
         self.sync_status = SyncStatus::UpdatePending;
         self.updated_at = Utc::now();
         self.is_edited = true;
     }
 }
+
+fn legacy_signature_version() -> i16 { 1 }
 
 #[cfg(test)]
 mod tests {

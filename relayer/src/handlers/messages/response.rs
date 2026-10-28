@@ -46,6 +46,8 @@ pub struct MessageResponse {
     pub quilt_patch_id: Option<String>,
     /// Hex-encoded 64-byte message signature for independent sender verification
     pub signature: String,
+    /// Canonical signature payload version; legacy rows are v1.
+    pub signature_version: i16,
     /// Hex-encoded sender public key (flag byte + key bytes)
     pub public_key: String,
     /// Human principal owner when the sender is a sub-agent.
@@ -116,6 +118,7 @@ impl From<Message> for MessageResponse {
             sync_status: msg.sync_status.to_string(),
             quilt_patch_id: msg.quilt_patch_id,
             signature: hex::encode(&msg.signature),
+            signature_version: msg.signature_version,
             public_key: hex::encode(&msg.public_key),
             principal_owner: msg.attribution.principal_owner.clone(),
             sub_agent_id: msg.attribution.sub_agent_id.clone(),

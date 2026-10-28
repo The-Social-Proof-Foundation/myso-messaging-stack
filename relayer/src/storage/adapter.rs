@@ -175,6 +175,7 @@ pub trait StorageAdapter: Send + Sync {
         key_version: i64,
         attachments: Vec<Attachment>,
         signature: Vec<u8>,
+        signature_version: i16,
         public_key: Vec<u8>,
     ) -> StorageResult<Message>;
 

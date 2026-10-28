@@ -204,6 +204,7 @@ impl StorageAdapter for InMemoryStorage {
         key_version: i64,
         attachments: Vec<Attachment>,
         signature: Vec<u8>,
+        signature_version: i16,
         public_key: Vec<u8>,
     ) -> StorageResult<Message> {
         let mut messages = self
@@ -231,6 +232,7 @@ impl StorageAdapter for InMemoryStorage {
             key_version,
             attachments,
             signature,
+            signature_version,
             public_key,
         );
 
@@ -1803,6 +1805,7 @@ mod tests {
                 1,
                 new_attachments.clone(),
                 vec![0u8; 64],
+                1,
                 vec![0u8; 33],
             )
             .await

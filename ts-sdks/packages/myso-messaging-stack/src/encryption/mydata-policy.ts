@@ -54,6 +54,8 @@ import { mydataApproveReader } from '../contracts/messaging/mydata_policies.js';
 export interface MyDataPolicy<TApproveContext = void> {
 	/** Original (V1) package ID passed to `mydata.encrypt()` as the encryption namespace. */
 	readonly packageId: string;
+	/** Optional caller binding, checked even when the DEK is already cached. */
+	assertSessionIdentity?(identity: { address: string; packageId: string }): void;
 
 	/**
 	 * Build a `mydata_approve` transaction thunk for MyData decryption.
@@ -76,6 +78,83 @@ export interface MyDataPolicy<TApproveContext = void> {
 		encryptionHistoryId: string,
 		...context: TApproveContext extends void ? [] : [context: TApproveContext]
 	): (tx: Transaction) => TransactionResult;
+}
+
+export interface AgentReaderPolicyOptions {
+	originalPackageId: string;
+	latestPackageId: string;
+	versionId: string;
+	platformId: string;
+	memoryConfigId: string;
+	memoryAccountId: string;
+	/** Derived address of the exact acting agent, not its owner's wallet. */
+	agentDerivedAddress: string;
+}
+
+function policyAddress(value: string): string {
+	if (!/^0x[0-9a-fA-F]{1,64}$/.test(value)) throw new Error('Invalid agent reader policy address');
+	return `0x${value.slice(2).toLowerCase().padStart(64, '0')}`;
+}
+
+/** Uses the existing native CAP_MESSAGE_READ/ancestry/expiry/platform reader gate.
+ * Keep this policy's deployment/account/agent configuration outside tool inputs.
+ * Cached keys still require caller-side live authorization and invalidation. */
+export class AgentMyDataReaderPolicy implements MyDataPolicy<void> {
+	readonly packageId: string;
+	readonly #options: AgentReaderPolicyOptions;
+
+	constructor(options: AgentReaderPolicyOptions) {
+		this.#options = {
+			originalPackageId: policyAddress(options.originalPackageId),
+			latestPackageId: policyAddress(options.latestPackageId),
+			versionId: policyAddress(options.versionId),
+			platformId: policyAddress(options.platformId),
+			memoryConfigId: policyAddress(options.memoryConfigId),
+			memoryAccountId: policyAddress(options.memoryAccountId),
+			agentDerivedAddress: policyAddress(options.agentDerivedAddress),
+		};
+		this.packageId = this.#options.originalPackageId;
+	}
+
+	assertSessionIdentity(identity: { address: string; packageId: string }): void {
+		if (
+			policyAddress(identity.address) !== this.#options.agentDerivedAddress ||
+			policyAddress(identity.packageId) !== this.packageId
+		) {
+			throw new Error('MyData session does not belong to the configured room agent');
+		}
+	}
+
+	mydataApproveThunk(
+		identityBytes: Uint8Array,
+		groupId: string,
+		encryptionHistoryId: string,
+	): (tx: Transaction) => TransactionResult {
+		const decoded = DefaultMyDataPolicy.decodeIdentity(identityBytes);
+		if (decoded.groupId !== policyAddress(groupId))
+			throw new Error('Room encryption identity mismatch');
+		const group = policyAddress(groupId);
+		const history = policyAddress(encryptionHistoryId);
+		const options = this.#options;
+		// Copy before returning the asynchronous transaction thunk.
+		const identity = Array.from(identityBytes);
+		return (tx) =>
+			tx.moveCall({
+				package: options.latestPackageId,
+				module: 'mydata_policies',
+				function: 'mydata_approve_agent_reader',
+				arguments: [
+					tx.pure.vector('u8', identity),
+					tx.object(options.versionId),
+					tx.object(group),
+					tx.object(history),
+					tx.object(options.platformId),
+					tx.object(options.memoryConfigId),
+					tx.object(options.memoryAccountId),
+					tx.object('0x6'),
+				],
+			});
+	}
 }
 
 // === Default Identity Encoding ===

@@ -6,7 +6,7 @@ import { RelayerArchiveRecoveryTransport } from '../../src/recovery/relayer-arch
 describe('RelayerArchiveRecoveryTransport', () => {
 	it('fetches archive messages from the relayer with namespace + wallet auth', async () => {
 		const keypair = Ed25519Keypair.generate();
-		const fetchMock = vi.fn(async () => {
+		const fetchMock = vi.fn<typeof fetch>(async () => {
 			return new Response(
 				JSON.stringify({
 					groupId: '0xgroup',
@@ -38,7 +38,7 @@ describe('RelayerArchiveRecoveryTransport', () => {
 			relayerUrl: 'https://relayer.example.com',
 			namespace: 'mysocial',
 			signer: keypair,
-			fetch: fetchMock as unknown as typeof fetch,
+			fetch: fetchMock,
 		});
 
 		const result = await transport.recoverMessages({ groupId: '0xgroup', limit: 50 });
@@ -47,7 +47,7 @@ describe('RelayerArchiveRecoveryTransport', () => {
 		const [url, init] = fetchMock.mock.calls[0]!;
 		expect(String(url)).toContain('/v1/archive/groups/0xgroup/messages');
 		expect(String(url)).toContain('namespace=mysocial');
-		expect((init as RequestInit).headers).toMatchObject({
+		expect(init?.headers).toMatchObject({
 			'x-sender-address': keypair.toMySoAddress(),
 			'x-group-id': '0xgroup',
 		});

@@ -4,7 +4,7 @@ import {describe, expect, it} from 'vitest';
 import {
   AGENT_ROOM_KIND,
   DIGEST_MATCH_WINDOW_MS,
-  matchDigestsToMessages,
+  matchDigestsToMessages as sharedMatch,
   messageIdFromAnchorUri,
   roomKindLabel,
   roomTaskLink,
@@ -13,6 +13,8 @@ import {
   type VerifiableMessage,
 } from './rooms';
 import type {GroupDigestInfo} from './social-api';
+
+const matchDigestsToMessages = (digests: readonly GroupDigestInfo[], messages: readonly VerifiableMessage[]) => sharedMatch(digests, messages, {groupUuid: 'room-1'});
 
 const digest = (seq: number, sender: string, createdAtMs: number): GroupDigestInfo => ({
   groupId: '0xg',
@@ -98,9 +100,10 @@ describe('summarizeVerification', () => {
     expect(summarizeVerification(rows)).toEqual({
       total: 3,
       matched: 2,
-      verified: 1,
+      verified: 0,
       unmatched: 1,
       failed: 1,
+      unchecked: 1,
     });
   });
 });
@@ -177,5 +180,29 @@ describe('anchors made by this app', () => {
     expect(messageIdFromAnchorUri('myso-chat+v2://room-1/abc-123')).toBe('abc-123');
     expect(messageIdFromAnchorUri('myso-chat://room-1/abc-123')).toBe('abc-123');
     expect(messageIdFromAnchorUri('https://elsewhere.dev/x')).toBeNull();
+  });
+});
+
+describe('strict room anchor evidence', () => {
+  it('never substitutes another message for an explicit missing pointer', () => {
+    const [row] = sharedMatch([{...digest(1, '0xa', 5), contentUri: 'myso-chat+v2://room-1/missing'}],
+      [{...message('nearby', '0xa', 5), text: 'same words'}], {groupUuid: 'room-1'});
+    expect(row?.matchedMessageId).toBeNull();
+  });
+  it('does not verify a pointer naming another room', () => {
+    const text = 'same words';
+    const [row] = sharedMatch([{...digest(1, '0xa', 5), contentUri: 'myso-chat+v2://other-room/m1',
+      contentDigest: Array.from(contentDigestV2(text, 'other-room', 'm1'), b => b.toString(16).padStart(2, '0')).join('')}],
+      [{...message('m1', '0xa', 5), text}], {groupUuid: 'room-1'});
+    expect(row?.matchedMessageId).toBeNull();
+    expect(summarizeVerification([row!]).verified).toBe(0);
+  });
+  it('keeps decimal u64 sequence ordering exact', () => {
+    const rows = sharedMatch([{...digest(1, '0xa', 5), seq: '18446744073709551615'},
+      {...digest(2, '0xa', 5), seq: '9007199254740993'}], [], {groupUuid: 'room-1'});
+    expect(rows.map(row => row.seq)).toEqual(['9007199254740993', '18446744073709551615']);
+  });
+  it('rejects an already-rounded sequence', () => {
+    expect(() => sharedMatch([{...digest(1, '0xa', 5), seq: Number.MAX_SAFE_INTEGER + 1}], [], {groupUuid: 'room-1'})).toThrow('Unsafe anchor sequence');
   });
 });

@@ -25,6 +25,7 @@ import type {
 	ListGroupReactionsParams,
 	ListAgentConversationsParams,
 	ListGroupsForAgentParams,
+	ListMemberConversationsParams,
 	PostGroupReceiptsParams,
 	PostGroupReactionParams,
 	PostPresenceParams,
@@ -236,6 +237,10 @@ export class HybridRelayerTransport implements RelayerTransport {
 
 	listGroupsForAgent(params: ListGroupsForAgentParams): Promise<RelayerAgentConversation[]> {
 		return this.#http.listGroupsForAgent(params);
+	}
+
+	listMemberConversations(params: ListMemberConversationsParams): Promise<string[]> {
+		return this.#http.listMemberConversations(params);
 	}
 
 	checkDmGate(params: CheckDmGateParams): Promise<DmGateResult> {

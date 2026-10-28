@@ -2,6 +2,8 @@
 // Copyright (c) The Social Proof Foundation, LLC.
 // SPDX-License-Identifier: Apache-2.0
 
+import type { GroupRef } from '../types.js';
+
 /**
  * A single entry in a batch upload.
  *
@@ -39,6 +41,11 @@ export interface StorageUploadResult {
 	metadata?: unknown;
 }
 
+/** Context known by the messaging client when it hands encrypted bytes to storage. */
+export interface StorageUploadContext {
+	groupRef: GroupRef;
+}
+
 /**
  * Encryption-unaware storage abstraction.
  *
@@ -54,7 +61,7 @@ export interface StorageAdapter {
 	 * one MySo Blob object) or individually (e.g., S3 putObject per entry). The caller
 	 * doesn't know or care.
 	 */
-	upload(entries: StorageEntry[]): Promise<StorageUploadResult>;
+	upload(entries: StorageEntry[], context?: StorageUploadContext): Promise<StorageUploadResult>;
 
 	/** Download a single entry by its ID. */
 	download(id: string): Promise<Uint8Array>;

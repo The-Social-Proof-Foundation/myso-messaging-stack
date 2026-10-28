@@ -10,6 +10,13 @@ import {
 } from '@socialproof/myso/cryptography';
 import { fromHex, toHex } from '@socialproof/myso/utils';
 import { publicKeyFromMySoBytes, verifyPersonalMessageSignature } from '@socialproof/myso/verify';
+import type { Attachment } from './attachments/types.js';
+
+export interface SignedMessageAttribution {
+	principalOwner?: string;
+	subAgentId?: string;
+	identityClass?: 0 | 1 | 2;
+}
 
 // ── Canonical message ────────────────────────────────────────────
 
@@ -40,6 +47,7 @@ export function normalizeSharedPostAddress(raw?: string | null): string | null {
 export function buildCanonicalMessage(params: {
 	groupId: string;
 	kind?: string;
+	signatureVersion?: number;
 	encryptedText: Uint8Array;
 	nonce: Uint8Array;
 	keyVersion: bigint;
@@ -47,9 +55,33 @@ export function buildCanonicalMessage(params: {
 	/** Transaction digest bound into `token_transfer` signatures. */
 	transferDigest?: string;
 	idempotencyKey?: string;
+	attachments?: readonly Attachment[];
+	attribution?: SignedMessageAttribution;
 }): Uint8Array {
 	const kind = params.kind ?? 'text';
 	const groupId = params.groupId.toLowerCase();
+	if (params.signatureVersion === 2) {
+		const boundReference = kind === 'post'
+			? normalizeSharedPostAddress(params.sharedPostAddress) ?? (params.sharedPostAddress ?? '').trim().toLowerCase()
+			: kind === 'token_transfer' ? (params.transferDigest ?? '').trim() : '';
+		const canonical = JSON.stringify([
+			'myso-message-v2', groupId, kind, boundReference, (params.idempotencyKey ?? '').trim(),
+			toHex(params.encryptedText), toHex(params.nonce), params.keyVersion.toString(),
+			(params.attachments ?? []).map((attachment) => [
+				attachment.storageId, attachment.nonce.toLowerCase(),
+				attachment.encryptedMetadata.toLowerCase(), attachment.metadataNonce.toLowerCase(),
+			]),
+			[
+				params.attribution?.principalOwner ?? '',
+				params.attribution?.subAgentId ?? '',
+				params.attribution?.identityClass ?? -1,
+			],
+		]);
+		return new TextEncoder().encode(canonical);
+	}
+	if (params.signatureVersion !== undefined && params.signatureVersion !== 1) {
+		throw new Error('Unsupported message signature version');
+	}
 	let canonical: string;
 	if (kind === 'post') {
 		const post =
@@ -78,12 +110,15 @@ export async function signMessageContent(
 	params: {
 		groupId: string;
 		kind?: string;
+		signatureVersion?: number;
 		encryptedText: Uint8Array;
 		nonce: Uint8Array;
 		keyVersion: bigint;
 		sharedPostAddress?: string;
 		transferDigest?: string;
 		idempotencyKey?: string;
+		attachments?: readonly Attachment[];
+		attribution?: SignedMessageAttribution;
 	},
 ): Promise<string> {
 	const canonicalBytes = buildCanonicalMessage(params);
@@ -113,6 +148,9 @@ export interface VerifyMessageSenderParams {
 	sharedPostAddress?: string;
 	transferDigest?: string;
 	idempotencyKey?: string;
+	signatureVersion?: number;
+	attachments?: readonly Attachment[];
+	attribution?: SignedMessageAttribution;
 }
 
 /** Idempotency key for a chat transfer: scoped to the sender so a public digest cannot be front-run. */
@@ -131,6 +169,7 @@ export function transferIdempotencyKey(senderAddress: string, digest: string): s
  */
 export async function verifyMessageSender(params: VerifyMessageSenderParams): Promise<boolean> {
 	try {
+		if (params.signatureVersion !== undefined && params.signatureVersion !== 1 && params.signatureVersion !== 2) return false;
 		const canonicalBytes = buildCanonicalMessage(params);
 
 		// Reconstruct the serialized signature from raw components.

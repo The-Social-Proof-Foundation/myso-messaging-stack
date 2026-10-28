@@ -618,8 +618,8 @@ function ChatView({
   const anchoringAvailable = Boolean(roomVerifier);
   const anchorDigests = useGroupDigests(anchoringAvailable ? group.groupId : null);
   const anchoredByMessage = useMemo(
-    () => anchoredMessageIds(matchDigestsToMessages(anchorDigests.digests, messages)),
-    [anchorDigests.digests, messages],
+    () => anchoredMessageIds(matchDigestsToMessages(anchorDigests.digests, messages, {groupUuid: group.uuid})),
+    [anchorDigests.digests, messages, group.uuid],
   );
   const anchorMessage = useAnchorMessage(group.groupId, group.uuid, myAddress, {
     enabled: anchoringAvailable,

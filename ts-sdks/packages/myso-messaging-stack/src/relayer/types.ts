@@ -102,6 +102,8 @@ export interface RelayerMessage {
 	quiltPatchId?: string | null;
 	/** Hex-encoded per-message signature (64 bytes). */
 	signature: string;
+	/** Canonical signature payload version. Missing on legacy responses and interpreted as v1. */
+	signatureVersion?: number;
 	/** Hex-encoded public key with scheme flag prefix. */
 	publicKey: string;
 	principalOwner?: string;
@@ -124,6 +126,8 @@ export interface SendMessageParams {
 	keyVersion: bigint;
 	/** Client kind; defaults to `text`. Included in the signed canonical string. */
 	kind?: Exclude<MessageKind, 'system'>;
+	/** Canonical signature payload version. New SDK messages use v2. */
+	signatureVersion?: 1 | 2;
 	/** Client idempotency key — duplicate POSTs return the existing message_id. */
 	idempotencyKey?: string;
 	/** Cleartext on-chain post id when `kind === 'post'`. */
@@ -163,6 +167,8 @@ export interface UpdateMessageParams {
 	encryptedText: Uint8Array;
 	nonce: Uint8Array;
 	keyVersion: bigint;
+	/** Canonical signature payload version. New SDK edits use v2. */
+	signatureVersion?: 1 | 2;
 	attachments?: Attachment[];
 	/** Hex-encoded per-message signature for sender verification. */
 	messageSignature?: string;
@@ -558,6 +564,14 @@ export interface ListGroupsForAgentParams {
 	signer: Signer;
 	derivedAddress: string;
 	limit?: number;
+}
+
+/** Wallet-authenticated reverse membership-index lookup. */
+export interface ListMemberConversationsParams {
+	signer: Signer;
+	limit?: number;
+	offset?: number;
+	afterGroupId?: string;
 }
 
 /** Params for `GET /v1/messaging/dm-gate` (wallet auth; sender = signer address). */

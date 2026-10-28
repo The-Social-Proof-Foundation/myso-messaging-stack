@@ -66,5 +66,8 @@
 		"@socialproof/myso-groups": "^0.0.1",
 		"@socialproof/mydata": "^0.0.4",
 		"@socialproof/myso": "^0.0.4"
+	},
+	"dependencies": {
+		"@noble/hashes": "^2.0.0"
 	}
 }

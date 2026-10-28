@@ -85,6 +85,7 @@ export class AttachmentsManager<TApproveContext = void> {
 		// 2. Upload all encrypted files as a batch.
 		const uploadResult = await this.#storageAdapter.upload(
 			encryptedEntries.map((e, i) => ({ name: files[i].fileName, data: e.data })),
+			{ groupRef },
 		);
 
 		// 3. Encrypt per-file metadata and build Attachment[].

@@ -68,6 +68,10 @@ const MIGRATIONS: &[(i32, &str)] = &[
         20,
         include_str!("../../migrations/020_token_transfer_messages.sql"),
     ),
+    (
+        21,
+        include_str!("../../migrations/021_message_signature_version.sql"),
+    ),
 ];
 
 /// Strip line comments, then split into individual SQL statements.

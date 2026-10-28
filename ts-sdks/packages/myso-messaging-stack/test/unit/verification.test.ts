@@ -126,6 +126,23 @@ describe('buildCanonicalMessage', () => {
 		const diffVersion = buildCanonicalMessage({ ...base, keyVersion: 99n });
 		expect(diffVersion).not.toEqual(baseBytes);
 	});
+
+	it('v2 binds the ordered attachment reference fields while retaining the legacy v1 format', () => {
+		const base = {
+			...makeMessageParams(),
+			signatureVersion: 2 as const,
+			attachments: [{ storageId: 'r2room://room/id', nonce: 'aa', encryptedMetadata: 'bb', metadataNonce: 'cc' }],
+			attribution: { principalOwner: '0xowner', subAgentId: '0xagent', identityClass: 1 as const },
+		};
+		const canonical = new TextDecoder().decode(buildCanonicalMessage(base));
+		expect(canonical).toContain('myso-message-v2');
+		expect(canonical).toContain('r2room://room/id');
+		expect(buildCanonicalMessage({ ...base, attachments: [{ ...base.attachments[0]!, storageId: 'r2room://room/other' }] }))
+			.not.toEqual(buildCanonicalMessage(base));
+		expect(buildCanonicalMessage({ ...base, attribution: { ...base.attribution, principalOwner: '0xother' } }))
+			.not.toEqual(buildCanonicalMessage(base));
+		expect(new TextDecoder().decode(buildCanonicalMessage(makeMessageParams()))).toContain(':text:');
+	});
 });
 
 describe('signMessageContent', () => {
@@ -152,6 +169,21 @@ describe('signMessageContent', () => {
 });
 
 describe('verifyMessageSender', () => {
+	it('verifies v2 attachment references and rejects a substituted reference', async () => {
+		const keypair = Ed25519Keypair.generate();
+		const params = {
+			...makeMessageParams(),
+			signatureVersion: 2 as const,
+			attachments: [{ storageId: 'r2room://room/id', nonce: 'aa', encryptedMetadata: 'bb', metadataNonce: 'cc' }],
+			attribution: { principalOwner: '0xowner', subAgentId: '0xagent', identityClass: 1 as const },
+		};
+		const signature = await signMessageContent(keypair, params);
+		const proof = { senderAddress: keypair.toMySoAddress(), signature, publicKey: toHex(keypair.getPublicKey().toMySoBytes()) };
+		expect(await verifyMessageSender({ ...params, ...proof })).toBe(true);
+		expect(await verifyMessageSender({ ...params, attachments: [{ ...params.attachments[0]!, storageId: 'r2room://room/other' }], ...proof })).toBe(false);
+		expect(await verifyMessageSender({ ...params, attribution: { ...params.attribution, principalOwner: '0xother' }, ...proof })).toBe(false);
+	});
+
 	it('returns true for a valid sign-then-verify roundtrip', async () => {
 		const keypair = Ed25519Keypair.generate();
 		const params = makeMessageParams();

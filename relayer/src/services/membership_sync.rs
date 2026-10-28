@@ -9,6 +9,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use chrono::{TimeZone, Utc};
 use myso_rpc::field::{FieldMask, FieldMaskUtil};
@@ -50,12 +51,29 @@ use super::system_objects::{is_system_object, system_object_addresses};
 use crate::models::workflow_item::WorkflowItem;
 
 /// Fields read from every checkpoint, streamed or replayed.
-const CHECKPOINT_READ_MASK: &str =
-    "transactions.events,transactions.digest,transactions.transaction.sender";
+///
+/// `parse_myso_event` drops an event that has no `event_type` or BCS `contents`.
+/// A leaf `transactions.events` does not name those fields, so a checkpoint can
+/// arrive and still produce no membership update.
+const CHECKPOINT_READ_MASK: &str = "\
+transactions.events.events.event_type,\
+transactions.events.events.contents,\
+transactions.digest,\
+transactions.transaction.sender";
+
+/// How long a live subscription may apply nothing before we poll the tip.
+const STREAM_IDLE: Duration = Duration::from_secs(15);
+
+/// Recent checkpoints replayed on a cold start. The in-memory store forgets
+/// everyone on restart, and the live stream only delivers from the moment it
+/// connects. This is much smaller than the disconnect backfill cap.
+const STARTUP_BACKFILL_CHECKPOINTS: u64 = 2_000;
 
 /// Most missed checkpoints replayed after a gap. A gap beyond this skips ahead
 /// rather than replaying for hours, and says so loudly.
 const DEFAULT_BACKFILL_MAX_CHECKPOINTS: u64 = 500_000;
+
+type Ledger = LedgerServiceClient<tonic::transport::Channel>;
 
 /// `MEMBERSHIP_BACKFILL_MAX_CHECKPOINTS`; `0` turns replay off.
 fn backfill_limit(raw: Option<&str>) -> u64 {
@@ -434,81 +452,188 @@ impl MembershipSyncService {
                 .as_deref(),
         );
 
-        // Process each checkpoint as it arrives
-        while let Some(response) = stream.next().await {
-            let checkpoint_response = response?;
+        if self.last_cursor.is_none() {
+            self.catch_up_recent(&mut ledger, backfill_max).await?;
+        }
 
-            // Get the cursor (checkpoint sequence number)
-            let cursor = checkpoint_response.cursor.unwrap_or(0);
+        let mut last_applied = Instant::now();
+        let mut idle = tokio::time::interval(STREAM_IDLE);
+        idle.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        idle.tick().await;
 
-            // Skip if we've already processed this checkpoint (shouldn't happen)
-            if let Some(last) = self.last_cursor {
-                if cursor < last {
-                    warn!(
-                        "Checkpoint cursor rewound from {} to {} (chain regenesis?) — clearing membership cache",
-                        last, cursor
-                    );
-                    self.membership_store.clear_all();
-                    self.last_cursor = None;
-                } else if cursor <= last {
-                    continue;
-                } else if let Some((start, end, truncated)) =
-                    backfill_range(last, cursor, backfill_max)
-                {
-                    if truncated {
-                        warn!(
-                            "Missed {} checkpoints while disconnected; replaying only the last {} \
-                             (MEMBERSHIP_BACKFILL_MAX_CHECKPOINTS). Groups created earlier in the \
-                             gap will not be recognized.",
-                            cursor - last - 1,
-                            backfill_max
-                        );
+        loop {
+            tokio::select! {
+                response = stream.next() => {
+                    let Some(response) = response else { break };
+                    let checkpoint_response = response?;
+                    let cursor = checkpoint_response.cursor.unwrap_or(0);
+                    self.ingest_checkpoint(
+                        &mut ledger,
+                        cursor,
+                        checkpoint_response.checkpoint,
+                        backfill_max,
+                    )
+                    .await?;
+                    last_applied = Instant::now();
+                }
+                _ = idle.tick() => {
+                    if last_applied.elapsed() < STREAM_IDLE {
+                        continue;
                     }
-                    info!(
-                        "Replaying missed checkpoints {}..{} before resuming the stream",
-                        start, end
-                    );
-                    for seq in start..end {
-                        let mut req = GetCheckpointRequest::default();
-                        req.checkpoint_id = Some(CheckpointId::SequenceNumber(seq));
-                        req.read_mask = Some(FieldMask::from_str(CHECKPOINT_READ_MASK));
-                        match ledger.get_checkpoint(req).await {
-                            Ok(resp) => {
-                                if let Some(missed) = resp.into_inner().checkpoint {
-                                    self.process_checkpoint(&missed, seq).await;
-                                }
-                            }
-                            // tonic::Code::NotFound == 5 (tonic is only a dev-dependency
-                            // here). The node pruned it; nothing to replay.
-                            Err(status) if status.code() as i32 == 5 => {
-                                debug!("checkpoint {seq} no longer available; skipping");
-                            }
-                            // Anything else: leave the cursor where it is and let the
-                            // reconnect loop retry from the first unprocessed checkpoint.
-                            Err(status) => {
-                                return Err(format!("replaying checkpoint {seq}: {status}").into());
-                            }
-                        }
-                        self.last_cursor = Some(seq);
-                        self.membership_store.set_last_checkpoint_cursor(seq);
-                        if (seq - start + 1) % 5_000 == 0 {
-                            info!("Replayed {} / {} missed checkpoints", seq - start + 1, end - start);
-                        }
-                    }
+                    warn!("Checkpoint stream idle for 15s; polling latest checkpoint");
+                    self.poll_latest(&mut ledger, backfill_max).await?;
+                    last_applied = Instant::now();
                 }
             }
-
-            // Process the checkpoint if present
-            if let Some(checkpoint) = checkpoint_response.checkpoint {
-                self.process_checkpoint(&checkpoint, cursor).await;
-            }
-
-            // Update cursor position
-            self.last_cursor = Some(cursor);
-            self.membership_store.set_last_checkpoint_cursor(cursor);
         }
 
         Ok(())
+    }
+
+    /// Cold start: the live stream begins at the tip, so replay a short window
+    /// behind it before waiting on the subscription.
+    async fn catch_up_recent(
+        &mut self,
+        ledger: &mut Ledger,
+        backfill_max: u64,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let Some((tip, _)) = Self::fetch_latest_checkpoint(ledger).await? else {
+            warn!("Startup catch-up found no latest checkpoint");
+            return Ok(());
+        };
+        let start = tip.saturating_sub(STARTUP_BACKFILL_CHECKPOINTS.saturating_sub(1));
+        info!(
+            "No checkpoint cursor; replaying checkpoints {}..={} so recent groups are recognized",
+            start, tip
+        );
+        self.replay_checkpoints(ledger, start, tip).await?;
+        if let Some((tip, checkpoint)) = Self::fetch_latest_checkpoint(ledger).await? {
+            self.ingest_checkpoint(ledger, tip, Some(checkpoint), backfill_max)
+                .await?;
+        }
+        info!(
+            "Startup catch-up complete at checkpoint {:?}",
+            self.last_cursor
+        );
+        Ok(())
+    }
+
+    /// Unary read of the chain tip when the subscription yields nothing.
+    async fn poll_latest(
+        &mut self,
+        ledger: &mut Ledger,
+        backfill_max: u64,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let Some((tip, checkpoint)) = Self::fetch_latest_checkpoint(ledger).await? else {
+            warn!("Idle poll found no latest checkpoint");
+            return Ok(());
+        };
+        info!("Polled latest checkpoint {tip}");
+        self.ingest_checkpoint(ledger, tip, Some(checkpoint), backfill_max)
+            .await
+    }
+
+    /// Applies one checkpoint, replaying any gap in front of it.
+    async fn ingest_checkpoint(
+        &mut self,
+        ledger: &mut Ledger,
+        cursor: u64,
+        checkpoint: Option<myso_rpc::proto::myso::rpc::v2::Checkpoint>,
+        backfill_max: u64,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        if let Some(last) = self.last_cursor {
+            if cursor < last {
+                warn!(
+                    "Checkpoint cursor rewound from {} to {} (chain regenesis?) — clearing membership cache",
+                    last, cursor
+                );
+                self.membership_store.clear_all();
+                self.last_cursor = None;
+            } else if cursor <= last {
+                return Ok(());
+            } else if let Some((start, end, truncated)) = backfill_range(last, cursor, backfill_max)
+            {
+                if truncated {
+                    warn!(
+                        "Missed {} checkpoints while disconnected; replaying only the last {} \
+                         (MEMBERSHIP_BACKFILL_MAX_CHECKPOINTS). Groups created earlier in the \
+                         gap will not be recognized.",
+                        cursor - last - 1,
+                        backfill_max
+                    );
+                }
+                info!(
+                    "Replaying missed checkpoints {}..{} before resuming the stream",
+                    start, end
+                );
+                self.replay_checkpoints(ledger, start, end).await?;
+            }
+        }
+
+        if let Some(checkpoint) = checkpoint.as_ref() {
+            self.process_checkpoint(checkpoint, cursor).await;
+        }
+        self.last_cursor = Some(cursor);
+        self.membership_store.set_last_checkpoint_cursor(cursor);
+        Ok(())
+    }
+
+    /// Replays `[start, end)`.
+    async fn replay_checkpoints(
+        &mut self,
+        ledger: &mut Ledger,
+        start: u64,
+        end: u64,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        for seq in start..end {
+            let mut req = GetCheckpointRequest::default();
+            req.checkpoint_id = Some(CheckpointId::SequenceNumber(seq));
+            req.read_mask = Some(FieldMask::from_str(CHECKPOINT_READ_MASK));
+            match ledger.get_checkpoint(req).await {
+                Ok(resp) => {
+                    if let Some(missed) = resp.into_inner().checkpoint {
+                        self.process_checkpoint(&missed, seq).await;
+                    }
+                }
+                // tonic::Code::NotFound == 5 (tonic is only a dev-dependency
+                // here). The node pruned it; nothing to replay.
+                Err(status) if status.code() as i32 == 5 => {
+                    debug!("checkpoint {seq} no longer available; skipping");
+                }
+                // Anything else: leave the cursor where it is and let the
+                // reconnect loop retry from the first unprocessed checkpoint.
+                Err(status) => {
+                    return Err(format!("replaying checkpoint {seq}: {status}").into());
+                }
+            }
+            self.last_cursor = Some(seq);
+            self.membership_store.set_last_checkpoint_cursor(seq);
+            if start < end && (seq - start + 1) % 5_000 == 0 {
+                info!(
+                    "Replayed {} / {} missed checkpoints",
+                    seq - start + 1,
+                    end - start
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// Latest checkpoint. Omitting `checkpoint_id` asks the node for the tip.
+    async fn fetch_latest_checkpoint(
+        ledger: &mut Ledger,
+    ) -> Result<
+        Option<(u64, myso_rpc::proto::myso::rpc::v2::Checkpoint)>,
+        Box<dyn std::error::Error + Send + Sync>,
+    > {
+        let mut req = GetCheckpointRequest::default();
+        req.read_mask = Some(FieldMask::from_str(CHECKPOINT_READ_MASK));
+        let checkpoint = ledger.get_checkpoint(req).await?.into_inner().checkpoint;
+        let Some(checkpoint) = checkpoint else {
+            return Ok(None);
+        };
+        let seq = checkpoint.sequence_number.unwrap_or(0);
+        Ok(Some((seq, checkpoint)))
     }
 
     /// Processes a single checkpoint,
@@ -968,6 +1093,15 @@ impl MembershipSyncService {
 #[cfg(test)]
 mod backfill_tests {
     use super::*;
+
+    #[test]
+    fn checkpoint_mask_requests_event_type_and_contents() {
+        assert!(CHECKPOINT_READ_MASK.contains("transactions.events.events.event_type"));
+        assert!(CHECKPOINT_READ_MASK.contains("transactions.events.events.contents"));
+        assert!(CHECKPOINT_READ_MASK.contains("transactions.digest"));
+        assert!(CHECKPOINT_READ_MASK.contains("transactions.transaction.sender"));
+        assert!(!CHECKPOINT_READ_MASK.split(',').any(|path| path == "transactions.events"));
+    }
 
     #[test]
     fn nothing_is_replayed_when_the_stream_is_contiguous() {

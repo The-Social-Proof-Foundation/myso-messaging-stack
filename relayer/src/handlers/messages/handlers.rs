@@ -163,6 +163,15 @@ pub async fn create_message(
         _ => None,
     };
 
+    let attribution = validate_message_attribution(
+        &req.sender_address,
+        req.principal_owner.as_deref(),
+        req.sub_agent_id.as_deref(),
+        req.identity_class,
+    )?;
+
+    let attachments = decode_attachments(req.attachments)?;
+
     // Verify per-message signature over canonical content (includes kind;
     // post / token_transfer bind a cleartext reference + idempotency_key).
     let signature = verify_message_signature(
@@ -175,15 +184,9 @@ pub async fn create_message(
         &auth,
         signed_bind,
         idempotency_key.as_deref(),
-    )?;
-
-    let attachments = decode_attachments(req.attachments)?;
-
-    let attribution = validate_message_attribution(
-        &req.sender_address,
-        req.principal_owner.as_deref(),
-        req.sub_agent_id.as_deref(),
-        req.identity_class,
+        req.signature_version,
+        &attachments,
+        &attribution,
     )?;
 
     if attribution.is_agent_message() {
@@ -322,6 +325,8 @@ pub async fn create_message(
         kind,
         idempotency_key.clone(),
     );
+    let mut message = message;
+    message.signature_version = req.signature_version;
     let message = match (&transfer_create, &request_create, payment_peer.as_deref()) {
         (Some(t), _, Some(peer)) => message.with_metadata(token_transfer_metadata(t, peer)),
         (_, Some(r), Some(peer)) => message.with_metadata(payment_request_metadata(r, peer)),
@@ -557,6 +562,8 @@ pub async fn update_message(
         )));
     }
 
+    let attachments = decode_attachments(req.attachments)?;
+
     // Verify per-message signature over canonical content (kind of existing row).
     // Edits of post messages keep the text-style bind (shared_post not re-bound on update).
     let signature = verify_message_signature(
@@ -569,9 +576,10 @@ pub async fn update_message(
         &auth,
         None,
         None,
+        req.signature_version,
+        &attachments,
+        &existing_message.attribution,
     )?;
-
-    let attachments = decode_attachments(req.attachments)?;
 
     let mut public_key_with_flag = vec![auth.scheme.flag()];
     public_key_with_flag.extend_from_slice(&auth.public_key);
@@ -586,6 +594,7 @@ pub async fn update_message(
             req.key_version,
             attachments,
             signature,
+            req.signature_version,
             public_key_with_flag,
         )
         .await?;
@@ -678,7 +687,20 @@ fn verify_message_signature(
     auth: &AuthContext,
     shared_post_address: Option<&str>,
     idempotency_key: Option<&str>,
+    signature_version: i16,
+    attachments: &[crate::models::Attachment],
+    attribution: &crate::models::MessageAttribution,
 ) -> Result<Vec<u8>, ApiError> {
+    if !matches!(signature_version, 1 | 2) {
+        return Err(ApiError::BadRequest(
+            "signature_version must be 1 or 2".to_string(),
+        ));
+    }
+    if signature_version == 1 && !attachments.is_empty() {
+        return Err(ApiError::BadRequest(
+            "signature_version 1 does not bind attachments; update the messaging SDK".to_string(),
+        ));
+    }
     let signature_bytes = hex::decode(signature_hex)
         .map_err(|e| ApiError::BadRequest(format!("Invalid hex in message_signature: {}", e)))?;
     if signature_bytes.len() != 64 {
@@ -688,15 +710,29 @@ fn verify_message_signature(
         )));
     }
 
-    let canonical = message_content_canonical(
-        group_id,
-        kind,
-        encrypted_text,
-        nonce,
-        key_version,
-        shared_post_address,
-        idempotency_key,
-    );
+    let canonical = if signature_version == 2 {
+        message_content_canonical_v2(
+            group_id,
+            kind,
+            encrypted_text,
+            nonce,
+            key_version,
+            shared_post_address,
+            idempotency_key,
+            attachments,
+            attribution,
+        )
+    } else {
+        message_content_canonical(
+            group_id,
+            kind,
+            encrypted_text,
+            nonce,
+            key_version,
+            shared_post_address,
+            idempotency_key,
+        )
+    };
 
     if let Err(e) = verify_signature(
         canonical.as_bytes(),
@@ -717,6 +753,47 @@ fn verify_message_signature(
     }
 
     Ok(signature_bytes)
+}
+
+fn message_content_canonical_v2(
+    group_id: &str,
+    kind: &str,
+    encrypted_text: &str,
+    nonce: &str,
+    key_version: i64,
+    signed_reference: Option<&str>,
+    idempotency_key: Option<&str>,
+    attachments: &[crate::models::Attachment],
+    attribution: &crate::models::MessageAttribution,
+) -> String {
+    let attachment_rows = attachments
+        .iter()
+        .map(|attachment| {
+            serde_json::json!([
+                attachment.storage_id.as_str(),
+                hex::encode(&attachment.nonce),
+                hex::encode(&attachment.encrypted_metadata),
+                hex::encode(&attachment.metadata_nonce),
+            ])
+        })
+        .collect::<Vec<_>>();
+    serde_json::json!([
+        "myso-message-v2",
+        group_id.to_ascii_lowercase(),
+        kind,
+        signed_reference.unwrap_or(""),
+        idempotency_key.unwrap_or(""),
+        encrypted_text.to_ascii_lowercase(),
+        nonce.to_ascii_lowercase(),
+        key_version.to_string(),
+        attachment_rows,
+        [
+            attribution.principal_owner.as_deref().unwrap_or(""),
+            attribution.sub_agent_id.as_deref().unwrap_or(""),
+            attribution.identity_class.unwrap_or(-1),
+        ],
+    ])
+    .to_string()
 }
 
 /// Canonical string signed per-message (greenfield; kind always included).
@@ -758,6 +835,47 @@ fn normalize_shared_post_address(raw: &str) -> Option<String> {
 #[cfg(test)]
 mod shared_post_canonical_tests {
     use super::*;
+
+    #[test]
+    fn v2_canonical_binds_ordered_attachment_references() {
+        let attachment = crate::models::Attachment {
+            storage_id: "r2room://room/id".to_string(),
+            nonce: vec![0xaa],
+            encrypted_metadata: vec![0xbb],
+            metadata_nonce: vec![0xcc],
+        };
+        let canonical = message_content_canonical_v2(
+            "0xABCD", "text", "AABB", "CCDD", 3, None, None, &[attachment.clone()],
+            &crate::models::MessageAttribution::human_message(),
+        );
+        assert_eq!(
+            canonical,
+            r#"["myso-message-v2","0xabcd","text","","","aabb","ccdd","3",[["r2room://room/id","aa","bb","cc"]],["","",-1]]"#
+        );
+
+        let mut substituted = attachment.clone();
+        substituted.storage_id = "r2room://room/other".to_string();
+        assert_ne!(
+            canonical,
+            message_content_canonical_v2(
+                "0xABCD", "text", "AABB", "CCDD", 3, None, None, &[substituted],
+                &crate::models::MessageAttribution::human_message(),
+            )
+        );
+        let agent_attribution = crate::models::MessageAttribution {
+            principal_owner: Some("0xowner".into()),
+            sub_agent_id: Some("0xagent".into()),
+            identity_class: Some(1),
+            attribution_version: 1,
+        };
+        assert_ne!(
+            canonical,
+            message_content_canonical_v2(
+                "0xABCD", "text", "AABB", "CCDD", 3, None, None, &[attachment],
+                &agent_attribution,
+            )
+        );
+    }
 
     #[test]
     fn normalize_pads_short_hex() {

@@ -42,8 +42,8 @@ importers:
         specifier: ^0.0.1
         version: 0.0.1(@socialproof/bcs@0.0.2)(@socialproof/myso@0.0.4(typescript@5.8.3))
       '@socialproof/myso-messaging-stack':
-        specifier: ^0.2.0
-        version: 0.2.0(@socialproof/bcs@0.0.2)(@socialproof/mydata@0.0.4(@socialproof/myso@0.0.4(typescript@5.8.3)))(@socialproof/myso-groups@0.0.1(@socialproof/bcs@0.0.2)(@socialproof/myso@0.0.4(typescript@5.8.3)))(@socialproof/myso@0.0.4(typescript@5.8.3))
+        specifier: link:../ts-sdks/packages/myso-messaging-stack
+        version: link:../ts-sdks/packages/myso-messaging-stack
       '@socialproof/mysocial-auth':
         specifier: ^0.12.4
         version: 0.12.4

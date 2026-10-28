@@ -546,6 +546,7 @@ export function AuthenticatedApp({
                 chatIndex.refs.some((ref) => ref.groupId === selectedGroup.groupId)
                   ? (messages, { labelFor, onSelectMessage }) => (
                       <RoomVerifyPanel
+                        groupUuid={selectedGroup.uuid}
                         groupId={selectedGroup.groupId}
                         messages={messages}
                         labelFor={labelFor}

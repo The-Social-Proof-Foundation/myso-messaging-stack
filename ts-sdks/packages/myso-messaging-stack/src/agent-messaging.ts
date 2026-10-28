@@ -18,6 +18,7 @@ import type {
 import type { AttachmentFile } from './attachments/types.js';
 import type { CreateAgentGroupCallOptions, GroupRef } from './types.js';
 import type { MyDataPolicy } from './encryption/mydata-policy.js';
+import type { GetRoomMessagesOptions, RoomHistoryPage } from './room-history.js';
 import {
 	PrincipalMyDataOversightPolicy,
 	type PrincipalOversightPolicyOptions,
@@ -82,6 +83,9 @@ export interface AgentMessagingClient<TApproveContext = void> {
 	waitForMembership(
 		options: Omit<WaitForMembershipOptions, 'messaging' | 'memberAddress'>,
 	): Promise<void>;
+	getRoomMessages(
+		options: Omit<GetRoomMessagesOptions<TApproveContext>, 'signer'>,
+	): Promise<RoomHistoryPage>;
 	getMessages(
 		options: Omit<GetMessagesOptions<TApproveContext>, 'signer'>,
 	): Promise<GetMessagesResult>;
@@ -237,6 +241,13 @@ export function createAgentMessagingClient<TApproveContext = void>(
 				},
 			} as SendMessageOptions<TApproveContext>;
 			return messaging.sendMessage(sendOptions);
+		},
+
+		getRoomMessages(opts) {
+			return messaging.getRoomMessages({
+				...opts,
+				signer: agent.agentSigner,
+			} as GetRoomMessagesOptions<TApproveContext>);
 		},
 
 		getMessages(opts) {

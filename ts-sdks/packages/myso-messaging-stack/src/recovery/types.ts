@@ -34,6 +34,7 @@ export interface FileStorageMessageWire {
 	quilt_patch_id: string | null;
 	attachments: FileStorageAttachmentWire[];
 	signature?: string;
+	signature_version?: number;
 	public_key?: string;
 	principal_owner?: string | null;
 	sub_agent_id?: string | null;

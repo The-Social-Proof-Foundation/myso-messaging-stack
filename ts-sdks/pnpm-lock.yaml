@@ -85,6 +85,10 @@ importers:
         version: 5.9.3
 
   packages/myso-messaging-stack:
+    dependencies:
+      '@noble/hashes':
+        specifier: ^2.0.0
+        version: 2.0.1
     devDependencies:
       '@socialproof/bcs':
         specifier: ^0.0.2

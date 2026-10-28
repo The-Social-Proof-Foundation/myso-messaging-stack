@@ -332,6 +332,11 @@ export class EnvelopeEncryption<TApproveContext = void> {
 
 	async #resolveDEK(options: DEKResolutionOptions<TApproveContext>): Promise<Uint8Array> {
 		try {
+			// A cached DEK must never bypass an explicitly bound session identity.
+			this.#mydataPolicy.assertSessionIdentity?.({
+				address: options.sessionKey.getAddress(),
+				packageId: options.sessionKey.getPackageId(),
+			});
 			return await this.#dekCache.read(
 				[options.groupId, options.keyVersion.toString()],
 				async () => {

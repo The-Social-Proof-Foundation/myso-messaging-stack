@@ -142,3 +142,8 @@ export type {
 	ParsedGroupManager,
 	ParsedGroupLeaver,
 } from './bcs.js';
+
+export * from './anchors.js';
+export * from './room-evidence.js';
+
+export * from './room-history.js';

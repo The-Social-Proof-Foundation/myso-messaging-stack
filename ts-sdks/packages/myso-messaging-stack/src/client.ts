@@ -10,6 +10,15 @@ import type { Transaction } from '@socialproof/myso/transactions';
 
 import { BlockedMessagingError, BlockGatingClient } from './block-gating.js';
 import { emojiToStorage } from './emoji.js';
+import { messagingPermissionTypes } from './constants.js';
+import {
+	validateRoomHistoryRequest,
+	validateRoomHistoryPage,
+	verifiedRoomEntry,
+	type GetRoomMessagesOptions,
+	type RoomHistoryEntry,
+	type RoomHistoryPage,
+} from './room-history.js';
 import { MySoMessagingStackClientError } from './error.js';
 import { MessagingSyncManager } from './sync/messaging-sync-manager.js';
 import type { UserReadState } from './sync/types.js';
@@ -38,6 +47,7 @@ import {
 	signMessageContent,
 	transferIdempotencyKey,
 	verifyMessageSender,
+	type SignedMessageAttribution,
 	type VerifyMessageSenderParams,
 } from './verification.js';
 import {
@@ -362,7 +372,9 @@ export class MySoMessagingStackClient<TApproveContext = void> {
 
 		const kind = options.kind ?? 'text';
 		const sharedPostAddress =
-			kind === 'post' ? (normalizeSharedPostAddress(options.sharedPostAddress) ?? undefined) : undefined;
+			kind === 'post'
+				? (normalizeSharedPostAddress(options.sharedPostAddress) ?? undefined)
+				: undefined;
 		if (kind === 'post') {
 			if (!sharedPostAddress) {
 				throw new Error('sharedPostAddress is required when kind is post');
@@ -393,15 +405,19 @@ export class MySoMessagingStackClient<TApproveContext = void> {
 
 		// 3. Sign the ciphertext for sender verification (includes kind;
 		// post binds sharedPostAddress + idempotencyKey; token_transfer binds digest + key).
+		const signatureVersion: 1 | 2 = attachmentRefs.length > 0 || Boolean(options.attribution) ? 2 : 1;
 		const messageSignature = await signMessageContent(options.signer, {
 			groupId,
 			kind,
+			signatureVersion,
 			encryptedText: envelope.ciphertext,
 			nonce: envelope.nonce,
 			keyVersion: envelope.keyVersion,
 			sharedPostAddress,
 			transferDigest,
 			idempotencyKey: options.idempotencyKey,
+			attachments: attachmentRefs,
+			attribution: options.attribution,
 		});
 
 		// 4. Send via transport.
@@ -412,6 +428,7 @@ export class MySoMessagingStackClient<TApproveContext = void> {
 			nonce: envelope.nonce,
 			keyVersion: envelope.keyVersion,
 			kind,
+			signatureVersion,
 			idempotencyKey: options.idempotencyKey,
 			sharedPostAddress,
 			paymentMetadata:
@@ -507,6 +524,9 @@ export class MySoMessagingStackClient<TApproveContext = void> {
 			groupId,
 		});
 
+		if (raw.messageId !== options.messageId) {
+			throw new MySoMessagingStackClientError('Message does not match the requested ID');
+		}
 		return this.#decryptMessage(raw, { groupId, encryptionHistoryId }, approveContext);
 	}
 
@@ -540,6 +560,97 @@ export class MySoMessagingStackClient<TApproveContext = void> {
 		}
 
 		return { messages, hasNext: result.hasNext };
+	}
+
+	/**
+	 * Read a bounded room page without silently dropping failed decryptions.
+	 * Normal reader permission is checked before and after fetching/decrypting.
+	 * Only signature-verified text is released. Attribution, chronology, attachment
+	 * metadata and system/deletion events are not promoted to signed evidence.
+	 * This is not an agent-capability/organization-role or complete-history proof.
+	 */
+	async getRoomMessages(
+		options: GetRoomMessagesOptions<TApproveContext>,
+	): Promise<RoomHistoryPage> {
+		const limit = validateRoomHistoryRequest(options);
+		const groupIds = this.derive.resolveGroupRef(options.groupRef);
+		const member = options.signer.toMySoAddress();
+		const assertReader = async () => {
+			if (options.signer.toMySoAddress() !== member) {
+				this.encryption.clearCache(groupIds.groupId);
+				throw new MySoMessagingStackClientError('Room signer changed during the request');
+			}
+			const allowed = await this.groups.view.hasPermission({
+				groupId: groupIds.groupId,
+				member,
+				permissionType: messagingPermissionTypes(this.packageConfig.originalPackageId)
+					.MessagingReader,
+			});
+			if (!allowed) {
+				this.encryption.clearCache(groupIds.groupId);
+				throw new MySoMessagingStackClientError('Current room reader permission is required');
+			}
+		};
+		await assertReader();
+		const result = await this.transport.fetchMessages({
+			signer: options.signer,
+			groupId: groupIds.groupId,
+			afterOrder: options.afterOrder,
+			beforeOrder: options.beforeOrder,
+			limit,
+		});
+		const nextCursor = validateRoomHistoryPage(result, groupIds.groupId, { ...options, limit });
+		const hasNext = result.hasNext;
+		// Snapshot signed fields before asynchronous verification/decryption. Custom
+		// transports may reuse mutable row objects for incoming realtime updates.
+		const rows = result.messages.map((raw) => ({
+			...raw,
+			encryptedText: raw.encryptedText.slice(),
+			nonce: raw.nonce instanceof Uint8Array ? raw.nonce.slice() : new Uint8Array(),
+			paymentMetadata: raw.paymentMetadata ? { ...raw.paymentMetadata } : undefined,
+			attachments: raw.attachments.map((attachment) => ({ ...attachment })),
+		}));
+		const approveContext = this.#approveContextSpread(options);
+		const readRow = async (raw: RelayerMessage): Promise<RoomHistoryEntry> => {
+			const row = { messageId: raw.messageId, order: raw.order };
+			if (raw.kind === 'system') return { ...row, status: 'system_metadata' };
+			if (raw.isDeleted) return { ...row, status: 'deleted_metadata' };
+			if (!(await this.#verifyRawMessage(raw))) return { ...row, status: 'unverified_content' };
+			try {
+				let message: DecryptedMessage;
+				try {
+					message = await this.#decryptMessage(raw, groupIds, approveContext, {
+						senderVerified: true,
+					});
+				} catch {
+					// Keep valid text readable if separately encrypted attachment
+					// metadata is unavailable or malformed.
+					message = await this.#decryptMessage(raw, groupIds, approveContext, {
+						senderVerified: true,
+						resolveAttachments: false,
+					});
+				}
+				return verifiedRoomEntry(raw, message);
+			} catch {
+				// Never expose provider errors, encrypted bytes, keys or partial plaintext.
+				return { ...row, status: 'unavailable_content' };
+			}
+		};
+		const entries: RoomHistoryEntry[] = [];
+		// Keep at most four key/decryption requests in flight and preserve row order.
+		for (let start = 0; start < rows.length; start += 4) {
+			entries.push(...(await Promise.all(rows.slice(start, start + 4).map(readRow))));
+		}
+		await assertReader();
+		return {
+			groupId: groupIds.groupId,
+			entries,
+			hasNext,
+			nextCursor,
+			allContentVerified:
+				entries.length > 0 && entries.every((entry) => entry.status === 'verified_content'),
+			metadataSource: 'relayer_unverified',
+		};
 	}
 
 	/**
@@ -578,7 +689,7 @@ export class MySoMessagingStackClient<TApproveContext = void> {
 		} as EncryptOptions<TApproveContext>);
 
 		// 2. Compute attachment changes if requested.
-		let finalAttachments: Attachment[] | undefined;
+		let finalAttachments: Attachment[] = existing.attachments;
 		let removedStorageIds: string[] | undefined;
 
 		if (options.attachments) {
@@ -603,12 +714,22 @@ export class MySoMessagingStackClient<TApproveContext = void> {
 		}
 
 		// 3. Sign the ciphertext for sender verification (includes kind).
+		const hasAttribution = Boolean(existing.principalOwner || existing.subAgentId || existing.identityClass !== undefined);
+		const attribution: SignedMessageAttribution | undefined = hasAttribution ? {
+			...(existing.principalOwner ? { principalOwner: existing.principalOwner } : {}),
+			...(existing.subAgentId ? { subAgentId: existing.subAgentId } : {}),
+			...(existing.identityClass !== undefined ? { identityClass: existing.identityClass } : {}),
+		} : undefined;
+		const signatureVersion: 1 | 2 = finalAttachments.length > 0 || hasAttribution ? 2 : 1;
 		const messageSignature = await signMessageContent(options.signer, {
 			groupId,
 			kind,
+			signatureVersion,
 			encryptedText: envelope.ciphertext,
 			nonce: envelope.nonce,
 			keyVersion: envelope.keyVersion,
+			attachments: finalAttachments,
+			attribution,
 		});
 
 		// 4. Update via transport.
@@ -620,6 +741,7 @@ export class MySoMessagingStackClient<TApproveContext = void> {
 			nonce: envelope.nonce,
 			keyVersion: envelope.keyVersion,
 			attachments: finalAttachments,
+			signatureVersion,
 			messageSignature,
 		});
 
@@ -1039,7 +1161,14 @@ export class MySoMessagingStackClient<TApproveContext = void> {
 		raw: RelayerMessage,
 		groupIds: { groupId: string; encryptionHistoryId: string },
 		approveContext: Record<string, unknown>,
+		verifiedOptions: { senderVerified?: boolean; resolveAttachments?: boolean } = {},
 	): Promise<DecryptedMessage> {
+		if (
+			normalizeSharedPostAddress(raw.groupId) !== normalizeSharedPostAddress(groupIds.groupId) ||
+			!normalizeSharedPostAddress(groupIds.groupId)
+		) {
+			throw new MySoMessagingStackClientError('Message does not belong to the requested group');
+		}
 		// System messages: cleartext structured events — never decrypt.
 		if (raw.kind === 'system') {
 			return {
@@ -1054,6 +1183,8 @@ export class MySoMessagingStackClient<TApproveContext = void> {
 				isDeleted: false,
 				syncStatus: raw.syncStatus,
 				attachments: [],
+				attachmentIntegrity: 'none',
+				attributionIntegrity: 'none',
 				senderVerified: false,
 				principalOwner: raw.principalOwner,
 				subAgentId: raw.subAgentId,
@@ -1078,6 +1209,8 @@ export class MySoMessagingStackClient<TApproveContext = void> {
 				isDeleted: true,
 				syncStatus: raw.syncStatus,
 				attachments: [],
+				attachmentIntegrity: 'none',
+				attributionIntegrity: 'signature_unverified',
 				senderVerified: false,
 				principalOwner: raw.principalOwner,
 				subAgentId: raw.subAgentId,
@@ -1107,37 +1240,24 @@ export class MySoMessagingStackClient<TApproveContext = void> {
 
 		const text = this.#textDecoder.decode(plaintext);
 
-		// Verify sender signature (fail-safe: false if missing or invalid).
 		const kind = raw.kind ?? 'text';
-		const transferDigest =
-			kind === 'token_transfer' && raw.paymentMetadata?.type === 'token_transfer'
-				? raw.paymentMetadata.digest
-				: undefined;
-		const senderVerified =
-			raw.signature && raw.publicKey
-				? await verifyMessageSender({
-						groupId: raw.groupId,
-						kind,
-						transferDigest,
-						idempotencyKey: transferDigest
-							? transferIdempotencyKey(raw.senderAddress, transferDigest)
-							: undefined,
-						encryptedText: raw.encryptedText,
-						nonce: raw.nonce,
-						keyVersion: raw.keyVersion,
-						senderAddress: raw.senderAddress,
-						signature: raw.signature,
-						publicKey: raw.publicKey,
-					})
-				: false;
+		const senderVerified = verifiedOptions.senderVerified ?? (await this.#verifyRawMessage(raw));
 
-		// Resolve attachments.
-		const attachments = await this.#resolveAttachments(
-			raw.attachments,
-			groupIds,
-			raw.keyVersion,
-			approveContext,
-		);
+		// Attachment references are relayer metadata until they are covered by a v2
+		// sender signature. Never download/decrypt legacy or signature-invalid refs.
+		const attachmentIntegrity: DecryptedMessage['attachmentIntegrity'] = raw.attachments.length === 0
+			? 'none'
+			: raw.signatureVersion !== 2
+				? 'legacy_unverified'
+				: !senderVerified ? 'signature_unverified' : 'verified';
+		const hasAttribution = Boolean(raw.principalOwner || raw.subAgentId || raw.identityClass !== undefined);
+		const attributionIntegrity: DecryptedMessage['attributionIntegrity'] = !hasAttribution
+			? 'none'
+			: raw.signatureVersion !== 2 ? 'legacy_unverified' : !senderVerified ? 'signature_unverified' : 'verified';
+		const attachments =
+			verifiedOptions.resolveAttachments === false || attachmentIntegrity !== 'verified'
+				? []
+				: await this.#resolveAttachments(raw.attachments, groupIds, raw.keyVersion, approveContext);
 
 		return {
 			messageId: raw.messageId,
@@ -1151,15 +1271,50 @@ export class MySoMessagingStackClient<TApproveContext = void> {
 			isDeleted: false,
 			syncStatus: raw.syncStatus,
 			attachments,
+			attachmentIntegrity,
+			attributionIntegrity,
 			senderVerified,
 			principalOwner: raw.principalOwner,
 			subAgentId: raw.subAgentId,
 			identityClass: raw.identityClass,
-			isAgentMessage: raw.isAgentMessage,
+			isAgentMessage: raw.isAgentMessage && attributionIntegrity === 'verified',
 			kind,
 			paymentMetadata: raw.paymentMetadata,
 			payment: parsePaymentPayload(kind, text),
 		};
+	}
+
+	async #verifyRawMessage(raw: RelayerMessage): Promise<boolean> {
+		const kind = raw.kind ?? 'text';
+		const signatureVersion = raw.signatureVersion ?? 1;
+		if (signatureVersion !== 1 && signatureVersion !== 2) return false;
+		const transferDigest =
+			kind === 'token_transfer' && raw.paymentMetadata?.type === 'token_transfer'
+				? raw.paymentMetadata.digest
+				: undefined;
+		return raw.signature && raw.publicKey
+			? await verifyMessageSender({
+					groupId: raw.groupId,
+					kind,
+					signatureVersion,
+					transferDigest,
+					idempotencyKey: transferDigest
+						? transferIdempotencyKey(raw.senderAddress, transferDigest)
+						: undefined,
+					encryptedText: raw.encryptedText,
+					nonce: raw.nonce,
+					keyVersion: raw.keyVersion,
+					attachments: raw.attachments,
+					attribution: raw.principalOwner || raw.subAgentId || raw.identityClass !== undefined ? {
+						...(raw.principalOwner ? { principalOwner: raw.principalOwner } : {}),
+						...(raw.subAgentId ? { subAgentId: raw.subAgentId } : {}),
+						...(raw.identityClass !== undefined ? { identityClass: raw.identityClass } : {}),
+					} : undefined,
+					senderAddress: raw.senderAddress,
+					signature: raw.signature,
+					publicKey: raw.publicKey,
+				})
+			: false;
 	}
 
 	// === Private: Attachments ===
