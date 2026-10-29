@@ -62,6 +62,7 @@ import {
   zkLoginPending,
   zkLoginProofInFlight,
   zkLoginProofRunning,
+  zkLoginSignInFailure,
 } from '../lib/zklogin-signin';
 
 const SESSION_EXPIRED_MESSAGE =
@@ -157,7 +158,7 @@ export function MySocialAuthProvider({
   const hadSessionRef = useRef(false);
   const zkResumeStartedRef = useRef(false);
   const zkExpiryHandledRef = useRef(false);
-  const logoutBecauseZkLoginExpiredRef = useRef<() => Promise<void>>(async () => {});
+  const logoutBecauseZkLoginExpiredRef = useRef<(message?: string) => Promise<void>>(async () => {});
   const proactiveRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
     null,
   );
@@ -479,7 +480,9 @@ export function MySocialAuthProvider({
           }
           return;
         }
-        await logoutBecauseZkLoginExpiredRef.current();
+        // A sign-in that failed partway (e.g. the salt service was unreachable) leaves the same
+        // half-built session as an expired proof; tear it down but report the real reason.
+        await logoutBecauseZkLoginExpiredRef.current(zkLoginSignInFailure() ?? undefined);
       })();
       return () => {
         cancelled = true;
@@ -684,13 +687,16 @@ export function MySocialAuthProvider({
     }
   }, [clearProactiveRefreshTimer, finishLoginCelebration]);
 
-  const logoutBecauseZkLoginExpired = useCallback(async () => {
-    if (zkExpiryHandledRef.current) return;
-    zkExpiryHandledRef.current = true;
-    zkResumeStartedRef.current = false;
-    await logout();
-    setSignInError(ZKLOGIN_EXPIRED_MESSAGE);
-  }, [logout]);
+  const logoutBecauseZkLoginExpired = useCallback(
+    async (message: string = ZKLOGIN_EXPIRED_MESSAGE) => {
+      if (zkExpiryHandledRef.current) return;
+      zkExpiryHandledRef.current = true;
+      zkResumeStartedRef.current = false;
+      await logout();
+      setSignInError(message);
+    },
+    [logout],
+  );
   logoutBecauseZkLoginExpiredRef.current = logoutBecauseZkLoginExpired;
 
   useEffect(() => {
@@ -712,7 +718,7 @@ export function MySocialAuthProvider({
       if (!sessionLooksLikeZkLogin()) return;
       void restoreZkLoginSignerStatus().then((status) => {
         if (status === 'expired' || status === 'invalid' || status === 'missing') {
-          void logoutBecauseZkLoginExpired();
+          void logoutBecauseZkLoginExpired(zkLoginSignInFailure() ?? undefined);
         }
       });
     };

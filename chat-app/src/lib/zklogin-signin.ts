@@ -104,6 +104,8 @@ let pending: Pending | null = null;
 let current: ZkSession | null = null;
 let proofInFlight = false;
 let proofGaveUp = false;
+/** Why the last sign-in in this tab stopped, so the session teardown can say so instead of "expired". */
+let lastSignInFailure: string | null = null;
 let finishFlight: Promise<{ address: string; keypair: Ed25519Keypair }> | null = null;
 let cachedClock: (ChainClock & { at: number }) | null = null;
 
@@ -164,6 +166,11 @@ export function zkLoginProofInFlight(): boolean {
   } catch {
     return false;
   }
+}
+
+/** The error that ended this tab's last sign-in attempt, or null if it didn't fail. */
+export function zkLoginSignInFailure(): string | null {
+  return proofGaveUp ? lastSignInFailure : null;
 }
 
 /** True when a zkLogin nonce is saved and the proof has not been stored yet. */
@@ -487,10 +494,33 @@ function extractIssClaim(jwt: string): { value: string; indexMod4: number } {
   throw new Error('OAuth token is missing the issuer claim.');
 }
 
+const SALT_SERVICE_UNREACHABLE =
+  "Couldn't reach the MySocial sign-in service. Check your connection and try again.";
+const SALT_RETRY_DELAYS_MS = [600, 1_500, 3_000];
+
+/**
+ * `fetch` to the salt service, retrying network-level failures. A waking or restarting instance
+ * answers the CORS preflight from the proxy without CORS headers, which surfaces as a `TypeError`
+ * on the first sign-in and succeeds moments later. HTTP error statuses are returned, not retried.
+ */
+async function saltServiceFetch(input: string, init?: RequestInit): Promise<Response> {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await fetch(input, init);
+    } catch (error) {
+      if (!(error instanceof TypeError)) throw error;
+      const delay = SALT_RETRY_DELAYS_MS[attempt];
+      if (delay == null) throw new Error(SALT_SERVICE_UNREACHABLE);
+      console.warn(`[zkLogin] salt service unreachable, retrying in ${delay}ms:`, error);
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+  }
+}
+
 async function saltFor(accessToken: string, iss: string, aud: string): Promise<string> {
   const headers = { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' };
   const endpoint = `${saltApi()}/zklogin-salt`;
-  const existing = await fetch(endpoint, { headers });
+  const existing = await saltServiceFetch(endpoint, { headers });
   if (existing.ok) {
     const body = (await existing.json()) as { salt?: string };
     if (body.salt) return body.salt;
@@ -498,13 +528,13 @@ async function saltFor(accessToken: string, iss: string, aud: string): Promise<s
   const salt = BigInt(
     `0x${Array.from(crypto.getRandomValues(new Uint8Array(16)), (byte) => byte.toString(16).padStart(2, '0')).join('')}`,
   ).toString();
-  const saved = await fetch(endpoint, {
+  const saved = await saltServiceFetch(endpoint, {
     method: 'PUT',
     headers,
     body: JSON.stringify({ salt, iss, aud }),
   });
   if (saved.status === 409) {
-    const again = await fetch(endpoint, { headers });
+    const again = await saltServiceFetch(endpoint, { headers });
     const body = (await again.json()) as { salt?: string };
     if (!body.salt) throw new Error('Could not store the zkLogin salt.');
     return body.salt;
@@ -518,7 +548,7 @@ async function saltFor(accessToken: string, iss: string, aud: string): Promise<s
  * the public salt endpoint, this one is reachable on every network the app signs in on.
  */
 export async function fetchZkLoginSalt(accessToken: string): Promise<string> {
-  const response = await fetch(`${saltApi()}/zklogin-salt`, {
+  const response = await saltServiceFetch(`${saltApi()}/zklogin-salt`, {
     headers: { Authorization: `Bearer ${accessToken}`, Accept: 'application/json' },
   });
   if (!response.ok) throw new Error(`Could not read your zkLogin salt (${response.status}). Sign in again.`);
@@ -558,6 +588,7 @@ async function restorePending(): Promise<Pending | null> {
 
 async function beginZkLogin(): Promise<{ nonce: string; state: string }> {
   proofGaveUp = false;
+  lastSignInFailure = null;
   setProofRecovered(false);
   await adoptLegacySessionCopy();
   const stored = await loadZkLoginSigner().catch(() => null);
@@ -884,7 +915,7 @@ function storeSession(message: AuthResult, accessToken: string, address?: string
 }
 
 async function bindZkLoginAddress(address: string, accessToken: string): Promise<void> {
-  const response = await fetch(`${saltApi()}/zklogin-address`, {
+  const response = await saltServiceFetch(`${saltApi()}/zklogin-address`, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${accessToken}`,
@@ -933,6 +964,7 @@ async function runFinishZkLogin(message: AuthResult, accessToken: string): Promi
     return { address, keypair };
   } catch (err) {
     proofGaveUp = true;
+    lastSignInFailure = err instanceof Error && err.message ? err.message : 'Sign in failed.';
     throw err;
   } finally {
     clearProofInFlight();
