@@ -35,11 +35,22 @@ export default defineConfig(({ mode }) => {
     name: 'agent-vault-csp', apply: 'build',
     transformIndexHtml() {
       if(env.VITE_AGENT_KEY_BACKUPS_ENABLED !== 'true') return [];
-      const origins=new Set<string>();
+      const origins=new Set<string>([
+        'https://api.testnet.dripdrop.social',
+        'https://api.dripdrop.social',
+      ]);
+      const addOrigin = (value?: string) => {
+        if (!value) return;
+        try {
+          const url = new URL(value);
+          if (['https:', 'http:', 'wss:', 'ws:'].includes(url.protocol)) origins.add(url.origin);
+        } catch { /* Relative proxies use self. */ }
+      };
       for(const [key,value] of Object.entries(env)) {
         if(!key.startsWith('VITE_') || !/(URL|ORIGIN|BASE_URL)$/.test(key)) continue;
-        try {const url=new URL(value);if(['https:','http:','wss:','ws:'].includes(url.protocol))origins.add(url.origin);} catch { /* Relative proxies use self. */ }
+        addOrigin(value);
       }
+      addOrigin(env.VITE_MYSO_USD_PRICE_URL);
       for(const origin of (env.VITE_PASSKEY_CONNECT_ORIGINS || '').split(/[ ,]+/).filter(Boolean)) {
         const url=new URL(origin);
         if(origin.includes('*') || !['https:','http:','wss:','ws:'].includes(url.protocol) || url.username || url.password || url.pathname!=='/' || url.search || url.hash) throw new Error('VITE_PASSKEY_CONNECT_ORIGINS requires exact origins');

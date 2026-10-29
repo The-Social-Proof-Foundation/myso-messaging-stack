@@ -437,6 +437,26 @@ export function zkLoginProofExpiredOnChain(
   return epoch >= maxEpoch || proofExceedsChainCap(epoch, maxEpoch, maxEpochDelta);
 }
 
+/** The prover needs a real OIDC id_token (three segments, `alg` in the header). Session JWTs fail this. */
+function requireOidcIdToken(jwt: string): void {
+  const parts = jwt.split('.');
+  if (parts.length !== 3 || !parts[0] || !parts[1]) {
+    throw new Error('Sign-in did not return an OpenID token. Sign in again with Google or Apple.');
+  }
+  try {
+    const padded = parts[0].replace(/-/g, '+').replace(/_/g, '/');
+    const header = JSON.parse(atob(padded.padEnd(padded.length + ((4 - (padded.length % 4)) % 4), '='))) as {
+      alg?: string;
+    };
+    if (!header.alg) {
+      throw new Error('Sign-in token is missing a JWT algorithm. Sign in again.');
+    }
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith('Sign-in')) throw error;
+    throw new Error('Sign-in token is not a readable JWT. Sign in again.');
+  }
+}
+
 function jwtClaims(jwt: string): { nonce?: string } {
   const payload = jwt.split('.')[1] ?? '';
   const padded = payload.replace(/-/g, '+').replace(/_/g, '/');
@@ -747,6 +767,7 @@ export async function restoreZkLoginSigner(): Promise<boolean> {
 }
 
 async function completeZkLogin(input: { jwt: string; accessToken: string }): Promise<string> {
+  requireOidcIdToken(input.jwt);
   const active = await restorePending();
   if (!active) throw new Error('zkLogin nonce expired. Sign in again.');
   if (jwtClaims(input.jwt).nonce !== active.nonce) {

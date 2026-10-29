@@ -18,3 +18,7 @@ The chat key is sealed in IndexedDB (`mysocial-zklogin-session`) under a non-ext
 Logout clears the decrypted cache and keeps the ciphertext.
 
 Read receipts and online status render only when another non-agent member is in the chat.
+
+# Price CSP + OIDC token check
+
+`api.testnet.dripdrop.social` was missing from the vault `connect-src` list, so MySo USD price fetches were blocked. Apple `/prove` 400 "missing typ" is the deployed zklogin-prover, not chat-app — that service already accepts missing `typ` in-repo and needs a redeploy. Chat-app now refuses a non-OIDC token before `/prove`. MetaMask `contentscript.js` listener warnings are the extension, not this app.
