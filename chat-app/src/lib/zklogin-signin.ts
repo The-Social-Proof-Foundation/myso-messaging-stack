@@ -495,13 +495,14 @@ function extractIssClaim(jwt: string): { value: string; indexMod4: number } {
 }
 
 const SALT_SERVICE_UNREACHABLE =
-  "Couldn't reach the MySocial sign-in service. Check your connection and try again.";
+  "Couldn't reach the MySocial sign-in service. Try again in a moment.";
 const SALT_RETRY_DELAYS_MS = [600, 1_500, 3_000];
 
 /**
- * `fetch` to the salt service, retrying network-level failures. A waking or restarting instance
- * answers the CORS preflight from the proxy without CORS headers, which surfaces as a `TypeError`
- * on the first sign-in and succeeds moments later. HTTP error statuses are returned, not retried.
+ * `fetch` to the salt service, retrying network-level failures (a dropped connection or a
+ * restarting instance). The browser reports those, and a CORS rejection, as the same `TypeError`,
+ * so a persistent CORS misconfiguration still ends in the "couldn't reach" error after the retries.
+ * HTTP error statuses are returned, not retried.
  */
 async function saltServiceFetch(input: string, init?: RequestInit): Promise<Response> {
   for (let attempt = 0; ; attempt += 1) {
