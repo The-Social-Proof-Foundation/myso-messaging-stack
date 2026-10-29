@@ -174,7 +174,7 @@ pub async fn fetch_chain_outcome(
 
     let response = match client.get_transaction(request).await {
         Ok(r) => r.into_inner(),
-        // tonic::Code::NotFound == 5 (tonic is only a dev-dependency of this crate).
+        // tonic::Code::NotFound == 5.
         Err(status) if status.code() as i32 == 5 => return Ok(ChainOutcome::NotFound),
         Err(status) => return Err(status.to_string()),
     };

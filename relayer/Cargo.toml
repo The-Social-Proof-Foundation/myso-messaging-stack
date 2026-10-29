@@ -58,6 +58,9 @@ a2 = "0.10"
 # PostgreSQL storage (production)
 sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "chrono", "uuid", "json"] }
 
+# gRPC channel type for the ledger client used by membership sync.
+tonic = { version = "0.14", features = ["transport"] }
+
 # Cloudflare R2 via S3-compatible API
 aws-sdk-s3 = "1"
 aws-credential-types = "1"
@@ -66,7 +69,6 @@ aws-credential-types = "1"
 rand = "0.8"
 rstest = "0.25"
 tower = "0.5"
-tonic = { version = "0.14", features = ["transport"] }
 tokio-stream = { version = "0.1", features = ["net"] }
 wiremock = "0.6"
 tokio-tungstenite = "0.24"

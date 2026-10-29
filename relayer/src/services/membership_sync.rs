@@ -595,8 +595,7 @@ impl MembershipSyncService {
                         self.process_checkpoint(&missed, seq).await;
                     }
                 }
-                // tonic::Code::NotFound == 5 (tonic is only a dev-dependency
-                // here). The node pruned it; nothing to replay.
+                // tonic::Code::NotFound == 5. The node pruned it; nothing to replay.
                 Err(status) if status.code() as i32 == 5 => {
                     debug!("checkpoint {seq} no longer available; skipping");
                 }

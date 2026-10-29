@@ -25,18 +25,6 @@
     "paths": {
       "@/*": [
         "./src/*"
-      ],
-      "@socialproof/memory": [
-        "../../myso-memory/packages/sdk/src/index.ts"
-      ],
-      "@socialproof/memory/account": [
-        "../../myso-memory/packages/sdk/src/account-entry.ts"
-      ],
-      "@socialproof/memory/manual": [
-        "../../myso-memory/packages/sdk/src/manual-entry.ts"
-      ],
-      "@socialproof/memory/ai": [
-        "../../myso-memory/packages/sdk/src/ai/index.ts"
       ]
     }
   },
