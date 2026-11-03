@@ -30,7 +30,7 @@ bytes = "1.5"
 http-body-util = "0.1"
 
 # Published from https://github.com/The-Social-Proof-Foundation/myso-rust-sdk (not crates.io).
-myso-crypto = { git = "https://github.com/The-Social-Proof-Foundation/myso-rust-sdk.git", branch = "main", features = ["ed25519", "secp256k1", "secp256r1"] }
+myso-crypto = { git = "https://github.com/The-Social-Proof-Foundation/myso-rust-sdk.git", branch = "main", features = ["ed25519", "secp256k1", "secp256r1", "zklogin"] }
 myso-sdk-types = { git = "https://github.com/The-Social-Proof-Foundation/myso-rust-sdk.git", branch = "main", features = ["serde", "hash"] }
 
 # Keep blake2 for any remaining address derivation if needed
@@ -73,3 +73,4 @@ tokio-stream = { version = "0.1", features = ["net"] }
 wiremock = "0.6"
 tokio-tungstenite = "0.24"
 futures-util = "0.3"
+

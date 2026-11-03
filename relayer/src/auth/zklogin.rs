@@ -7,22 +7,25 @@
 //! 1. Parse the signature; it must be a zkLogin authenticator.
 //! 2. The claimed `sender_address` must be an address the proof's public identifier derives.
 //! 3. The ephemeral signature inside must verify over this exact message (local, every request).
-//! 4. The proof itself (ephemeral key + max epoch bound to the address, current JWKs, epoch window)
-//!    is checked by the chain's GraphQL `verifyZkLoginSignature`. A success is cached for 10 minutes
-//!    per (address, proof inputs, max epoch, ephemeral key), so later requests only repeat 1-3.
+//! 4. The proof itself is verified in-process, as validators do: MySo's Groth16 key (exported from
+//!    the MySo prover's zkey), the issuer's published JWK, and `max_epoch` within the current
+//!    epoch window. A success is cached for 10 minutes per (address, proof inputs, max epoch,
+//!    ephemeral key), so later requests only repeat 1-3.
 //!
-//! Anything that fails, including GraphQL being unreachable, is rejected (fail closed).
+//! Anything that fails, including the JWKS or fullnode being unreachable, is rejected (fail closed).
 
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
-use base64::Engine;
 use blake2::{digest::consts::U32, Blake2b, Digest};
 use myso_crypto::{MySoVerifier, UserSignatureVerifier};
-use myso_sdk_types::{PersonalMessage, SimpleSignature, UserSignature, ZkLoginAuthenticator};
+use myso_crypto::zklogin::ZkloginVerifier;
+use myso_sdk_types::{
+    Jwk, JwkId, PersonalMessage, SimpleSignature, UserSignature, ZkLoginAuthenticator,
+};
 
 use super::schemes::SignatureScheme;
 use super::types::AuthError;
@@ -44,89 +47,284 @@ pub struct ZkLoginSender {
     pub ephemeral_public_key: Vec<u8>,
 }
 
-/// Remote proof check. GraphQL in production; a stub in tests.
+/// The proof check: in production `LocalZkLoginCheck`, a stub in tests.
 #[async_trait]
 pub trait ZkLoginProofCheck: Send + Sync {
-    /// `Ok` only when the chain accepts `signature` over the personal message `message` for `author`.
+    /// `Ok` only when `signature` is a valid zkLogin signature over the personal message
+    /// `message` for `author`, under the same rules validators apply.
     async fn verify(&self, message: &[u8], signature: &[u8], author: &str)
         -> Result<(), AuthError>;
 }
 
-/// `verifyZkLoginSignature` on the network's GraphQL service.
-pub struct GraphQlZkLoginCheck {
+/// OIDC providers whose keys the relayer accepts (the ones the MySo prover serves).
+/// `(issuer, JWKS URL)`; each issuer also matches without its `https://` prefix.
+const JWK_PROVIDERS: &[(&str, &str)] = &[
+    (
+        "https://accounts.google.com",
+        "https://www.googleapis.com/oauth2/v3/certs",
+    ),
+    ("https://appleid.apple.com", "https://appleid.apple.com/auth/keys"),
+];
+
+/// A key id the cache doesn't know triggers at most one JWKS fetch per issuer this often.
+const JWK_REFETCH_INTERVAL: Duration = Duration::from_secs(60);
+
+/// Current epoch is re-read from the fullnode at most this often.
+const EPOCH_TTL: Duration = Duration::from_secs(30);
+
+/// Validators reject a proof whose `max_epoch` is more than this many epochs ahead
+/// (protocol config `zklogin_max_epoch_upper_bound_delta`).
+const MAX_EPOCH_UPPER_BOUND_DELTA: u64 = 30;
+
+/// Where the current epoch comes from. The fullnode's gRPC in production.
+#[async_trait]
+pub trait EpochSource: Send + Sync {
+    async fn current_epoch(&self) -> Result<u64, String>;
+}
+
+/// `LedgerService.GetServiceInfo` on the fullnode (`MYSO_RPC_URL`).
+pub struct GrpcEpochSource {
     url: String,
+}
+
+impl GrpcEpochSource {
+    pub fn new(url: impl Into<String>) -> Self {
+        Self { url: url.into() }
+    }
+}
+
+#[async_trait]
+impl EpochSource for GrpcEpochSource {
+    async fn current_epoch(&self) -> Result<u64, String> {
+        use myso_rpc::proto::myso::rpc::v2::{
+            ledger_service_client::LedgerServiceClient, GetServiceInfoRequest,
+        };
+        let mut client = LedgerServiceClient::connect(self.url.clone())
+            .await
+            .map_err(|e| e.to_string())?;
+        let info = client
+            .get_service_info(GetServiceInfoRequest::default())
+            .await
+            .map_err(|e| e.to_string())?
+            .into_inner();
+        info.epoch.ok_or_else(|| "service info has no epoch".to_string())
+    }
+}
+
+/// Where an issuer's signing keys come from. The provider's JWKS endpoint in production.
+#[async_trait]
+pub trait JwkSource: Send + Sync {
+    /// Every key the issuer currently publishes.
+    async fn fetch(&self, iss: &str) -> Result<Vec<(String, Jwk)>, String>;
+}
+
+/// Fetches the allow-listed providers' published JWKS.
+pub struct HttpJwkSource {
     client: reqwest::Client,
 }
 
-impl GraphQlZkLoginCheck {
-    pub fn new(url: impl Into<String>) -> Self {
+impl HttpJwkSource {
+    pub fn new() -> Self {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(8))
             .build()
             .unwrap_or_default();
+        Self { client }
+    }
+}
+
+impl Default for HttpJwkSource {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait]
+impl JwkSource for HttpJwkSource {
+    async fn fetch(&self, iss: &str) -> Result<Vec<(String, Jwk)>, String> {
+        let url = provider_jwks_url(iss).ok_or_else(|| format!("unsupported issuer {iss}"))?;
+        let response = self
+            .client
+            .get(url)
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
+        if !response.status().is_success() {
+            return Err(format!("JWKS HTTP {}", response.status()));
+        }
+        let json: serde_json::Value = response.json().await.map_err(|e| e.to_string())?;
+        Ok(parse_jwks(&json))
+    }
+}
+
+fn provider_jwks_url(iss: &str) -> Option<&'static str> {
+    JWK_PROVIDERS.iter().find_map(|(issuer, url)| {
+        let bare = issuer.trim_start_matches("https://");
+        (iss == *issuer || iss == bare).then_some(*url)
+    })
+}
+
+/// RSA keys from a JWKS document, as `(kid, key)`.
+fn parse_jwks(json: &serde_json::Value) -> Vec<(String, Jwk)> {
+    let Some(keys) = json.get("keys").and_then(|k| k.as_array()) else {
+        return Vec::new();
+    };
+    keys.iter()
+        .filter_map(|key| {
+            let field = |name: &str| key.get(name).and_then(|v| v.as_str()).map(str::to_string);
+            if field("kty")? != "RSA" {
+                return None;
+            }
+            Some((
+                field("kid")?,
+                Jwk {
+                    kty: "RSA".to_string(),
+                    e: field("e")?,
+                    n: field("n")?,
+                    alg: field("alg").unwrap_or_else(|| "RS256".to_string()),
+                },
+            ))
+        })
+        .collect()
+}
+
+/// Verifies zkLogin proofs in-process with MySo's Groth16 key (the one validators and the MySo
+/// prover use), the issuer's published JWKs, and the fullnode's current epoch. No remote verifier.
+pub struct LocalZkLoginCheck {
+    verifier: RwLock<ZkloginVerifier>,
+    jwks: Arc<dyn JwkSource>,
+    epochs: Arc<dyn EpochSource>,
+    last_fetch: Mutex<HashMap<String, Instant>>,
+    epoch: Mutex<Option<(u64, Instant)>>,
+}
+
+impl LocalZkLoginCheck {
+    pub fn new(jwks: Arc<dyn JwkSource>, epochs: Arc<dyn EpochSource>) -> Self {
         Self {
-            url: url.into(),
-            client,
+            verifier: RwLock::new(ZkloginVerifier::new_myso()),
+            jwks,
+            epochs,
+            last_fetch: Mutex::new(HashMap::new()),
+            epoch: Mutex::new(None),
+        }
+    }
+
+    async fn current_epoch(&self) -> Result<u64, AuthError> {
+        if let Some((epoch, at)) = *self.epoch.lock().unwrap_or_else(|e| e.into_inner()) {
+            if at.elapsed() < EPOCH_TTL {
+                return Ok(epoch);
+            }
+        }
+        let epoch = self
+            .epochs
+            .current_epoch()
+            .await
+            .map_err(|e| unavailable(&format!("current epoch: {e}")))?;
+        *self.epoch.lock().unwrap_or_else(|e| e.into_inner()) = Some((epoch, Instant::now()));
+        Ok(epoch)
+    }
+
+    fn has_jwk(&self, id: &JwkId) -> bool {
+        self.verifier
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .jwks()
+            .contains_key(id)
+    }
+
+    /// Loads `id`'s key if the cache lacks it, fetching its issuer at most once a minute.
+    async fn ensure_jwk(&self, id: &JwkId) -> Result<(), AuthError> {
+        if self.has_jwk(id) {
+            return Ok(());
+        }
+        if provider_jwks_url(&id.iss).is_none() {
+            return Err(AuthError::SignatureVerificationFailed(format!(
+                "zkLogin issuer not supported: {}",
+                id.iss
+            )));
+        }
+        let may_fetch = {
+            let mut last = self.last_fetch.lock().unwrap_or_else(|e| e.into_inner());
+            let due = last
+                .get(&id.iss)
+                .is_none_or(|at| at.elapsed() >= JWK_REFETCH_INTERVAL);
+            if due {
+                last.insert(id.iss.clone(), Instant::now());
+            }
+            due
+        };
+        if may_fetch {
+            let keys = self
+                .jwks
+                .fetch(&id.iss)
+                .await
+                .map_err(|e| unavailable(&format!("JWKS for {}: {e}", id.iss)))?;
+            let mut verifier = self.verifier.write().unwrap_or_else(|e| e.into_inner());
+            for (kid, jwk) in keys {
+                verifier.jwks_mut().insert(
+                    JwkId {
+                        iss: id.iss.clone(),
+                        kid,
+                    },
+                    jwk,
+                );
+            }
+        }
+        if self.has_jwk(id) {
+            Ok(())
+        } else {
+            Err(AuthError::SignatureVerificationFailed(format!(
+                "zkLogin key {} is not published by {}",
+                id.kid, id.iss
+            )))
         }
     }
 }
 
-const VERIFY_QUERY: &str = "query VerifyZkLogin($bytes: Base64!, $signature: Base64!, $author: MySoAddress!) {
-  verifyZkLoginSignature(bytes: $bytes, signature: $signature, intentScope: PERSONAL_MESSAGE, author: $author) {
-    success
-    error
-  }
-}";
-
 #[async_trait]
-impl ZkLoginProofCheck for GraphQlZkLoginCheck {
+impl ZkLoginProofCheck for LocalZkLoginCheck {
     async fn verify(
         &self,
         message: &[u8],
         signature: &[u8],
-        author: &str,
+        _author: &str,
     ) -> Result<(), AuthError> {
-        let b64 = base64::engine::general_purpose::STANDARD;
-        let body = serde_json::json!({
-            "query": VERIFY_QUERY,
-            "variables": {
-                "bytes": b64.encode(message),
-                "signature": b64.encode(signature),
-                "author": author,
-            },
-        });
+        let parsed = UserSignature::from_bytes(signature).map_err(|e| {
+            AuthError::InvalidSignatureFormat(format!("Failed to parse zkLogin signature: {e}"))
+        })?;
+        let UserSignature::ZkLogin(zklogin) = &parsed else {
+            return Err(AuthError::InvalidSignatureFormat(
+                "Expected a zkLogin signature".to_string(),
+            ));
+        };
 
-        let response = self
-            .client
-            .post(&self.url)
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| unavailable(&e.to_string()))?;
-        if !response.status().is_success() {
-            return Err(unavailable(&format!("HTTP {}", response.status())));
-        }
-        let json: serde_json::Value = response
-            .json()
-            .await
-            .map_err(|e| unavailable(&e.to_string()))?;
+        check_epoch_window(zklogin.max_epoch, self.current_epoch().await?)?;
 
-        if let Some(errors) = json.get("errors").and_then(|e| e.as_array()) {
-            if !errors.is_empty() {
-                return Err(unavailable(
-                    &serde_json::Value::Array(errors.clone()).to_string(),
-                ));
-            }
-        }
-        let result = &json["data"]["verifyZkLoginSignature"];
-        if result["success"].as_bool() == Some(true) {
-            return Ok(());
-        }
-        let reason = result["error"].as_str().unwrap_or("rejected by chain");
-        Err(AuthError::SignatureVerificationFailed(format!(
-            "zkLogin proof rejected: {reason}"
-        )))
+        self.ensure_jwk(zklogin.inputs.jwk_id()).await?;
+
+        let verifier = self.verifier.read().unwrap_or_else(|e| e.into_inner());
+        verifier
+            .verify_personal_message(&PersonalMessage(Cow::Borrowed(message)), &parsed)
+            .map_err(|e| {
+                AuthError::SignatureVerificationFailed(format!("zkLogin proof rejected: {e}"))
+            })
     }
+}
+
+/// Validators' epoch rule: the proof is live through `max_epoch`, which may be at most
+/// `MAX_EPOCH_UPPER_BOUND_DELTA` epochs ahead.
+fn check_epoch_window(max_epoch: u64, current: u64) -> Result<(), AuthError> {
+    if current > max_epoch {
+        return Err(AuthError::SignatureVerificationFailed(format!(
+            "zkLogin proof expired: max epoch {max_epoch} is before current epoch {current}"
+        )));
+    }
+    if max_epoch - current > MAX_EPOCH_UPPER_BOUND_DELTA {
+        return Err(AuthError::SignatureVerificationFailed(format!(
+            "zkLogin max epoch {max_epoch} is too far past current epoch {current}"
+        )));
+    }
+    Ok(())
 }
 
 fn unavailable(detail: &str) -> AuthError {
@@ -142,16 +340,20 @@ pub struct ZkLoginVerifier {
 }
 
 impl ZkLoginVerifier {
-    /// Enabled when `MYSO_GRAPHQL_URL` is set; otherwise every zkLogin request is rejected.
+    /// Enabled when `MYSO_RPC_URL` (the fullnode gRPC, for the current epoch) is set;
+    /// otherwise every zkLogin request is rejected.
     pub fn from_env() -> Self {
-        match std::env::var("MYSO_GRAPHQL_URL")
+        match std::env::var("MYSO_RPC_URL")
             .ok()
             .map(|v| v.trim().to_string())
             .filter(|v| !v.is_empty())
         {
-            Some(url) => Self::with_check(Arc::new(GraphQlZkLoginCheck::new(url))),
+            Some(url) => Self::with_check(Arc::new(LocalZkLoginCheck::new(
+                Arc::new(HttpJwkSource::new()),
+                Arc::new(GrpcEpochSource::new(url)),
+            ))),
             None => {
-                tracing::info!("MYSO_GRAPHQL_URL not set: zkLogin request auth disabled");
+                tracing::info!("MYSO_RPC_URL not set: zkLogin request auth disabled");
                 Self::disabled()
             }
         }
@@ -296,7 +498,7 @@ fn authorization_key(
     Ok(hasher.finalize().into())
 }
 
-/// Process-wide verifier, configured from `MYSO_GRAPHQL_URL` on first use.
+/// Process-wide verifier, configured from `MYSO_RPC_URL` on first use.
 pub fn shared() -> &'static ZkLoginVerifier {
     static VERIFIER: std::sync::OnceLock<ZkLoginVerifier> = std::sync::OnceLock::new();
     VERIFIER.get_or_init(ZkLoginVerifier::from_env)
@@ -310,6 +512,7 @@ pub fn is_zklogin_public_key(public_key_with_flag: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::Engine;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     /// Counts remote checks; succeeds unless told to fail.
@@ -525,6 +728,140 @@ mod tests {
         assert_eq!(stub.calls.load(Ordering::SeqCst), 2);
     }
 
+    // MARK: - Local proof check
+
+    /// A request the deployed relayer rejected: zkLogin `0x6b27…` (Google), signed by iOS.
+    const REAL_ADDRESS: &str =
+        "0x6b27c51107b378c9a1c6f1b471e43407d3027e8485464b0f7e9be8d196cbd8e0";
+    const REAL_SIGNATURE_HEX: &str = "05034d32303830353033363235363531323036333136353735323430353532363235343930373036333234393831303536333033313534333536323638393233333734333831323635303230333232334d3135313236343938323235363532303636333332333033383234383539333034343939383136363334353535373734333038373336333930383538353636333938363138303537353438303734013103024c353830323537363737323938393637393639343036303036333133373331333038333732353439313134333735333132303230343135383939393130393539323834383439383138343336364d3130373138393235373339393233393932333132363432333236343534343133353735313233353636393337363234353230373432303334373434313830373433303734303531323139373830024d31383933363831363230383236303639333939343832313037363935323132333431323836343030333235333033313036343031323439373632373830393133333237383338383533363132344d32303032373530373332353636303432383031393535363139383232363234353136303930363533363630383436323532393337363538303136323938363230363839333834363735373434380201310130034c353332323233373230393539323539303434303835323736363438343433383635363730393735303037323639393332343733353931333338373136383032313833393839313239393337394d3133373731303134323639383136383033323632383337323834343335393839333938383135323935363730353136373931323030343236383139313739303337333838353731323337393337013131794a7063334d694f694a6f64485277637a6f764c32466a59323931626e527a4c6d6476623264735a53356a623230694c43016665794a68624763694f694a53557a49314e694973496d74705a434936496a6b304d32457a5954566b4e3251354d546b324d6a56684e4455305a5451344f5749334e574d794f57466b595749314e32466a596d45694c434a30655841694f694a4b5631516966514d31323033353135353835393434303739383133383638303433343034313432323530303535303130373631323930323439303033333339363035313031323939323931333030323931343937381300000000000000610026cf5058cbeb1c2a43a8e816402f30513c1ee9c6f6de92f709585ff9404c852c8b06b47fdfb92d2eda5c4cf96a8dfa04e364dcadc3bacdb0a6528ffe50e3e20391de655797f267e1973e23fc2ddd3cae716db16a27265faea7bab384224772d3";
+    const GOOGLE_KID: &str = "943a3a5d7d919625a454e489b75c29adab57acba";
+    const GOOGLE_N: &str = "pIpnzA2ezyEERJSxiqpLBmMeIqATH-V6iuBtKIibXEyYovujrx8niqTeO6RIyXT6uDUUv0V2kJ8V_iWYFxzXY1BqK9IfcAmjg0XUDoyTVkoyLsF0gj299LH-zw5vCvy8jmamFIZKAbKcQ5hpHvSittM1vl-6vVL-i2GxyGbMA9aY6Hq15NylS1t7ELTYfQimlnvxcb7_DM0cuS5U1SfbCZMCpKhh0nrSlYds240oxpCJOV2rBahs_Ea5c7tezS1nwVC9W_E-bR9TF6BHkC_fv-E8DcWfkI_6geaJzBhINNxBfjx-w1-WUp2Jz3YYFWEfeQjxMqu-Fg6cGxwk7V16uQ";
+
+    fn real_message() -> Vec<u8> {
+        format!("1793688229:{REAL_ADDRESS}").into_bytes()
+    }
+
+    fn real_signature() -> (Vec<u8>, u64) {
+        let bytes = hex::decode(REAL_SIGNATURE_HEX).unwrap();
+        let UserSignature::ZkLogin(zk) = UserSignature::from_bytes(&bytes).unwrap() else {
+            panic!("not zkLogin")
+        };
+        (bytes, zk.max_epoch)
+    }
+
+    struct FixedEpoch(u64);
+
+    #[async_trait]
+    impl EpochSource for FixedEpoch {
+        async fn current_epoch(&self) -> Result<u64, String> {
+            Ok(self.0)
+        }
+    }
+
+    struct StubJwks {
+        keys: Vec<(String, Jwk)>,
+        calls: AtomicUsize,
+    }
+
+    #[async_trait]
+    impl JwkSource for StubJwks {
+        async fn fetch(&self, _iss: &str) -> Result<Vec<(String, Jwk)>, String> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok(self.keys.clone())
+        }
+    }
+
+    fn google_jwks() -> Arc<StubJwks> {
+        Arc::new(StubJwks {
+            keys: vec![(
+                GOOGLE_KID.to_string(),
+                Jwk {
+                    kty: "RSA".into(),
+                    e: "AQAB".into(),
+                    n: GOOGLE_N.into(),
+                    alg: "RS256".into(),
+                },
+            )],
+            calls: AtomicUsize::new(0),
+        })
+    }
+
+    #[tokio::test]
+    async fn real_myso_proof_verifies_locally() {
+        let (sig, max_epoch) = real_signature();
+        let jwks = google_jwks();
+        let check = LocalZkLoginCheck::new(jwks.clone(), Arc::new(FixedEpoch(max_epoch)));
+        check.verify(&real_message(), &sig, REAL_ADDRESS).await.unwrap();
+        // The key is cached; a second request doesn't refetch.
+        check.verify(&real_message(), &sig, REAL_ADDRESS).await.unwrap();
+        assert_eq!(jwks.calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn real_request_passes_the_full_verifier() {
+        let (sig, max_epoch) = real_signature();
+        let check = LocalZkLoginCheck::new(google_jwks(), Arc::new(FixedEpoch(max_epoch)));
+        let verifier = ZkLoginVerifier::with_check(Arc::new(check));
+        let sender = verifier.verify(&real_message(), &sig, REAL_ADDRESS).await.unwrap();
+        assert_eq!(sender.scheme, SignatureScheme::Ed25519);
+    }
+
+    #[tokio::test]
+    async fn tampered_message_is_rejected() {
+        let (sig, max_epoch) = real_signature();
+        let check = LocalZkLoginCheck::new(google_jwks(), Arc::new(FixedEpoch(max_epoch)));
+        let err = check.verify(b"1793688230:other", &sig, REAL_ADDRESS).await.unwrap_err();
+        assert!(matches!(err, AuthError::SignatureVerificationFailed(_)));
+    }
+
+    #[tokio::test]
+    async fn expired_proof_is_rejected() {
+        let (sig, max_epoch) = real_signature();
+        let check = LocalZkLoginCheck::new(google_jwks(), Arc::new(FixedEpoch(max_epoch + 1)));
+        let err = check.verify(&real_message(), &sig, REAL_ADDRESS).await.unwrap_err();
+        assert!(format!("{err:?}").contains("expired"));
+    }
+
+    #[test]
+    fn epoch_window_matches_validators() {
+        assert!(check_epoch_window(10, 10).is_ok());
+        assert!(check_epoch_window(10 + MAX_EPOCH_UPPER_BOUND_DELTA, 10).is_ok());
+        assert!(check_epoch_window(11 + MAX_EPOCH_UPPER_BOUND_DELTA, 10).is_err());
+        assert!(check_epoch_window(9, 10).is_err());
+    }
+
+    #[tokio::test]
+    async fn unpublished_key_is_rejected_and_refetch_is_rate_limited() {
+        let (sig, max_epoch) = real_signature();
+        let jwks = Arc::new(StubJwks {
+            keys: vec![],
+            calls: AtomicUsize::new(0),
+        });
+        let check = LocalZkLoginCheck::new(jwks.clone(), Arc::new(FixedEpoch(max_epoch)));
+        assert!(check.verify(&real_message(), &sig, REAL_ADDRESS).await.is_err());
+        assert!(check.verify(&real_message(), &sig, REAL_ADDRESS).await.is_err());
+        assert_eq!(jwks.calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn only_allow_listed_issuers_have_jwks() {
+        assert!(provider_jwks_url("https://accounts.google.com").is_some());
+        assert!(provider_jwks_url("accounts.google.com").is_some());
+        assert!(provider_jwks_url("https://appleid.apple.com").is_some());
+        assert!(provider_jwks_url("https://evil.example").is_none());
+    }
+
+    #[test]
+    fn jwks_parsing_keeps_rsa_keys() {
+        let json = serde_json::json!({"keys": [
+            {"kid": "a", "kty": "RSA", "e": "AQAB", "n": "xyz", "alg": "RS256"},
+            {"kid": "b", "kty": "EC", "crv": "P-256"},
+        ]});
+        let keys = parse_jwks(&json);
+        assert_eq!(keys.len(), 1);
+        assert_eq!(keys[0].0, "a");
+    }
+
     #[test]
     fn zklogin_flag_detection() {
         assert!(is_zklogin_public_key(&[0x05]));
@@ -532,3 +869,4 @@ mod tests {
         assert!(!is_zklogin_public_key(&[]));
     }
 }
+

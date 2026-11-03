@@ -713,8 +713,8 @@ All configuration is loaded from environment variables. The relayer also support
 | `STORAGE_TYPE` | `memory` | No | Storage backend: `memory` or `postgres` |
 | `DATABASE_URL` | — | When `STORAGE_TYPE=postgres` or `MEMBERSHIP_STORE_TYPE=postgres` | PostgreSQL connection string |
 | `MEMBERSHIP_STORE_TYPE` | `memory` | No | Membership cache: `memory` or `postgres` (recommended with `DATABASE_URL` in production) |
-| `MYSO_RPC_URL` | — | **Yes** | MySo fullnode gRPC URL for checkpoint subscription (e.g., `https://fullnode.testnet.mysocial.network:443`) |
-| `MYSO_GRAPHQL_URL` | — | For zkLogin senders | GraphQL endpoint (e.g., `https://graphql.testnet.mysocial.network/graphql`). Enables zkLogin request auth: a `public_key` of `05` with a serialized zkLogin signature is checked with `verifyZkLoginSignature`, and a verified proof authorizes its ephemeral key for 10 minutes. Unset: zkLogin requests are rejected. |
+| `MYSO_RPC_URL` | — | **Yes** | MySo fullnode gRPC URL for checkpoint subscription (e.g., `https://fullnode.testnet.mysocial.network:443`). Also gives zkLogin request auth its current epoch: a `public_key` of `05` with a serialized zkLogin signature is verified in-process with MySo's Groth16 key and Google/Apple JWKs, and a verified proof authorizes its ephemeral key for 10 minutes. |
+| `MYSO_GRAPHQL_URL` | — | No | GraphQL endpoint (e.g., `https://graphql.testnet.mysocial.network/graphql`) for live messaging config. |
 | `GROUPS_PACKAGE_ID` | Genesis `0x2` (framework `permissioned_group`) | No | Override only for non-genesis dev chains |
 | `SOCIAL_SERVER_URL` | — | No | myso-social-server base URL for DM block checks |
 | `BLOCK_CHECK_ENABLED` | `true` when URL set | No | Kill switch for block checks |
