@@ -12,8 +12,9 @@ import {
  *
  * A zkLogin user's messaging key is the proof's ephemeral key, but groups list the zkLogin
  * account as the member. So relayer calls made with that key authenticate as the zkLogin
- * account (its proof wraps the ephemeral signature). Per-message signatures, MyData session
- * keys and transactions keep the ephemeral key. Any other signer (wallets, agents) is unchanged.
+ * account (its proof wraps the ephemeral signature). MyData session-key certificates use it too,
+ * so key servers check the zkLogin account's group membership. Per-message signatures and
+ * transactions keep the ephemeral key. Any other signer (wallets, agents) is unchanged.
  */
 export function relayerAuthSigner(signer: Signer): Signer {
   const zkAddress = zkLoginChainAddress();

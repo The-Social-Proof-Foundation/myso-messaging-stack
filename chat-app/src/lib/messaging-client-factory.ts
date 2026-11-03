@@ -161,8 +161,10 @@ export async function createFreshMessagingClient(
       serverConfigs: parseMyDataServerConfigs(),
     },
     encryption: {
+      // zkLogin: MyData certificates are signed as the zkLogin account (the address groups list
+      // as a reader), with its proof wrapping the ephemeral key's signature.
       sessionKey: {
-        signer,
+        signer: relayerAuthSigner(signer),
       },
       ...(mydataThreshold !== undefined && { mydataThreshold }),
     },
