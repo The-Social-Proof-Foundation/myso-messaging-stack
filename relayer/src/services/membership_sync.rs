@@ -31,16 +31,16 @@ use crate::models::workflow_item::{
 use crate::models::{Message, PaidEscrowRecord, SystemType};
 use crate::storage::{AgentGroupStore, StorageAdapter, StorageError, WorkflowStore};
 
-use super::begin_chat_notify::BeginChatNotify;
 use super::agent_group_detector::{
     agent_group_from_created_event, detect_agent_groups_in_transaction,
 };
+use super::begin_chat_notify::BeginChatNotify;
 use super::event_parser::{
     parse_agent_detection_event, parse_agent_group_created_event, parse_ai_credit_approval_event,
-    parse_follow_changed_event, parse_myso_event, parse_org_invitation_chain_event,
-    parse_org_memory_permission_chain_event,     parse_paid_message_sent_event, parse_paid_policy_updated_event,
-    parse_messaging_config_updated_event, AgentDetectionEvent, AiCreditApprovalEvent, GroupsEvent,
-    OrgInvitationChainEvent, OrgMemoryPermissionChainEvent,
+    parse_follow_changed_event, parse_messaging_config_updated_event, parse_myso_event,
+    parse_org_invitation_chain_event, parse_org_memory_permission_chain_event,
+    parse_paid_message_sent_event, parse_paid_policy_updated_event, AgentDetectionEvent,
+    AiCreditApprovalEvent, GroupsEvent, OrgInvitationChainEvent, OrgMemoryPermissionChainEvent,
 };
 use super::message_gate::MessageGateService;
 use super::messaging_config::{MessagingConfigCache, MessagingConfigSnapshot};
@@ -72,6 +72,15 @@ const STARTUP_BACKFILL_CHECKPOINTS: u64 = 2_000;
 /// Most missed checkpoints replayed after a gap. A gap beyond this skips ahead
 /// rather than replaying for hours, and says so loudly.
 const DEFAULT_BACKFILL_MAX_CHECKPOINTS: u64 = 500_000;
+
+/// Upper bound on one unary ledger read. Without it a single stalled
+/// `get_checkpoint` freezes membership sync forever (the idle watchdog lives
+/// in the same task), and every new group reads as "not a member".
+const LEDGER_CALL_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// Checkpoint fetches kept in flight during replay. Results are still applied
+/// strictly in order; this only overlaps the network round-trips.
+const REPLAY_CONCURRENCY: usize = 32;
 
 type Ledger = LedgerServiceClient<tonic::transport::Channel>;
 
@@ -155,8 +164,7 @@ impl MembershipSyncService {
             config.social_package_id,
             config.myso_rpc_url,
         );
-        let system_object_addrs =
-            system_object_addresses(config.messaging_namespace_id.as_deref());
+        let system_object_addrs = system_object_addresses(config.messaging_namespace_id.as_deref());
         if system_object_addrs.is_empty() {
             warn!(
                 "MESSAGING_NAMESPACE_ID unset/invalid — system actor membership events may emit join messages"
@@ -231,12 +239,7 @@ impl MembershipSyncService {
         };
         match self
             .workflow_store
-            .transition_by_idempotency(
-                &idempotency_key,
-                new_status,
-                actioned_by.as_deref(),
-                patch,
-            )
+            .transition_by_idempotency(&idempotency_key, new_status, actioned_by.as_deref(), patch)
             .await
         {
             Ok(Some(item)) => {
@@ -252,9 +255,7 @@ impl MembershipSyncService {
                 self.push_workflow_transition(&item).await;
             }
             Ok(None) => {}
-            Err(e) => warn!(
-                "Failed to transition workflow item {idempotency_key}: {e}"
-            ),
+            Err(e) => warn!("Failed to transition workflow item {idempotency_key}: {e}"),
         }
     }
 
@@ -299,9 +300,9 @@ impl MembershipSyncService {
                     );
                     self.push_workflow_transition(&item).await;
                 }
-                Err(e) => warn!(
-                    "Failed to ingest org invitation workflow item {idempotency_key}: {e}"
-                ),
+                Err(e) => {
+                    warn!("Failed to ingest org invitation workflow item {idempotency_key}: {e}")
+                }
             }
             return;
         }
@@ -321,12 +322,7 @@ impl MembershipSyncService {
         };
         match self
             .workflow_store
-            .transition_by_idempotency(
-                &idempotency_key,
-                new_status,
-                actioned_by.as_deref(),
-                patch,
-            )
+            .transition_by_idempotency(&idempotency_key, new_status, actioned_by.as_deref(), patch)
             .await
         {
             Ok(Some(item)) => {
@@ -341,9 +337,9 @@ impl MembershipSyncService {
                 self.push_workflow_transition(&item).await;
             }
             Ok(None) => {}
-            Err(e) => warn!(
-                "Failed to transition org invitation workflow item {idempotency_key}: {e}"
-            ),
+            Err(e) => {
+                warn!("Failed to transition org invitation workflow item {idempotency_key}: {e}")
+            }
         }
     }
 
@@ -353,10 +349,7 @@ impl MembershipSyncService {
     /// revokes) the requested permission bit. The producer's idempotency key is
     /// `memory_access:{org}:{member}:{mask}`, so we transition every open item
     /// that overlaps the chain event's mask.
-    async fn apply_org_memory_permission_chain_event(
-        &self,
-        event: OrgMemoryPermissionChainEvent,
-    ) {
+    async fn apply_org_memory_permission_chain_event(&self, event: OrgMemoryPermissionChainEvent) {
         if !self.workflow_enabled {
             return;
         }
@@ -400,9 +393,9 @@ impl MembershipSyncService {
                     self.push_workflow_transition(&item).await;
                 }
                 Ok(None) => {}
-                Err(e) => warn!(
-                    "Failed to transition memory_access_request item {idempotency_key}: {e}"
-                ),
+                Err(e) => {
+                    warn!("Failed to transition memory_access_request item {idempotency_key}: {e}")
+                }
             }
         }
     }
@@ -579,35 +572,60 @@ impl MembershipSyncService {
     }
 
     /// Replays `[start, end)`.
+    ///
+    /// Fetches run `REPLAY_CONCURRENCY` at a time but are applied in sequence
+    /// order, so the cursor only ever advances past checkpoints already applied.
     async fn replay_checkpoints(
         &mut self,
         ledger: &mut Ledger,
         start: u64,
         end: u64,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        for seq in start..end {
-            let mut req = GetCheckpointRequest::default();
-            req.checkpoint_id = Some(CheckpointId::SequenceNumber(seq));
-            req.read_mask = Some(FieldMask::from_str(CHECKPOINT_READ_MASK));
-            match ledger.get_checkpoint(req).await {
-                Ok(resp) => {
+        let client = ledger.clone();
+        let fetches =
+            futures_util::StreamExt::map(futures_util::stream::iter(start..end), move |seq| {
+                let mut client = client.clone();
+                async move {
+                    let mut req = GetCheckpointRequest::default();
+                    req.checkpoint_id = Some(CheckpointId::SequenceNumber(seq));
+                    req.read_mask = Some(FieldMask::from_str(CHECKPOINT_READ_MASK));
+                    let result =
+                        tokio::time::timeout(LEDGER_CALL_TIMEOUT, client.get_checkpoint(req)).await;
+                    (seq, result)
+                }
+            });
+        let mut fetches = std::pin::pin!(futures_util::StreamExt::buffered(
+            fetches,
+            REPLAY_CONCURRENCY
+        ));
+
+        while let Some((seq, result)) = fetches.next().await {
+            match result {
+                Ok(Ok(resp)) => {
                     if let Some(missed) = resp.into_inner().checkpoint {
                         self.process_checkpoint(&missed, seq).await;
                     }
                 }
                 // tonic::Code::NotFound == 5. The node pruned it; nothing to replay.
-                Err(status) if status.code() as i32 == 5 => {
+                Ok(Err(status)) if status.code() as i32 == 5 => {
                     debug!("checkpoint {seq} no longer available; skipping");
                 }
                 // Anything else: leave the cursor where it is and let the
                 // reconnect loop retry from the first unprocessed checkpoint.
-                Err(status) => {
+                Ok(Err(status)) => {
                     return Err(format!("replaying checkpoint {seq}: {status}").into());
+                }
+                Err(_) => {
+                    return Err(format!(
+                        "replaying checkpoint {seq}: timed out after {}s",
+                        LEDGER_CALL_TIMEOUT.as_secs()
+                    )
+                    .into());
                 }
             }
             self.last_cursor = Some(seq);
             self.membership_store.set_last_checkpoint_cursor(seq);
-            if start < end && (seq - start + 1) % 5_000 == 0 {
+            if (seq - start + 1) % 5_000 == 0 {
                 info!(
                     "Replayed {} / {} missed checkpoints",
                     seq - start + 1,
@@ -627,7 +645,16 @@ impl MembershipSyncService {
     > {
         let mut req = GetCheckpointRequest::default();
         req.read_mask = Some(FieldMask::from_str(CHECKPOINT_READ_MASK));
-        let checkpoint = ledger.get_checkpoint(req).await?.into_inner().checkpoint;
+        let checkpoint = tokio::time::timeout(LEDGER_CALL_TIMEOUT, ledger.get_checkpoint(req))
+            .await
+            .map_err(|_| {
+                format!(
+                    "fetching latest checkpoint: timed out after {}s",
+                    LEDGER_CALL_TIMEOUT.as_secs()
+                )
+            })??
+            .into_inner()
+            .checkpoint;
         let Some(checkpoint) = checkpoint else {
             return Ok(None);
         };
@@ -713,8 +740,7 @@ impl MembershipSyncService {
                 }
 
                 // Paid DM escrow index: authoritative payment state for the paid-DM gate.
-                if let Some(paid) =
-                    parse_paid_message_sent_event(event, &self.messaging_package_id)
+                if let Some(paid) = parse_paid_message_sent_event(event, &self.messaging_package_id)
                 {
                     info!(
                         "PaidMessageSent: group={} seq={} payer={} recipient={} amount={}",
@@ -744,8 +770,11 @@ impl MembershipSyncService {
                         "PaidMessagingPolicyUpdated: wallet={} enabled={} min_cost={:?}",
                         policy.wallet, policy.enabled, policy.min_cost
                     );
-                    self.message_gate
-                        .apply_policy_update(&policy.wallet, policy.enabled, policy.min_cost);
+                    self.message_gate.apply_policy_update(
+                        &policy.wallet,
+                        policy.enabled,
+                        policy.min_cost,
+                    );
                 }
 
                 if let Some(config_event) =
@@ -785,13 +814,15 @@ impl MembershipSyncService {
                 if let Some(invitation_event) =
                     parse_org_invitation_chain_event(event, &self.social_package_id)
                 {
-                    self.apply_org_invitation_chain_event(invitation_event).await;
+                    self.apply_org_invitation_chain_event(invitation_event)
+                        .await;
                 }
 
                 if let Some(perm_event) =
                     parse_org_memory_permission_chain_event(event, &self.social_package_id)
                 {
-                    self.apply_org_memory_permission_chain_event(perm_event).await;
+                    self.apply_org_memory_permission_chain_event(perm_event)
+                        .await;
                 }
             }
 
@@ -814,8 +845,7 @@ impl MembershipSyncService {
                 .await;
             }
 
-            let indexed_group_ids: HashSet<_> =
-                agent_group_created_map.keys().cloned().collect();
+            let indexed_group_ids: HashSet<_> = agent_group_created_map.keys().cloned().collect();
             let agent_groups = detect_agent_groups_in_transaction(
                 &group_created,
                 &permissions_granted,
@@ -963,9 +993,9 @@ impl MembershipSyncService {
                     member, group_id, permissions
                 );
                 let had_messaging = self.membership_store.is_member(group_id, member);
-                if let Err(e) = self
-                    .membership_store
-                    .grant_permissions(group_id, member, permissions.clone())
+                if let Err(e) =
+                    self.membership_store
+                        .grant_permissions(group_id, member, permissions.clone())
                 {
                     warn!("Failed to grant permissions: {}", e);
                     return;
@@ -1067,9 +1097,7 @@ impl MembershipSyncService {
             Ok(created) => {
                 info!(
                     "System message {:?} order={:?} group={}",
-                    system_type,
-                    created.order,
-                    group_id
+                    system_type, created.order, group_id
                 );
                 if self.inline_realtime_publish {
                     let wire: MessageResponse = created.clone().into();
@@ -1099,7 +1127,9 @@ mod backfill_tests {
         assert!(CHECKPOINT_READ_MASK.contains("transactions.events.events.contents"));
         assert!(CHECKPOINT_READ_MASK.contains("transactions.digest"));
         assert!(CHECKPOINT_READ_MASK.contains("transactions.transaction.sender"));
-        assert!(!CHECKPOINT_READ_MASK.split(',').any(|path| path == "transactions.events"));
+        assert!(!CHECKPOINT_READ_MASK
+            .split(',')
+            .any(|path| path == "transactions.events"));
     }
 
     #[test]
@@ -1129,7 +1159,10 @@ mod backfill_tests {
     #[test]
     fn the_backfill_limit_parses_and_falls_back() {
         assert_eq!(backfill_limit(None), DEFAULT_BACKFILL_MAX_CHECKPOINTS);
-        assert_eq!(backfill_limit(Some("garbage")), DEFAULT_BACKFILL_MAX_CHECKPOINTS);
+        assert_eq!(
+            backfill_limit(Some("garbage")),
+            DEFAULT_BACKFILL_MAX_CHECKPOINTS
+        );
         assert_eq!(backfill_limit(Some(" 250 ")), 250);
         assert_eq!(backfill_limit(Some("0")), 0);
     }
