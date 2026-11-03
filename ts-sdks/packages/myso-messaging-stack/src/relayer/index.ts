@@ -81,6 +81,13 @@ export {
 	type WireMessageResponse,
 } from './wire.js';
 export { createHeaderAuth, createWsAuthQuery } from './auth-headers.js';
+export { ZKLOGIN_PUBLIC_KEY_HEX } from './auth-headers.js';
+export {
+	withRelayerAuthSigner,
+	zkLoginRelayerSigner,
+	type RelayerAuthSigner,
+	type ZkLoginRelayerIdentity,
+} from './relayer-auth-signer.js';
 export { WorkflowClient, type WorkflowClientConfig } from './workflow.js';
 export {
 	tickStatus,

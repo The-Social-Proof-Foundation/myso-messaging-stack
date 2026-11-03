@@ -51,6 +51,7 @@ import {
 } from '../lib/recipient-picker';
 import { PaymentConfirmDialog } from './PaymentConfirmDialog';
 import { RecipientPickerRows } from './RecipientPickerRows';
+import { zkLoginChainAddress } from '../lib/zklogin-signin';
 
 interface CreateGroupModalProps {
   open: boolean;
@@ -339,11 +340,19 @@ export function CreateGroupModal({
           await client.messaging.view.memoryAccountIdForOwner({ owner: sender });
       }
 
+      // The relayer authenticates a zkLogin user as the zkLogin account, so that account is a
+      // member alongside the messaging key that creates the group.
+      const zkMember = zkLoginChainAddress()?.toLowerCase();
+      const chainMembers =
+        zkMember && zkMember !== sender.toLowerCase() && !initialMembers.includes(zkMember)
+          ? [...initialMembers, zkMember]
+          : initialMembers;
+
       const tx = client.messaging.tx.createAndShareGroup({
         uuid,
         name: groupName,
         sender,
-        initialMembers,
+        initialMembers: chainMembers,
       });
 
       await logCreateGroupTxInputs(
@@ -371,7 +380,7 @@ export function CreateGroupModal({
         client,
         signer,
         groupId,
-        peers: initialMembers.filter(
+        peers: chainMembers.filter(
           (addr) => addr.toLowerCase() !== sender.toLowerCase(),
         ),
       });

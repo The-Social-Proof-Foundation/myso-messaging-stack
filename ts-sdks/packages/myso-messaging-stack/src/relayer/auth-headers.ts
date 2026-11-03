@@ -3,7 +3,10 @@
 
 import type { Signer } from '@socialproof/myso/cryptography';
 import { parseSerializedSignature } from '@socialproof/myso/cryptography';
-import { toHex } from '@socialproof/myso/utils';
+import { fromBase64, toHex } from '@socialproof/myso/utils';
+
+/** `public_key` the relayer reads as "the signature is a full zkLogin signature". */
+export const ZKLOGIN_PUBLIC_KEY_HEX = '05';
 
 function extractRawSignature(serializedSignature: string): Uint8Array {
 	const parsed = parseSerializedSignature(serializedSignature);
@@ -24,6 +27,14 @@ export async function signAndCreateAuthHeaders(
 	messageBytes: Uint8Array,
 ): Promise<Record<string, string>> {
 	const { signature } = await signer.signPersonalMessage(messageBytes);
+	// zkLogin: the relayer verifies the whole signature (proof + ephemeral signature) and
+	// authenticates the zkLogin address, so send it intact with the `05` marker.
+	if (parseSerializedSignature(signature).signatureScheme === 'ZkLogin') {
+		return {
+			'x-signature': toHex(fromBase64(signature)),
+			'x-public-key': ZKLOGIN_PUBLIC_KEY_HEX,
+		};
+	}
 	const rawSig = extractRawSignature(signature);
 	return {
 		'x-signature': toHex(rawSig),

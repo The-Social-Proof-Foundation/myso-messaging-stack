@@ -2,6 +2,7 @@
 // Copyright (c) The Social Proof Foundation, LLC.
 // SPDX-License-Identifier: Apache-2.0
 
+import type { RelayerAuthSigner } from './relayer-auth-signer.js';
 import type { Signer } from '@socialproof/myso/cryptography';
 
 import type { Attachment } from '../attachments/types.js';
@@ -696,9 +697,23 @@ export interface RelayerHTTPConfig extends HttpClientConfig {
 	 */
 	apiPrefix?: string;
 	transport?: never;
+	/** See {@link RelayerAuthOptions.authSigner}. */
+	authSigner?: RelayerAuthSigner;
 }
 
 interface RelayerCustomTransportConfig {
 	transport: RelayerTransport;
 	relayerUrl?: never;
+	/** See {@link RelayerAuthOptions.authSigner}. */
+	authSigner?: RelayerAuthSigner;
+}
+
+export interface RelayerAuthOptions {
+	/**
+	 * Maps a call's signer to the one that authenticates it to the relayer, e.g. a zkLogin
+	 * account via `zkLoginRelayerSigner`. The relayer then sees that signer's address as the
+	 * sender (requests, message AAD, transfer idempotency keys). Per-message signatures,
+	 * MyData session keys and transactions keep the original signer.
+	 */
+	authSigner?: RelayerAuthSigner;
 }

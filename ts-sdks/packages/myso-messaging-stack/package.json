@@ -1,6 +1,6 @@
 {
 	"name": "@socialproof/myso-messaging-stack",
-	"version": "0.3.0",
+	"version": "0.3.1",
 	"private": false,
 	"description": "Permissioned Messaging Groups",
 	"license": "Apache-2.0",

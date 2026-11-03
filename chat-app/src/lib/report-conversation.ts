@@ -2,7 +2,9 @@ import {
   parseSerializedSignature,
   type Signer,
 } from '@socialproof/myso/cryptography';
-import { toHex } from '@socialproof/myso/utils';
+import { fromBase64, toHex } from '@socialproof/myso/utils';
+import { ZKLOGIN_PUBLIC_KEY_HEX } from '@socialproof/myso-messaging-stack';
+import { relayerAuthSigner } from './relayer-identity';
 
 /**
  * Metadata-only conversation report.
@@ -83,9 +85,11 @@ function relayerBase(): string {
  * Matches relayer `createBodyAuth`: payload, then sender_address, then timestamp.
  */
 async function signedReportBody(
-  signer: Signer,
+  callerSigner: Signer,
   payload: Record<string, unknown>,
 ): Promise<{ bodyStr: string; headers: Record<string, string> }> {
+  // zkLogin: report as the zkLogin account the relayer knows as the group member.
+  const signer = relayerAuthSigner(callerSigner);
   const body: Record<string, unknown> = {
     ...payload,
     sender_address: signer.toMySoAddress().toLowerCase(),
@@ -96,6 +100,15 @@ async function signedReportBody(
     new TextEncoder().encode(bodyStr),
   );
   const parsed = parseSerializedSignature(signature);
+  if (parsed.signatureScheme === 'ZkLogin') {
+    return {
+      bodyStr,
+      headers: {
+        'x-signature': toHex(fromBase64(signature)),
+        'x-public-key': ZKLOGIN_PUBLIC_KEY_HEX,
+      },
+    };
+  }
   if (!parsed.signature) {
     throw new Error('Unsupported signature scheme for report auth.');
   }

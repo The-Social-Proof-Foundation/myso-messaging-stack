@@ -29,6 +29,7 @@ import type { EncryptOptions, DecryptOptions } from './encryption/envelope-encry
 import { HTTPRelayerTransport } from './relayer/http-transport.js';
 import { HybridRelayerTransport } from './relayer/hybrid-transport.js';
 import type { RelayerTransport } from './relayer/transport.js';
+import { withRelayerAuthSigner, type RelayerAuthSigner } from './relayer/relayer-auth-signer.js';
 import type {
 	DmGateResult,
 	ConversationPrefs,
@@ -201,6 +202,7 @@ export class MySoMessagingStackClient<TApproveContext = void> {
 	#groupsClient: MySoGroupsClient;
 	#blockGating: BlockGatingClient | undefined;
 	#sync: MessagingSyncManager;
+	#relayerAuthSigner: RelayerAuthSigner | undefined;
 	#attachments: AttachmentsManager<TApproveContext> | undefined;
 	#recovery: RecoveryTransport | undefined;
 	readonly #textEncoder = new TextEncoder();
@@ -287,9 +289,13 @@ export class MySoMessagingStackClient<TApproveContext = void> {
 			? new AttachmentsManager(this.encryption, options.attachments)
 			: undefined;
 
-		this.transport = options.relayer.transport
+		const transport = options.relayer.transport
 			? options.relayer.transport
 			: buildDefaultRelayerTransport(options.relayer);
+		this.#relayerAuthSigner = options.relayer.authSigner;
+		this.transport = this.#relayerAuthSigner
+			? withRelayerAuthSigner(transport, this.#relayerAuthSigner)
+			: transport;
 
 		this.#sync = new MessagingSyncManager(this.transport);
 
@@ -297,6 +303,11 @@ export class MySoMessagingStackClient<TApproveContext = void> {
 	}
 
 	// === Private Helpers ===
+
+	/** Address the relayer authenticates `signer` as (after `relayer.authSigner`). */
+	#relayerAddress(signer: Signer): string {
+		return (this.#relayerAuthSigner ? this.#relayerAuthSigner(signer) : signer).toMySoAddress();
+	}
 
 	/**
 	 * Executes a transaction with the given signer and waits for confirmation.
@@ -341,7 +352,7 @@ export class MySoMessagingStackClient<TApproveContext = void> {
 
 		const { groupId, encryptionHistoryId } = this.derive.resolveGroupRef(options.groupRef);
 		const approveContext = this.#approveContextSpread(options);
-		const senderAddress = options.signer.toMySoAddress();
+		const senderAddress = this.#relayerAddress(options.signer);
 
 		await this.#assertDmNotBlocked(
 			groupId,
@@ -459,7 +470,7 @@ export class MySoMessagingStackClient<TApproveContext = void> {
 	async sendTokenTransfer(
 		options: SendTokenTransferOptions<TApproveContext>,
 	): Promise<{ messageId: string }> {
-		const senderAddress = options.signer.toMySoAddress();
+		const senderAddress = this.#relayerAddress(options.signer);
 		const digest = options.digest.trim();
 		return this.sendMessage({
 			signer: options.signer,
@@ -574,9 +585,9 @@ export class MySoMessagingStackClient<TApproveContext = void> {
 	): Promise<RoomHistoryPage> {
 		const limit = validateRoomHistoryRequest(options);
 		const groupIds = this.derive.resolveGroupRef(options.groupRef);
-		const member = options.signer.toMySoAddress();
+		const member = this.#relayerAddress(options.signer);
 		const assertReader = async () => {
-			if (options.signer.toMySoAddress() !== member) {
+			if (this.#relayerAddress(options.signer) !== member) {
 				this.encryption.clearCache(groupIds.groupId);
 				throw new MySoMessagingStackClientError('Room signer changed during the request');
 			}
@@ -664,7 +675,7 @@ export class MySoMessagingStackClient<TApproveContext = void> {
 	async editMessage(options: EditMessageOptions<TApproveContext>): Promise<void> {
 		const { groupId, encryptionHistoryId } = this.derive.resolveGroupRef(options.groupRef);
 		const approveContext = this.#approveContextSpread(options);
-		const senderAddress = options.signer.toMySoAddress();
+		const senderAddress = this.#relayerAddress(options.signer);
 
 		// Resolve existing kind for the signed canonical string.
 		const existing = await this.transport.fetchMessage({

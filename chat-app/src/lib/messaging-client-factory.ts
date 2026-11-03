@@ -5,6 +5,7 @@ import {
   RelayerArchiveRecoveryTransport,
 } from '@socialproof/myso-messaging-stack';
 import type { Signer } from '@socialproof/myso/cryptography';
+import { relayerAuthSigner } from './relayer-identity';
 import {
   JsonRpcHTTPTransport,
   MySoJsonRpcClient,
@@ -149,7 +150,7 @@ export async function createFreshMessagingClient(
     ? new RelayerArchiveRecoveryTransport({
         relayerUrl: RELAYER_URL,
         namespace: ARCHIVE_NAMESPACE,
-        signer,
+        signer: relayerAuthSigner(signer),
         apiPrefix: '/v1',
         fetch: browserFetch,
       })
@@ -169,6 +170,8 @@ export async function createFreshMessagingClient(
       relayerUrl: RELAYER_URL,
       apiPrefix: '/v1',
       fetch: (...args: Parameters<typeof fetch>) => fetch(...args),
+      // zkLogin: the relayer sees the zkLogin account, the address groups list as the member.
+      authSigner: relayerAuthSigner,
     },
     ...(SOCIAL_SERVER_URL
       ? {
