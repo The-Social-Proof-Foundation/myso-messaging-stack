@@ -55,7 +55,13 @@ use crate::models::workflow_item::WorkflowItem;
 /// `parse_myso_event` drops an event that has no `event_type` or BCS `contents`.
 /// A leaf `transactions.events` does not name those fields, so a checkpoint can
 /// arrive and still produce no membership update.
+///
+/// `sequence_number` is required: without it a tip read reports checkpoint 0, the
+/// startup catch-up replays nothing, and the first live checkpoint looks like a
+/// multi-million-checkpoint gap.
 const CHECKPOINT_READ_MASK: &str = "\
+sequence_number,\
+summary.timestamp,\
 transactions.events.events.event_type,\
 transactions.events.events.contents,\
 transactions.digest,\
@@ -64,9 +70,10 @@ transactions.transaction.sender";
 /// How long a live subscription may apply nothing before we poll the tip.
 const STREAM_IDLE: Duration = Duration::from_secs(15);
 
-/// Recent checkpoints replayed on a cold start. The in-memory store forgets
-/// everyone on restart, and the live stream only delivers from the moment it
-/// connects. This is much smaller than the disconnect backfill cap.
+/// Minimum checkpoints replayed on a cold start (no saved cursor). The in-memory
+/// store forgets everyone on restart and the live stream only delivers from the
+/// moment it connects, so a cold start replays the full backfill window
+/// (`MEMBERSHIP_BACKFILL_MAX_CHECKPOINTS`), never less than this.
 const STARTUP_BACKFILL_CHECKPOINTS: u64 = 2_000;
 
 /// Most missed checkpoints replayed after a gap. A gap beyond this skips ahead
@@ -494,7 +501,8 @@ impl MembershipSyncService {
             warn!("Startup catch-up found no latest checkpoint");
             return Ok(());
         };
-        let start = tip.saturating_sub(STARTUP_BACKFILL_CHECKPOINTS.saturating_sub(1));
+        let window = backfill_max.max(STARTUP_BACKFILL_CHECKPOINTS);
+        let start = tip.saturating_sub(window.saturating_sub(1));
         info!(
             "No checkpoint cursor; replaying checkpoints {}..={} so recent groups are recognized",
             start, tip
@@ -1127,6 +1135,7 @@ mod backfill_tests {
         assert!(CHECKPOINT_READ_MASK.contains("transactions.events.events.contents"));
         assert!(CHECKPOINT_READ_MASK.contains("transactions.digest"));
         assert!(CHECKPOINT_READ_MASK.contains("transactions.transaction.sender"));
+        assert!(CHECKPOINT_READ_MASK.split(',').any(|path| path == "sequence_number"));
         assert!(!CHECKPOINT_READ_MASK
             .split(',')
             .any(|path| path == "transactions.events"));

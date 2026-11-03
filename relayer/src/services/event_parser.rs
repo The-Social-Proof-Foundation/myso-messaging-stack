@@ -703,12 +703,31 @@ fn format_object_id(id: &BcsMoveObjectId) -> String {
     format!("0x{}", hex::encode(id.bytes))
 }
 
-/// True when the event type string originates from `package_id` (0x-prefix tolerant).
+/// Address hex without `0x` or leading zeros, so `0x2` == `0x000…0002`.
+fn canonical_address(addr: &str) -> String {
+    let hex = addr.trim();
+    let hex = hex
+        .strip_prefix("0x")
+        .or_else(|| hex.strip_prefix("0X"))
+        .unwrap_or(hex);
+    let trimmed = hex.trim_start_matches('0');
+    if trimmed.is_empty() {
+        "0".to_string()
+    } else {
+        trimmed.to_ascii_lowercase()
+    }
+}
+
+/// True when the event type (`<address>::module::Name<...>`) is defined in `package_id`.
+///
+/// Compares the defining address exactly after normalizing, so a short configured id
+/// (`0x2`) matches the full-length form the gRPC stream reports, and `0x2` does not
+/// match an unrelated package such as `0x2abc…`.
 fn is_event_from_package(event_type: &str, package_id: &str) -> bool {
-    let normalized_pkg = package_id.trim_start_matches("0x").to_lowercase();
-    let event_type_lower = event_type.to_lowercase();
-    event_type_lower.starts_with(&format!("0x{}", normalized_pkg))
-        || event_type_lower.starts_with(&normalized_pkg)
+    let Some((address, _)) = event_type.split_once("::") else {
+        return false;
+    };
+    canonical_address(address) == canonical_address(package_id)
 }
 
 /// Parses AgentGroupCreated from BCS bytes (messaging package event).
@@ -1073,10 +1092,7 @@ pub fn parse_org_invitation_chain_event(
 }
 
 fn is_groups_package_event(event_type: &str, groups_package_id: &str) -> bool {
-    let normalized_pkg = groups_package_id.trim_start_matches("0x").to_lowercase();
-    let event_type_lower = event_type.to_lowercase();
-    event_type_lower.starts_with(&format!("0x{}", normalized_pkg))
-        || event_type_lower.starts_with(&normalized_pkg)
+    is_event_from_package(event_type, groups_package_id)
 }
 
 /// Parses a MySo event into a GroupsEvent if it's from our Groups SDK package.
@@ -1192,6 +1208,21 @@ fn parse_member_removed(bcs_bytes: &[u8]) -> Option<GroupsEvent> {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn package_match_normalizes_short_and_full_addresses() {
+        let full = "0x0000000000000000000000000000000000000000000000000000000000000002\
+                    ::permissioned_group::MemberAdded<0x000000000000000000000000000000000000000000000000000000000000e110::messaging::Messaging>";
+        let short = "0x2::permissioned_group::MemberAdded<0xe110::messaging::Messaging>";
+        for pkg in ["0x2", "0x0000000000000000000000000000000000000000000000000000000000000002", "2"] {
+            assert!(super::is_groups_package_event(full, pkg), "{pkg} vs full");
+            assert!(super::is_groups_package_event(short, pkg), "{pkg} vs short");
+        }
+        assert!(!super::is_groups_package_event("0x2abc::m::E", "0x2"));
+        assert!(!super::is_groups_package_event(full, "0xe110"));
+        assert!(super::is_event_from_package(short.split_once('<').unwrap().1, "0x000000000000000000000000000000000000000000000000000000000000e110"));
+    }
+
     use super::*;
 
     #[derive(serde::Serialize)]
