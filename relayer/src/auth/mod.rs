@@ -1,5 +1,6 @@
 //! Authentication and authorization module.
 //! - Ed25519, Secp256k1, Secp256r1 signature verification
+//! - zkLogin request auth (chain-verified proof, see `zklogin`)
 //! - MySo wallet address derivation from public keys (Blake2b-256)
 //! - Permission types matching the Groups SDK smart contract
 //! - Membership store trait with in-memory implementation (synced from Groups SDK events)
@@ -10,11 +11,13 @@ pub mod membership;
 pub mod membership_postgres;
 pub mod middleware;
 pub mod permissions;
+pub mod request_sender;
 pub mod schemes;
 pub mod signature;
 pub mod types;
 pub mod wallet_middleware;
 pub mod ws_auth;
+pub mod zklogin;
 
 #[allow(unused_imports)]
 pub use membership::{

@@ -37,7 +37,8 @@ pub async fn ws_handler(
         &query,
         state.membership_store.as_ref(),
         state.request_ttl_seconds,
-    )?;
+    )
+    .await?;
 
     let group_id = auth
         .authorized_group

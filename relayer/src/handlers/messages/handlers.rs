@@ -305,8 +305,7 @@ pub async fn create_message(
     }
 
     // Build the public key with flag prefix for storage
-    let mut public_key_with_flag = vec![auth.scheme.flag()];
-    public_key_with_flag.extend_from_slice(&auth.public_key);
+    let public_key_with_flag = auth.stored_public_key();
 
     let group_id = req.group_id.clone();
     let sender_address = req.sender_address.clone();
@@ -581,8 +580,7 @@ pub async fn update_message(
         &existing_message.attribution,
     )?;
 
-    let mut public_key_with_flag = vec![auth.scheme.flag()];
-    public_key_with_flag.extend_from_slice(&auth.public_key);
+    let public_key_with_flag = auth.stored_public_key();
 
     // Update message
     let updated = state

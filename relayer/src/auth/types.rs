@@ -17,6 +17,26 @@ pub struct AuthContext {
 
     /// Group ID the sender is authorized for (if membership check passed)
     pub authorized_group: Option<String>,
+
+    /// The sender authenticated with a zkLogin proof. `public_key` / `scheme` are then the
+    /// proof's ephemeral key, which does not derive `sender_address`.
+    pub zklogin: bool,
+}
+
+impl AuthContext {
+    /// Flagged key stored with a message. zkLogin senders store `05 || ephemeral key` so clients
+    /// can tell the sender was proven by the relayer's zkLogin check, not by key derivation.
+    pub fn stored_public_key(&self) -> Vec<u8> {
+        let flag = if self.zklogin {
+            crate::auth::zklogin::ZKLOGIN_FLAG
+        } else {
+            self.scheme.flag()
+        };
+        let mut out = Vec::with_capacity(1 + self.public_key.len());
+        out.push(flag);
+        out.extend_from_slice(&self.public_key);
+        out
+    }
 }
 
 /// Error types for authentication failures.

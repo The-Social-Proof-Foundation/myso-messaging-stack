@@ -15,10 +15,8 @@ use http_body_util::BodyExt;
 use serde::Deserialize;
 
 use super::{
-    schemes::SignatureScheme,
-    signature::{
-        strip_hex_prefix, validate_timestamp, verify_address_matches_pubkey, verify_signature,
-    },
+    request_sender::{parse_request_key, verify_request_sender},
+    signature::{strip_hex_prefix, validate_timestamp},
     types::{AuthContext, AuthError},
     AuthState,
 };
@@ -76,31 +74,11 @@ pub async fn wallet_auth_middleware(
         }
     };
 
-    let scheme_flag = public_key_with_flag[0];
-    let scheme = match SignatureScheme::from_flag(scheme_flag) {
-        Some(s) => s,
-        None => {
-            return auth_error_response(
-                StatusCode::UNAUTHORIZED,
-                AuthError::InvalidPublicKeyFormat(format!(
-                    "Unknown signature scheme flag: 0x{:02x}",
-                    scheme_flag
-                )),
-            );
-        }
+    // Scheme flag + key, or `05` for a zkLogin signature.
+    let request_key = match parse_request_key(&public_key_with_flag) {
+        Ok(key) => key,
+        Err(e) => return auth_error_response(StatusCode::UNAUTHORIZED, e),
     };
-    let public_key_bytes = &public_key_with_flag[1..];
-    if public_key_bytes.len() != scheme.public_key_length() {
-        return auth_error_response(
-            StatusCode::UNAUTHORIZED,
-            AuthError::InvalidPublicKeyFormat(format!(
-                "Expected {} bytes for {}, got {}",
-                scheme.public_key_length(),
-                scheme,
-                public_key_bytes.len()
-            )),
-        );
-    }
 
     let signature_bytes = match hex::decode(strip_hex_prefix(&signature_hex)) {
         Ok(bytes) => bytes,
@@ -186,19 +164,20 @@ pub async fn wallet_auth_middleware(
         return auth_error_response(StatusCode::UNAUTHORIZED, e);
     }
 
-    if let Err(e) = verify_signature(&message_bytes, &signature_bytes, public_key_bytes, scheme) {
-        return auth_error_response(StatusCode::UNAUTHORIZED, e);
-    }
-
-    if let Err(e) = verify_address_matches_pubkey(&sender_address, public_key_bytes, scheme) {
-        return auth_error_response(StatusCode::UNAUTHORIZED, e);
-    }
+    let verified =
+        match verify_request_sender(&message_bytes, &signature_bytes, &request_key, &sender_address)
+            .await
+        {
+            Ok(v) => v,
+            Err(e) => return auth_error_response(StatusCode::UNAUTHORIZED, e),
+        };
 
     let auth_context = AuthContext {
         sender_address: sender_address.to_ascii_lowercase(),
-        public_key: public_key_bytes.to_vec(),
-        scheme,
+        public_key: verified.public_key,
+        scheme: verified.scheme,
         authorized_group: None,
+        zklogin: verified.zklogin,
     };
 
     let mut request = Request::from_parts(parts, Body::from(body_bytes));

@@ -34,10 +34,8 @@ use std::sync::Arc;
 
 use super::{
     permissions::MessagingPermission,
-    schemes::SignatureScheme,
-    signature::{
-        strip_hex_prefix, validate_timestamp, verify_address_matches_pubkey, verify_signature,
-    },
+    request_sender::{parse_request_key, verify_request_sender},
+    signature::{strip_hex_prefix, validate_timestamp},
     types::{AuthContext, AuthError},
     MembershipStore,
 };
@@ -124,43 +122,11 @@ pub async fn auth_middleware(
         }
     };
 
-    if public_key_with_flag.is_empty() {
-        return auth_error_response(
-            StatusCode::UNAUTHORIZED,
-            AuthError::InvalidPublicKeyFormat("Empty public key".to_string()),
-        );
-    }
-
-    // Extract scheme flag and determine signature scheme (Ed25519, Secp256k1, Secp256r1)
-    let scheme_flag = public_key_with_flag[0];
-    let scheme = match SignatureScheme::from_flag(scheme_flag) {
-        Some(s) => s,
-        None => {
-            return auth_error_response(
-                StatusCode::UNAUTHORIZED,
-                AuthError::InvalidPublicKeyFormat(format!(
-                    "Unknown signature scheme flag: 0x{:02x}",
-                    scheme_flag
-                )),
-            );
-        }
+    // Scheme flag + key (Ed25519, Secp256k1, Secp256r1), or `05` for a zkLogin signature.
+    let request_key = match parse_request_key(&public_key_with_flag) {
+        Ok(key) => key,
+        Err(e) => return auth_error_response(StatusCode::UNAUTHORIZED, e),
     };
-
-    // Public key bytes without the flag prefix
-    let public_key_bytes = &public_key_with_flag[1..];
-
-    // Validate public key length matches the scheme
-    if public_key_bytes.len() != scheme.public_key_length() {
-        return auth_error_response(
-            StatusCode::UNAUTHORIZED,
-            AuthError::InvalidPublicKeyFormat(format!(
-                "Expected {} bytes for {}, got {}",
-                scheme.public_key_length(),
-                scheme,
-                public_key_bytes.len()
-            )),
-        );
-    }
 
     // 4. Decode signature from hex
     let signature_bytes = match hex::decode(strip_hex_prefix(&signature_hex)) {
@@ -265,16 +231,18 @@ pub async fn auth_middleware(
         return auth_error_response(StatusCode::UNAUTHORIZED, e);
     }
 
-    // 8. Verify the signature against the signed message
-    if let Err(e) = verify_signature(&message_bytes, &signature_bytes, public_key_bytes, scheme) {
-        tracing::warn!("Signature verification failed: {}", e);
-        return auth_error_response(StatusCode::UNAUTHORIZED, e);
-    }
-
-    // 9. Verify derived address matches claimed sender_address
-    if let Err(e) = verify_address_matches_pubkey(&sender_address, public_key_bytes, scheme) {
-        return auth_error_response(StatusCode::UNAUTHORIZED, e);
-    }
+    // 8-9. Verify the signature and that it belongs to sender_address
+    //      (key derivation, or a chain-verified zkLogin proof).
+    let verified =
+        match verify_request_sender(&message_bytes, &signature_bytes, &request_key, &sender_address)
+            .await
+        {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!("Signature verification failed: {}", e);
+                return auth_error_response(StatusCode::UNAUTHORIZED, e);
+            }
+        };
 
     // Normalize identities for membership + auth context (body path may be mixed-case).
     let group_id = group_id.to_ascii_lowercase();
@@ -296,9 +264,10 @@ pub async fn auth_middleware(
 
     let auth_context = AuthContext {
         sender_address: sender_address.clone(),
-        public_key: public_key_bytes.to_vec(),
-        scheme,
+        public_key: verified.public_key,
+        scheme: verified.scheme,
         authorized_group: Some(group_id.clone()),
+        zklogin: verified.zklogin,
     };
 
     // Reconstruct request with original body and auth context, then forward to handler

@@ -40,7 +40,7 @@ pub async fn user_ws_handler(
             .into_response());
     }
 
-    let auth = authenticate_user_ws_upgrade(&headers, &query, state.request_ttl_seconds)?;
+    let auth = authenticate_user_ws_upgrade(&headers, &query, state.request_ttl_seconds).await?;
     let wallet = auth.sender_address.clone();
     let ping_interval = Duration::from_secs(state.ws_ping_interval_secs);
 

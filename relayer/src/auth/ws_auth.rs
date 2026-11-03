@@ -6,10 +6,8 @@ use serde::Serialize;
 
 use super::middleware::get_header;
 use super::permissions::MessagingPermission;
-use super::schemes::SignatureScheme;
-use super::signature::{
-    strip_hex_prefix, validate_timestamp, verify_address_matches_pubkey, verify_signature,
-};
+use super::request_sender::{parse_request_key, verify_request_sender};
+use super::signature::{strip_hex_prefix, validate_timestamp};
 use super::types::{AuthContext, AuthError};
 use super::MembershipStore;
 
@@ -20,7 +18,7 @@ struct WsAuthErrorResponse {
 }
 
 /// Authenticate a WebSocket upgrade using headers or query parameters.
-pub fn authenticate_ws_upgrade(
+pub async fn authenticate_ws_upgrade(
     headers: &HeaderMap,
     query: &WsAuthQuery,
     membership_store: &dyn MembershipStore,
@@ -91,35 +89,9 @@ pub fn authenticate_ws_upgrade(
         )
     })?;
 
-    if public_key_with_flag.is_empty() {
-        return Err(auth_error_response(
-            StatusCode::UNAUTHORIZED,
-            AuthError::InvalidPublicKeyFormat("Empty public key".to_string()),
-        ));
-    }
-
-    let scheme_flag = public_key_with_flag[0];
-    let scheme = SignatureScheme::from_flag(scheme_flag).ok_or_else(|| {
-        auth_error_response(
-            StatusCode::UNAUTHORIZED,
-            AuthError::InvalidPublicKeyFormat(format!(
-                "Unknown signature scheme flag: 0x{scheme_flag:02x}"
-            )),
-        )
-    })?;
-
-    let public_key_bytes = &public_key_with_flag[1..];
-    if public_key_bytes.len() != scheme.public_key_length() {
-        return Err(auth_error_response(
-            StatusCode::UNAUTHORIZED,
-            AuthError::InvalidPublicKeyFormat(format!(
-                "Expected {} bytes for {}, got {}",
-                scheme.public_key_length(),
-                scheme,
-                public_key_bytes.len()
-            )),
-        ));
-    }
+    // Scheme flag + key, or `05` for a zkLogin signature.
+    let request_key = parse_request_key(&public_key_with_flag)
+        .map_err(|err| auth_error_response(StatusCode::UNAUTHORIZED, err))?;
 
     let signature_bytes = hex::decode(strip_hex_prefix(&signature_hex)).map_err(|e| {
         auth_error_response(
@@ -129,16 +101,10 @@ pub fn authenticate_ws_upgrade(
     })?;
 
     let canonical = format!("{timestamp}:{sender_address}:{group_id}");
-    verify_signature(
-        canonical.as_bytes(),
-        &signature_bytes,
-        public_key_bytes,
-        scheme,
-    )
-    .map_err(|err| auth_error_response(StatusCode::UNAUTHORIZED, err))?;
-
-    verify_address_matches_pubkey(&sender_address, public_key_bytes, scheme)
-        .map_err(|err| auth_error_response(StatusCode::UNAUTHORIZED, err))?;
+    let verified =
+        verify_request_sender(canonical.as_bytes(), &signature_bytes, &request_key, &sender_address)
+            .await
+            .map_err(|err| auth_error_response(StatusCode::UNAUTHORIZED, err))?;
 
     if !membership_store.has_permission(
         &group_id,
@@ -155,8 +121,9 @@ pub fn authenticate_ws_upgrade(
     Ok(AuthContext {
         sender_address,
         authorized_group: Some(group_id),
-        scheme,
-        public_key: public_key_bytes.to_vec(),
+        scheme: verified.scheme,
+        public_key: verified.public_key,
+        zklogin: verified.zklogin,
     })
 }
 
@@ -166,7 +133,7 @@ pub fn authenticate_ws_upgrade(
 /// signed string is `"timestamp:sender_address"` (matching wallet-auth GETs)
 /// and no group membership is required — per-event authorization happens in
 /// the user-feed handler via `UserFeedEvent::matches_wallet`.
-pub fn authenticate_user_ws_upgrade(
+pub async fn authenticate_user_ws_upgrade(
     headers: &HeaderMap,
     query: &WsAuthQuery,
     request_ttl_seconds: i64,
@@ -229,35 +196,9 @@ pub fn authenticate_user_ws_upgrade(
         )
     })?;
 
-    if public_key_with_flag.is_empty() {
-        return Err(auth_error_response(
-            StatusCode::UNAUTHORIZED,
-            AuthError::InvalidPublicKeyFormat("Empty public key".to_string()),
-        ));
-    }
-
-    let scheme_flag = public_key_with_flag[0];
-    let scheme = SignatureScheme::from_flag(scheme_flag).ok_or_else(|| {
-        auth_error_response(
-            StatusCode::UNAUTHORIZED,
-            AuthError::InvalidPublicKeyFormat(format!(
-                "Unknown signature scheme flag: 0x{scheme_flag:02x}"
-            )),
-        )
-    })?;
-
-    let public_key_bytes = &public_key_with_flag[1..];
-    if public_key_bytes.len() != scheme.public_key_length() {
-        return Err(auth_error_response(
-            StatusCode::UNAUTHORIZED,
-            AuthError::InvalidPublicKeyFormat(format!(
-                "Expected {} bytes for {}, got {}",
-                scheme.public_key_length(),
-                scheme,
-                public_key_bytes.len()
-            )),
-        ));
-    }
+    // Scheme flag + key, or `05` for a zkLogin signature.
+    let request_key = parse_request_key(&public_key_with_flag)
+        .map_err(|err| auth_error_response(StatusCode::UNAUTHORIZED, err))?;
 
     let signature_bytes = hex::decode(strip_hex_prefix(&signature_hex)).map_err(|e| {
         auth_error_response(
@@ -267,22 +208,17 @@ pub fn authenticate_user_ws_upgrade(
     })?;
 
     let canonical = format!("{timestamp}:{sender_address}");
-    verify_signature(
-        canonical.as_bytes(),
-        &signature_bytes,
-        public_key_bytes,
-        scheme,
-    )
-    .map_err(|err| auth_error_response(StatusCode::UNAUTHORIZED, err))?;
-
-    verify_address_matches_pubkey(&sender_address, public_key_bytes, scheme)
-        .map_err(|err| auth_error_response(StatusCode::UNAUTHORIZED, err))?;
+    let verified =
+        verify_request_sender(canonical.as_bytes(), &signature_bytes, &request_key, &sender_address)
+            .await
+            .map_err(|err| auth_error_response(StatusCode::UNAUTHORIZED, err))?;
 
     Ok(AuthContext {
         sender_address,
         authorized_group: None,
-        scheme,
-        public_key: public_key_bytes.to_vec(),
+        scheme: verified.scheme,
+        public_key: verified.public_key,
+        zklogin: verified.zklogin,
     })
 }
 
