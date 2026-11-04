@@ -104,6 +104,11 @@ pub struct CreateMessageRequest {
     /// Sender-constructed opaque notification envelopes (relayer stores/forwards only).
     #[serde(default)]
     pub notification_envelopes: Vec<NotificationEnvelopeRequest>,
+    /// Sender opt-out of the APNs push for this message (realtime / unread still apply).
+    /// Used when a companion message already pushed this content — e.g. the note sent
+    /// right after a shared post rides in the post's push.
+    #[serde(default)]
+    pub skip_push: bool,
 }
 
 /// Request body for PUT /messages

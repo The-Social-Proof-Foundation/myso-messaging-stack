@@ -415,7 +415,11 @@ pub async fn create_message(
     let push_sender = sender_address.clone();
     let push_message_id = created.id;
     let push_kind = kind.as_str().to_string();
+    let skip_push = req.skip_push;
     tokio::spawn(async move {
+        if skip_push {
+            return;
+        }
         push.notify_new_message(
             &storage,
             &membership,

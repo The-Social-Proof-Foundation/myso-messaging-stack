@@ -26,6 +26,8 @@ pub enum ApiError {
     Unauthorized(String),
     /// Forbidden - authenticated but not authorized (403)
     Forbidden(String),
+    /// Upload over the size cap (413, code PAYLOAD_TOO_LARGE)
+    PayloadTooLarge(String),
     /// DM blocked by social graph (403, code BLOCKED)
     Blocked,
     /// Paid-DM gate: recipient requires on-chain escrow before a first message
@@ -58,6 +60,13 @@ impl IntoResponse for ApiError {
             ApiError::Internal(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg, None, None, None),
             ApiError::Unauthorized(msg) => (StatusCode::UNAUTHORIZED, msg, None, None, None),
             ApiError::Forbidden(msg) => (StatusCode::FORBIDDEN, msg, None, None, None),
+            ApiError::PayloadTooLarge(msg) => (
+                StatusCode::PAYLOAD_TOO_LARGE,
+                msg,
+                Some("PAYLOAD_TOO_LARGE".to_string()),
+                None,
+                None,
+            ),
             ApiError::Blocked => (
                 StatusCode::FORBIDDEN,
                 "Messaging blocked between these users".to_string(),

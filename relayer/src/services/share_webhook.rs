@@ -70,7 +70,19 @@ impl ShareWebhookNotifier {
                     })),
                 }
             }
-            _ => Self::disabled(),
+            (url, secret) => {
+                // Silent disable hid a misnamed secret var (`DRIPDROP_SHARE_WEBHOOK_SECRET.`) for
+                // weeks — every post share went uncounted. Say exactly what is missing.
+                if enabled || url.is_some() || secret.is_some() {
+                    warn!(
+                        "share webhook DISABLED: url={} secret={} — set DRIPDROP_SHARE_WEBHOOK_URL and \
+                         DRIPDROP_SHARE_WEBHOOK_SECRET (or MESSAGING_SHARE_WEBHOOK_SECRET)",
+                        if url.is_some() { "set" } else { "missing" },
+                        if secret.is_some() { "set" } else { "missing" },
+                    );
+                }
+                Self::disabled()
+            }
         }
     }
 

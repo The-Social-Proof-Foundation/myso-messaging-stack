@@ -17,6 +17,7 @@ use crate::auth::{
 };
 use crate::config::Config;
 use crate::handlers::agent_groups;
+use crate::handlers::attachments;
 use crate::handlers::archive::get_archive_messages;
 use crate::handlers::dm_gate;
 use crate::handlers::group_features;
@@ -102,7 +103,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         membership_store.clone(),
     );
 
-    let app_state = AppState::new_with_archive(
+    let mut app_state = AppState::new_with_archive(
         storage.clone(),
         sync_tx,
         membership_store.clone(),
@@ -123,6 +124,25 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         archive_read,
         begin_chat_notify.clone(),
     );
+
+    // Encrypted chat attachments live in the same R2 bucket as the archive (own prefix).
+    match (
+        config.r2_endpoint.as_deref(),
+        config.r2_bucket.as_deref(),
+        config.r2_access_key_id.as_deref(),
+        config.r2_secret_access_key.as_deref(),
+    ) {
+        (Some(endpoint), Some(bucket), Some(key_id), Some(secret)) => {
+            match crate::archive::R2ObjectStore::from_config(endpoint, bucket, key_id, secret, &config.r2_region) {
+                Ok(store) => {
+                    app_state.attachment_store = Some(Arc::new(store));
+                    info!("chat attachments: R2 bucket={bucket}");
+                }
+                Err(e) => tracing::error!("chat attachments: R2 init failed: {e}"),
+            }
+        }
+        _ => tracing::warn!("chat attachments disabled: R2_ENDPOINT/R2_BUCKET/R2 keys not configured"),
+    }
 
     // Durable notification keys / prefs: survive deploys so senders can keep sealing
     // E2E previews for every recipient device.
@@ -244,6 +264,16 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .route(
             "/groups/:group_id/notification-keys",
             get(notification_push::get_group_notification_keys),
+        )
+        .route(
+            "/groups/:group_id/attachments",
+            post(attachments::upload_attachment).layer(axum::extract::DefaultBodyLimit::max(
+                attachments::max_attachment_request_bytes(),
+            )),
+        )
+        .route(
+            "/groups/:group_id/attachments/:attachment_id",
+            get(attachments::download_attachment),
         )
         .route(
             "/archive/groups/:group_id/messages",

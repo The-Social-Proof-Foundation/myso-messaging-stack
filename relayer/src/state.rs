@@ -90,6 +90,8 @@ pub struct AppState {
     pub begin_chat_notify: BeginChatNotify,
     /// Optional dripdrop share-count webhook (kind=post).
     pub share_webhook: ShareWebhookNotifier,
+    /// Encrypted chat attachment blobs (R2). None when R2 is not configured.
+    pub attachment_store: Option<Arc<dyn crate::archive::ObjectStore>>,
 }
 
 impl AppState {
@@ -183,6 +185,7 @@ impl AppState {
             archive_read,
             begin_chat_notify,
             share_webhook: ShareWebhookNotifier::from_env(),
+            attachment_store: None,
         }
     }
 

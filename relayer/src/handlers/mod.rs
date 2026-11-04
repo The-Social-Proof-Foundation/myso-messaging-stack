@@ -1,4 +1,5 @@
 pub mod agent_groups;
+pub mod attachments;
 pub mod archive;
 pub mod dm_gate;
 pub mod group_features;
