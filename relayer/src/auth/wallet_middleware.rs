@@ -161,6 +161,11 @@ pub async fn wallet_auth_middleware(
     };
 
     if let Err(e) = validate_timestamp(timestamp, state.config.request_ttl_seconds) {
+        tracing::warn!(
+            "wallet auth rejected {} {}: timestamp ({e}) sender={sender_address}",
+            method,
+            parts.uri.path()
+        );
         return auth_error_response(StatusCode::UNAUTHORIZED, e);
     }
 
@@ -169,7 +174,15 @@ pub async fn wallet_auth_middleware(
             .await
         {
             Ok(v) => v,
-            Err(e) => return auth_error_response(StatusCode::UNAUTHORIZED, e),
+            Err(e) => {
+                // e.g. client signed with a zkLogin key but sent the plain wallet address.
+                tracing::warn!(
+                    "wallet auth rejected {} {}: {e} sender={sender_address}",
+                    method,
+                    parts.uri.path()
+                );
+                return auth_error_response(StatusCode::UNAUTHORIZED, e);
+            }
         };
 
     let auth_context = AuthContext {
