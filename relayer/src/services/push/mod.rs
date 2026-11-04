@@ -188,11 +188,7 @@ impl PushService {
             .filter(|wallet| !muted.contains(wallet))
             .collect();
 
-        let group_unread = storage
-            .get_group_activity(group_id, 0)
-            .await
-            .map(|activity| activity.unread_count)
-            .unwrap_or(0);
+
 
         let tokens_by_wallet = match storage.list_push_tokens_for_wallets(&push_recipients).await {
             Ok(tokens) => tokens,
@@ -286,7 +282,6 @@ impl PushService {
                                 message_id,
                                 &sender_wallet,
                                 message_kind,
-                                group_unread,
                                 encrypted_notification.as_deref(),
                                 &attribution,
                             )
@@ -296,7 +291,6 @@ impl PushService {
                             .send_new_message(
                                 &job.token,
                                 &group_id,
-                                group_unread,
                                 &attribution,
                             )
                             .await

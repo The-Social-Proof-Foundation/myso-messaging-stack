@@ -2,10 +2,16 @@
 //! Relayer stores/forwards opaque envelopes only — never plaintext previews.
 
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, OnceLock, RwLock};
+use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
+use sqlx::{PgPool, Row};
+use tracing::info;
 use uuid::Uuid;
+
+/// Envelopes are only needed between `POST /messages` and the push fan-out (seconds).
+const ENVELOPE_TTL: Duration = Duration::from_secs(15 * 60);
 
 #[derive(Debug, Clone)]
 pub struct DeviceNotificationKeyRecord {
@@ -45,18 +51,108 @@ impl WalletNotificationMode {
 #[derive(Default)]
 struct Inner {
     keys: HashMap<(String, String), DeviceNotificationKeyRecord>,
-    envelopes: HashMap<(Uuid, String), Vec<u8>>,
+    envelopes: HashMap<(Uuid, String), (Vec<u8>, Instant)>,
     prefs: HashMap<String, WalletNotificationMode>,
 }
 
+/// Device keys and wallet prefs are durable (Postgres, `017_notification_push.sql`) and
+/// cached in memory for the push hot path. Without the durable copy every relayer deploy
+/// wiped all keys, senders sealed no previews, and every push fell back to "New message".
 #[derive(Clone, Default)]
 pub struct NotificationPushStore {
     inner: Arc<RwLock<Inner>>,
+    pool: Arc<OnceLock<PgPool>>,
 }
 
 impl NotificationPushStore {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Enable write-through persistence and load every stored key / pref into memory.
+    pub async fn attach_postgres(&self, pool: PgPool) -> Result<(), sqlx::Error> {
+        let key_rows = sqlx::query(
+            "SELECT wallet, device_id, public_key, platform, updated_at FROM device_notification_keys",
+        )
+        .fetch_all(&pool)
+        .await?;
+        let pref_rows = sqlx::query("SELECT wallet, notification_mode FROM wallet_notification_prefs")
+            .fetch_all(&pool)
+            .await?;
+        {
+            let mut inner = self.inner.write().expect("notification push store poisoned");
+            for row in &key_rows {
+                let record = DeviceNotificationKeyRecord {
+                    wallet: row.get("wallet"),
+                    device_id: row.get("device_id"),
+                    public_key: row.get("public_key"),
+                    platform: row.get("platform"),
+                    updated_at: row.get("updated_at"),
+                };
+                inner
+                    .keys
+                    .insert((record.wallet.clone(), record.device_id.clone()), record);
+            }
+            for row in &pref_rows {
+                let raw: String = row.get("notification_mode");
+                if let Some(mode) = WalletNotificationMode::parse(&raw) {
+                    inner.prefs.insert(row.get("wallet"), mode);
+                }
+            }
+        }
+        let _ = self.pool.set(pool);
+        info!(
+            "notification push store loaded {} device keys, {} wallet prefs from postgres",
+            key_rows.len(),
+            pref_rows.len()
+        );
+        Ok(())
+    }
+
+    /// Cache + persist a device key (handler path). Errors surface to the client so the
+    /// app retries instead of believing it is registered.
+    pub async fn save_device_key(&self, record: DeviceNotificationKeyRecord) -> Result<(), sqlx::Error> {
+        if let Some(pool) = self.pool.get() {
+            sqlx::query(
+                "INSERT INTO device_notification_keys (wallet, device_id, public_key, platform, updated_at)
+                 VALUES ($1, $2, $3, $4, $5)
+                 ON CONFLICT (wallet, device_id) DO UPDATE
+                 SET public_key = EXCLUDED.public_key,
+                     platform = EXCLUDED.platform,
+                     updated_at = EXCLUDED.updated_at",
+            )
+            .bind(&record.wallet)
+            .bind(&record.device_id)
+            .bind(&record.public_key)
+            .bind(&record.platform)
+            .bind(record.updated_at)
+            .execute(pool)
+            .await?;
+        }
+        self.upsert_device_key(record);
+        Ok(())
+    }
+
+    /// Cache + persist a wallet notification mode (handler path).
+    pub async fn save_wallet_mode(
+        &self,
+        wallet: &str,
+        mode: WalletNotificationMode,
+    ) -> Result<(), sqlx::Error> {
+        if let Some(pool) = self.pool.get() {
+            sqlx::query(
+                "INSERT INTO wallet_notification_prefs (wallet, notification_mode, updated_at)
+                 VALUES ($1, $2, NOW())
+                 ON CONFLICT (wallet) DO UPDATE
+                 SET notification_mode = EXCLUDED.notification_mode, updated_at = NOW()",
+            )
+            .bind(wallet)
+            .bind(mode.as_str())
+            .execute(pool)
+            .await?;
+        }
+        self.set_wallet_mode(wallet, mode);
+        Ok(())
     }
 
     pub fn upsert_device_key(&self, record: DeviceNotificationKeyRecord) {
@@ -83,10 +179,15 @@ impl NotificationPushStore {
 
     pub fn store_envelopes(&self, message_id: Uuid, items: &[(String, Vec<u8>)]) {
         let mut inner = self.inner.write().expect("notification push store poisoned");
+        let now = Instant::now();
+        // Bounded memory: envelopes used to accumulate for the life of the process.
+        inner
+            .envelopes
+            .retain(|_, (_, stored)| now.duration_since(*stored) < ENVELOPE_TTL);
         for (device_id, blob) in items {
             inner
                 .envelopes
-                .insert((message_id, device_id.clone()), blob.clone());
+                .insert((message_id, device_id.clone()), (blob.clone(), now));
         }
     }
 
@@ -95,7 +196,12 @@ impl NotificationPushStore {
         inner
             .envelopes
             .get(&(message_id, device_id.to_string()))
-            .cloned()
+            .map(|(blob, _)| blob.clone())
+    }
+
+    /// Number of cached device keys (diagnostics).
+    pub fn device_key_count(&self) -> usize {
+        self.inner.read().expect("notification push store poisoned").keys.len()
     }
 
     pub fn get_wallet_mode(&self, wallet: &str) -> WalletNotificationMode {

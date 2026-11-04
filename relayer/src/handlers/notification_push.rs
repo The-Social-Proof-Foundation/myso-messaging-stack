@@ -45,13 +45,15 @@ pub async fn put_notification_key(
 
     state
         .notification_push
-        .upsert_device_key(DeviceNotificationKeyRecord {
+        .save_device_key(DeviceNotificationKeyRecord {
             wallet: auth.sender_address.clone(),
             device_id: body.device_id.trim().to_string(),
             public_key: body.public_key.trim().to_string(),
             platform: body.platform.to_ascii_lowercase(),
             updated_at: Utc::now(),
-        });
+        })
+        .await
+        .map_err(|e| ApiError::Internal(format!("notification key save failed: {e}")))?;
 
     Ok(Json(serde_json::json!({ "ok": true })))
 }
@@ -83,7 +85,9 @@ pub async fn put_notification_prefs(
     })?;
     state
         .notification_push
-        .set_wallet_mode(&auth.sender_address, mode);
+        .save_wallet_mode(&auth.sender_address, mode)
+        .await
+        .map_err(|e| ApiError::Internal(format!("notification prefs save failed: {e}")))?;
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
@@ -107,5 +111,13 @@ pub async fn get_group_notification_keys(
             })
         })
         .collect::<Vec<_>>();
+    // Zero keys here means every recipient push falls back to "New message".
+    tracing::info!(
+        "notification keys group={} members={} keys={} cached_total={}",
+        group_id,
+        members.len(),
+        keys.len(),
+        state.notification_push.device_key_count()
+    );
     Ok(Json(serde_json::json!({ "items": keys })))
 }

@@ -124,6 +124,23 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         begin_chat_notify.clone(),
     );
 
+    // Durable notification keys / prefs: survive deploys so senders can keep sealing
+    // E2E previews for every recipient device.
+    if let Some(database_url) = config.postgres_database_url() {
+        match sqlx::postgres::PgPoolOptions::new()
+            .max_connections(3)
+            .connect(&database_url)
+            .await
+        {
+            Ok(pool) => {
+                if let Err(e) = app_state.notification_push.attach_postgres(pool).await {
+                    tracing::error!("notification push store load failed: {e}");
+                }
+            }
+            Err(e) => tracing::error!("notification push store postgres connect failed: {e}"),
+        }
+    }
+
     if config.realtime_enabled && config.uses_postgres_storage() {
         if let Some(database_url) = config.postgres_database_url() {
             let listener = PgListenerService::new(
