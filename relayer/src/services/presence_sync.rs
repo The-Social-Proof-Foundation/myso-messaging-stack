@@ -146,10 +146,19 @@ pub async fn note_connect(state: &AppState, wallet: &str) {
 /// broadcast only if the wallet is still fully disconnected after
 /// `AppState::presence_offline_grace_secs` (env `PRESENCE_OFFLINE_GRACE_SECS`,
 /// default 3). A reconnect inside the window suppresses the offline event.
+///
+/// Push gating is NOT debounced: the moment the last socket closes (app backgrounded or
+/// killed), `last_seen` is cleared so the very next message/reaction pushes. A reconnect
+/// re-stamps `last_seen` in the WS handler, so a brief blip costs at most one extra push.
 pub fn note_disconnect(state: AppState, wallet: String) {
     if state.presence_registry.disconnect(&wallet) {
         let grace = Duration::from_secs(state.presence_offline_grace_secs.max(1));
         tokio::spawn(async move {
+            if !state.presence_registry.is_online(&wallet) {
+                if let Err(err) = state.storage.clear_presence(&wallet).await {
+                    warn!("presence clear on disconnect failed for {}: {}", wallet, err);
+                }
+            }
             tokio::time::sleep(grace).await;
             if !state.presence_registry.is_online(&wallet) {
                 broadcast_presence(&state, &wallet, false).await;
