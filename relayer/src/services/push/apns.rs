@@ -155,30 +155,59 @@ pub fn new_message_alert_payload_json(
 
 impl ApnsClient {
     pub fn from_config(config: &Config) -> Option<Self> {
-        let key_id = config.apns_key_id.as_ref()?;
-        let team_id = config.apns_team_id.as_ref()?;
-        let bundle_id = config.apns_bundle_id.clone()?;
-        let path = config.apns_auth_key_path.as_ref()?;
-        let environment = ApnsEnvironment::from_config_str(&config.apns_environment).ok()?;
-
-        let mut key_file = match File::open(path) {
-            Ok(file) => file,
+        // Empty strings (blank dashboard vars) count as unset; say which one is missing,
+        // since a silent `None` here is the only symptom of a misconfigured relayer.
+        let non_empty = |value: &Option<String>| {
+            value.as_deref().map(str::trim).filter(|v| !v.is_empty()).map(str::to_string)
+        };
+        let Some(key_id) = non_empty(&config.apns_key_id) else {
+            warn!("APNs disabled: APNS_KEY_ID is not set");
+            return None;
+        };
+        let Some(team_id) = non_empty(&config.apns_team_id) else {
+            warn!("APNs disabled: APNS_TEAM_ID is not set");
+            return None;
+        };
+        let Some(bundle_id) = non_empty(&config.apns_bundle_id) else {
+            warn!("APNs disabled: APNS_BUNDLE_ID is not set");
+            return None;
+        };
+        let environment = match ApnsEnvironment::from_config_str(&config.apns_environment) {
+            Ok(environment) => environment,
             Err(err) => {
-                warn!("Failed to open APNS_AUTH_KEY_PATH '{}': {}", path, err);
+                warn!("APNs disabled: {}", err);
                 return None;
             }
         };
-        let mut key_bytes = Vec::new();
-        if let Err(err) = key_file.read_to_end(&mut key_bytes) {
-            warn!("Failed to read APNS auth key from '{}': {}", path, err);
-            return None;
-        }
+
+        // Key contents from APNS_AUTH_KEY win; otherwise read the APNS_AUTH_KEY_PATH file.
+        let key_bytes: Vec<u8> = if let Some(key) = &config.apns_auth_key {
+            key.expose().as_bytes().to_vec()
+        } else {
+            let Some(path) = non_empty(&config.apns_auth_key_path) else {
+                warn!("APNs disabled: set APNS_AUTH_KEY (key contents) or APNS_AUTH_KEY_PATH");
+                return None;
+            };
+            let mut key_file = match File::open(&path) {
+                Ok(file) => file,
+                Err(err) => {
+                    warn!("Failed to open APNS_AUTH_KEY_PATH '{}': {}", path, err);
+                    return None;
+                }
+            };
+            let mut bytes = Vec::new();
+            if let Err(err) = key_file.read_to_end(&mut bytes) {
+                warn!("Failed to read APNS auth key from '{}': {}", path, err);
+                return None;
+            }
+            bytes
+        };
 
         let client_config = ClientConfig::new(environment.to_a2_endpoint());
         let client = match Client::token(
             key_bytes.as_slice(),
-            key_id.clone(),
-            team_id.clone(),
+            key_id,
+            team_id,
             client_config,
         ) {
             Ok(client) => client,

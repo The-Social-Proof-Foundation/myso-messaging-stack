@@ -15,11 +15,12 @@
 //!   non-zkLogin web sessions are fully bound to the signing key;
 //! - the transaction must have executed successfully;
 //! - for SPT transfers a `TokenTransferredEvent { from == sender, to == DM peer }` must exist;
-//! - for native transfers the DM peer must show a positive native-coin balance change. Native
-//!   transfers emit no Move event, so without this any successful transaction by the sender
-//!   (a dust self-transfer, say) would be displayed as a confirmed payment to the peer and
-//!   would settle a payment request. When the fullnode reports no balance changes at all the
-//!   recipient cannot be checked and the transfer falls back to sender-and-success only.
+//! - for native transfers the DM peer must show a positive balance change in a wallet-native
+//!   coin (MYSO, myUSD, BTC, ETH — see [`is_native_coin`]). Native transfers emit no Move
+//!   event, so without this any successful transaction by the sender (a dust self-transfer,
+//!   say) would be displayed as a confirmed payment to the peer and would settle a payment
+//!   request. When the fullnode reports no balance changes at all the recipient cannot be
+//!   checked and the transfer falls back to sender-and-success only.
 //!
 //! The amount and asset are inside the encrypted body and are not verified by the relayer:
 //! a transfer is confirmed as *a* payment to the peer, not as the requested amount.
@@ -85,15 +86,31 @@ pub enum ChainOutcome {
     },
 }
 
-/// True for the native `0x2::myso::MYSO` coin, whatever padding the node uses for `0x2`.
+/// True for the coins clients send as `asset_kind: native`: `0x2::myso::MYSO` (any padding of
+/// `0x2`) and the issued wallet coins `myusd::MYUSD`, `btc::BTC`, `eth::ETH`.
+///
+/// The issued coins are matched by module and name, like the wallets that list them, because
+/// their package ids are per deployment. That admits a look-alike coin from another package,
+/// which is no weaker than before: amount and asset are encrypted and never verified, so a
+/// 1-mist MYSO transfer could already be shown as any payment. Only MYSO credits counted
+/// before, so every myUSD / BTC / ETH payment was marked `recipient_mismatch`.
 pub fn is_native_coin(coin_type: &str) -> bool {
     let mut parts = coin_type.trim().split("::");
     match (parts.next(), parts.next(), parts.next(), parts.next()) {
         (Some(addr), Some("myso"), Some("MYSO"), None) => {
             normalize_address(addr) == normalize_address("0x2")
         }
+        (Some(addr), Some(module), Some(name), None) => {
+            matches!((module, name), ("myusd", "MYUSD") | ("btc", "BTC") | ("eth", "ETH"))
+                && is_hex_address(addr)
+        }
         _ => false,
     }
+}
+
+fn is_hex_address(addr: &str) -> bool {
+    let hex = addr.strip_prefix("0x").unwrap_or(addr);
+    !hex.is_empty() && hex.len() <= 64 && hex.chars().all(|c| c.is_ascii_hexdigit())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -527,6 +544,33 @@ mod tests {
         assert!(!is_native_coin("0x3::myso::MYSO"));
         assert!(!is_native_coin("0x2::coin::Coin<0x2::myso::MYSO>"));
         assert!(!is_native_coin(""));
+    }
+
+    #[test]
+    fn issued_wallet_coins_are_native() {
+        assert!(is_native_coin("0xabc123::myusd::MYUSD"));
+        assert!(is_native_coin("0xabc123::btc::BTC"));
+        assert!(is_native_coin("0xabc123::eth::ETH"));
+        assert!(!is_native_coin("0xabc123::myusd::OTHER"));
+        assert!(!is_native_coin("not_hex::myusd::MYUSD"));
+        assert!(!is_native_coin("0xabc123::myusd::MYUSD::extra"));
+    }
+
+    #[test]
+    fn myusd_transfer_to_the_peer_succeeds() {
+        // The bug: a myUSD send credited the peer in myUSD, found no MYSO credit, and failed.
+        let myusd = executed_with_balances(
+            SENDER,
+            vec![
+                delta(SENDER, "0x2::myso::MYSO", -1_000),
+                delta(SENDER, "0xabc123::myusd::MYUSD", -1_000_000),
+                delta(PEER, "0xabc123::myusd::MYUSD", 1_000_000),
+            ],
+        );
+        assert_eq!(
+            verdict_for(&myusd, &expected(PaymentAssetKind::Native)),
+            Some(Verdict::Success)
+        );
     }
 
     #[test]

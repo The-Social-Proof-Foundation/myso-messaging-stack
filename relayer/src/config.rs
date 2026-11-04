@@ -131,8 +131,11 @@ pub struct Config {
     pub apns_team_id: Option<String>,
     /// APNs bundle id (optional).
     pub apns_bundle_id: Option<String>,
-    /// Path to APNs .p8 auth key (optional).
+    /// Path to APNs .p8 auth key (optional). Ignored when `apns_auth_key` is set.
     pub apns_auth_key_path: Option<String>,
+    /// APNs .p8 auth key contents from `APNS_AUTH_KEY` (optional). Lets hosted deploys
+    /// (Railway) pass the key as a variable instead of mounting a file. Never printed.
+    pub apns_auth_key: Option<RedactedString>,
     /// APNs environment: sandbox or production (default: sandbox).
     pub apns_environment: String,
     /// Send visible alert + mutable-content pushes (default: false).
@@ -319,6 +322,10 @@ impl Config {
         let apns_team_id = env::var("APNS_TEAM_ID").ok();
         let apns_bundle_id = env::var("APNS_BUNDLE_ID").ok();
         let apns_auth_key_path = env::var("APNS_AUTH_KEY_PATH").ok();
+        let apns_auth_key = env::var("APNS_AUTH_KEY")
+            .ok()
+            .and_then(|raw| normalize_pem_env(&raw))
+            .map(RedactedString);
         let apns_environment = env::var("APNS_ENVIRONMENT").unwrap_or_else(|_| "sandbox".to_string());
         let push_visible_alerts = env::var("PUSH_VISIBLE_ALERTS")
             .ok()
@@ -408,6 +415,7 @@ impl Config {
             apns_team_id,
             apns_bundle_id,
             apns_auth_key_path,
+            apns_auth_key,
             apns_environment,
             push_visible_alerts,
             realtime_enabled,
@@ -434,11 +442,14 @@ impl Config {
     /// still covered once it is listed here, and the derive stays untouched.
     pub fn redacted_debug(&self) -> String {
         let mut dump = format!("{:?}", self);
+        // `apns_auth_key` needs no entry: its `Debug` already prints `<redacted>`.
+        let database_url = self.postgres_database_url();
         let secrets = [
             self.r2_access_key_id.as_deref(),
             self.r2_secret_access_key.as_deref(),
             self.internal_sync_secret.as_deref(),
             self.apns_key_id.as_deref(),
+            database_url.as_deref().and_then(url_password),
         ];
         for secret in secrets.into_iter().flatten() {
             // Very short values would shred unrelated text; none of the real
@@ -494,6 +505,7 @@ impl Default for Config {
             apns_team_id: None,
             apns_bundle_id: None,
             apns_auth_key_path: None,
+            apns_auth_key: None,
             apns_environment: "sandbox".to_string(),
             push_visible_alerts: false,
             realtime_enabled: true,
@@ -508,6 +520,40 @@ impl Default for Config {
             begin_chat_notify_debounce_secs: 3,
         }
     }
+}
+
+/// A secret string whose `Debug` never shows the value (`Config` derives `Debug`).
+#[derive(Clone, PartialEq, Eq)]
+pub struct RedactedString(pub String);
+
+impl std::fmt::Debug for RedactedString {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("<redacted>")
+    }
+}
+
+impl RedactedString {
+    pub fn expose(&self) -> &str {
+        &self.0
+    }
+}
+
+/// PEM from an env var: trimmed, surrounding quotes dropped, and literal `\n` turned into
+/// newlines (dashboards often store a multi-line key on one line). `None` when empty.
+pub fn normalize_pem_env(raw: &str) -> Option<String> {
+    let trimmed = raw.trim().trim_matches('"').trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    Some(trimmed.replace("\\n", "\n"))
+}
+
+/// Password inside `scheme://user:password@host/...`, if any.
+fn url_password(url: &str) -> Option<&str> {
+    let rest = url.split_once("://")?.1;
+    let userinfo = rest.split_once('@')?.0;
+    let password = userinfo.split_once(':')?.1;
+    (!password.is_empty()).then_some(password)
 }
 
 impl Config {
@@ -555,6 +601,34 @@ mod tests {
         assert!(dump.contains("<redacted>"));
         // Everything else is still there for debugging.
         assert!(dump.contains("port:"));
+    }
+
+    #[test]
+    fn startup_log_hides_database_password_and_apns_key() {
+        let mut config = Config::default();
+        config.storage_type = StorageType::Postgres(
+            "postgresql://postgres:hunter2-db-password@db.internal:5432/railway".into(),
+        );
+        config.apns_auth_key = Some(RedactedString(
+            "-----BEGIN PRIVATE KEY-----\nMIGTAgEAMBMG\n-----END PRIVATE KEY-----".into(),
+        ));
+        let dump = config.redacted_debug();
+        assert!(!dump.contains("hunter2-db-password"), "db password leaked: {dump}");
+        assert!(!dump.contains("BEGIN PRIVATE KEY"), "apns key leaked: {dump}");
+        assert!(!dump.contains("MIGTAgEAMBMG"), "apns key leaked: {dump}");
+        // Host stays visible for debugging connection issues.
+        assert!(dump.contains("db.internal:5432"));
+    }
+
+    #[test]
+    fn pem_env_accepts_escaped_newlines_and_quotes() {
+        assert_eq!(
+            normalize_pem_env("\"-----BEGIN PRIVATE KEY-----\\nabc\\n-----END PRIVATE KEY-----\"\n"),
+            Some("-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----".to_string())
+        );
+        assert_eq!(normalize_pem_env("   "), None);
+        assert_eq!(url_password("postgresql://u:p4ss@h:5432/db"), Some("p4ss"));
+        assert_eq!(url_password("postgresql://h:5432/db"), None);
     }
 
     #[test]
