@@ -153,6 +153,8 @@ pub async fn post_reaction(
 }
 
 /// Pushes the author of the reacted-to message (never the reactor, never on removal).
+/// A reaction to your own message has no other author to tell, so it fans out to every
+/// other member of the chat instead.
 /// The author is resolved server-side from `(group_id, chain_seq)`, so it works even when
 /// the client omits `message_id` and a client can't aim a push at an arbitrary wallet.
 async fn notify_reaction_author(
@@ -186,12 +188,12 @@ async fn notify_reaction_author(
         }
     }
     let author = message.sender_wallet_addr.clone();
-    if author.eq_ignore_ascii_case(auth.sender_address.as_str()) {
-        info!("reaction push skipped: reactor is the author (group={group_id} seq={seq})");
-        return Ok(());
-    }
+    let self_reaction = author.eq_ignore_ascii_case(auth.sender_address.as_str());
+    // `None` = every member except the reactor (`notify_new_message` always skips the sender).
+    let only_recipient = if self_reaction { None } else { Some(author.clone()) };
     info!(
-        "reaction push: group={group_id} seq={seq} author={author} envelopes={}",
+        "reaction push: group={group_id} seq={seq} author={author} audience={} envelopes={}",
+        if self_reaction { "all_members" } else { "author" },
         body.notification_envelopes.len()
     );
 
@@ -217,7 +219,7 @@ async fn notify_reaction_author(
             &reactor,
             &crate::models::MessageAttribution::human_message(),
             "reaction",
-            Some(author.as_str()),
+            only_recipient.as_deref(),
         )
         .await;
     });
