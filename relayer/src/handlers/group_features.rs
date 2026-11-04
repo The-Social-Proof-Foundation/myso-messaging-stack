@@ -5,7 +5,7 @@ use axum::extract::{Path, Query, State};
 use axum::Extension;
 use axum::Json;
 use serde::{Deserialize, Serialize};
-use tracing::warn;
+use tracing::{info, warn};
 
 use crate::auth::AuthContext;
 use crate::handlers::messages::error::ApiError;
@@ -153,32 +153,47 @@ pub async fn post_reaction(
 }
 
 /// Pushes the author of the reacted-to message (never the reactor, never on removal).
-/// The author comes from storage, not the client: `message_id` must belong to this group
-/// at `chain_seq`, so a client can't aim a push at an arbitrary wallet.
+/// The author is resolved server-side from `(group_id, chain_seq)`, so it works even when
+/// the client omits `message_id` and a client can't aim a push at an arbitrary wallet.
 async fn notify_reaction_author(
     state: &AppState,
     group_id: &str,
     auth: &AuthContext,
     body: &PostReactionBody,
 ) -> Result<(), ApiError> {
-    let Some(message_id) = body.message_id else {
-        return Ok(());
-    };
-    let message = match state.storage.get_message(message_id).await {
-        Ok(message) => message,
+    let seq = body.chain_seq;
+    let message = match state
+        .storage
+        .get_messages_by_group(group_id, Some(seq - 1), Some(seq + 1), 1)
+        .await
+    {
+        Ok(mut rows) if !rows.is_empty() => rows.remove(0),
+        Ok(_) => {
+            info!("reaction push skipped: no message at group={group_id} seq={seq}");
+            return Ok(());
+        }
         Err(err) => {
-            warn!("reaction push: target message {message_id} lookup failed: {err}");
+            warn!("reaction push skipped: lookup group={group_id} seq={seq} failed: {err}");
             return Ok(());
         }
     };
-    if message.group_id != group_id || message.order != Some(body.chain_seq) {
-        warn!("reaction push: message {message_id} does not match group/chain_seq");
-        return Ok(());
+    if let Some(claimed) = body.message_id {
+        if claimed != message.id {
+            info!(
+                "reaction push: client message_id {claimed} != stored {} at seq={seq}; using stored",
+                message.id
+            );
+        }
     }
     let author = message.sender_wallet_addr.clone();
     if author.eq_ignore_ascii_case(auth.sender_address.as_str()) {
+        info!("reaction push skipped: reactor is the author (group={group_id} seq={seq})");
         return Ok(());
     }
+    info!(
+        "reaction push: group={group_id} seq={seq} author={author} envelopes={}",
+        body.notification_envelopes.len()
+    );
 
     // Envelopes are keyed by a fresh event id so they never collide with message previews.
     let event_id = uuid::Uuid::new_v4();
