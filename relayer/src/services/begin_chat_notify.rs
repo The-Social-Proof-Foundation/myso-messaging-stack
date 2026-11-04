@@ -102,6 +102,7 @@ impl BeginChatNotify {
                     &invitee,
                     &MessageAttribution::human_message(),
                     "system",
+                    None,
                 )
                 .await;
         });

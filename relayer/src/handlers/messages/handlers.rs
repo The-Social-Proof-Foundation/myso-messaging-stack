@@ -35,7 +35,7 @@ const MAX_PAGE_LIMIT: usize = 100;
 /// Maximum opaque notification envelope size (4 KiB).
 const MAX_NOTIFICATION_ENVELOPE_BYTES: usize = 4096;
 
-fn store_notification_envelopes(
+pub(crate) fn store_notification_envelopes(
     state: &AppState,
     message_id: Uuid,
     envelopes: &[NotificationEnvelopeRequest],
@@ -426,6 +426,7 @@ pub async fn create_message(
             &push_sender,
             &push_attribution,
             &push_kind,
+            None,
         )
         .await;
     });

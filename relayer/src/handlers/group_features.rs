@@ -9,6 +9,8 @@ use tracing::warn;
 
 use crate::auth::AuthContext;
 use crate::handlers::messages::error::ApiError;
+use crate::handlers::messages::handlers::store_notification_envelopes;
+use crate::handlers::messages::request::NotificationEnvelopeRequest;
 use crate::models::{
     ConversationPreferences, ConversationPreferencesPatch, GroupReceiptsResponse, ReactionEntry,
 };
@@ -28,6 +30,12 @@ pub struct PostReactionBody {
     pub emoji: String,
     #[serde(default = "default_true")]
     pub add: bool,
+    /// Reacted-to message; lets the relayer push its author (verified against `chain_seq`).
+    #[serde(default)]
+    pub message_id: Option<uuid::Uuid>,
+    /// Opaque per-device previews sealed by the reactor for the author's devices only.
+    #[serde(default)]
+    pub notification_envelopes: Vec<NotificationEnvelopeRequest>,
 }
 
 /// Generous cap: the longest RGI emoji ZWJ sequences are ~35 bytes of UTF-8.
@@ -135,9 +143,70 @@ pub async fn post_reaction(
         }
     }
 
+    if body.add && updated.is_some() {
+        notify_reaction_author(&state, &group_id, &auth, &body).await?;
+    }
+
     Ok(Json(
         serde_json::json!({ "ok": true, "changed": updated.is_some() }),
     ))
+}
+
+/// Pushes the author of the reacted-to message (never the reactor, never on removal).
+/// The author comes from storage, not the client: `message_id` must belong to this group
+/// at `chain_seq`, so a client can't aim a push at an arbitrary wallet.
+async fn notify_reaction_author(
+    state: &AppState,
+    group_id: &str,
+    auth: &AuthContext,
+    body: &PostReactionBody,
+) -> Result<(), ApiError> {
+    let Some(message_id) = body.message_id else {
+        return Ok(());
+    };
+    let message = match state.storage.get_message(message_id).await {
+        Ok(message) => message,
+        Err(err) => {
+            warn!("reaction push: target message {message_id} lookup failed: {err}");
+            return Ok(());
+        }
+    };
+    if message.group_id != group_id || message.order != Some(body.chain_seq) {
+        warn!("reaction push: message {message_id} does not match group/chain_seq");
+        return Ok(());
+    }
+    let author = message.sender_wallet_addr.clone();
+    if author.eq_ignore_ascii_case(auth.sender_address.as_str()) {
+        return Ok(());
+    }
+
+    // Envelopes are keyed by a fresh event id so they never collide with message previews.
+    let event_id = uuid::Uuid::new_v4();
+    store_notification_envelopes(state, event_id, &body.notification_envelopes)?;
+
+    let push = state.push_service.clone();
+    let storage = state.storage.clone();
+    let membership = state.membership_store.clone();
+    let notification_push = state.notification_push.clone();
+    let push_visible_alerts = state.push_service.visible_alerts();
+    let group_id = group_id.to_string();
+    let reactor = auth.sender_address.to_string();
+    tokio::spawn(async move {
+        push.notify_new_message(
+            &storage,
+            &membership,
+            &notification_push,
+            push_visible_alerts,
+            &group_id,
+            event_id,
+            &reactor,
+            &crate::models::MessageAttribution::human_message(),
+            "reaction",
+            Some(author.as_str()),
+        )
+        .await;
+    });
+    Ok(())
 }
 
 pub async fn list_reactions(

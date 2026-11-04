@@ -33,6 +33,15 @@ async fn notify_test_message(
     storage: &Arc<dyn StorageAdapter>,
     membership: &Arc<dyn MembershipStore>,
 ) {
+    notify_test_message_to(push, storage, membership, None).await;
+}
+
+async fn notify_test_message_to(
+    push: &PushService,
+    storage: &Arc<dyn StorageAdapter>,
+    membership: &Arc<dyn MembershipStore>,
+    only_recipient: Option<&str>,
+) {
     let notification_push = NotificationPushStore::new();
     push
         .notify_new_message(
@@ -45,6 +54,7 @@ async fn notify_test_message(
             SENDER,
             &MessageAttribution::human_message(),
             "text",
+            only_recipient,
         )
         .await;
 }
@@ -209,6 +219,54 @@ async fn push_skipped_when_notification_mode_none() {
     let push = setup_push_service(&mock.uri()).await;
 
     notify_test_message(&push, &storage, &membership).await;
+
+    mock.verify().await;
+}
+
+#[tokio::test]
+async fn only_recipient_pushes_matching_member() {
+    let mock = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path_regex(r"/3/device/.*"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(1)
+        .mount(&mock)
+        .await;
+
+    let storage: Arc<dyn StorageAdapter> = Arc::new(InMemoryStorage::new());
+    storage
+        .upsert_push_token(sample_token("sandbox"))
+        .await
+        .unwrap();
+
+    let membership = setup_membership();
+    let push = setup_push_service(&mock.uri()).await;
+
+    notify_test_message_to(&push, &storage, &membership, Some(RECIPIENT)).await;
+
+    mock.verify().await;
+}
+
+#[tokio::test]
+async fn only_recipient_skips_other_members() {
+    let mock = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path_regex(r"/3/device/.*"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&mock)
+        .await;
+
+    let storage: Arc<dyn StorageAdapter> = Arc::new(InMemoryStorage::new());
+    storage
+        .upsert_push_token(sample_token("sandbox"))
+        .await
+        .unwrap();
+
+    let membership = setup_membership();
+    let push = setup_push_service(&mock.uri()).await;
+
+    notify_test_message_to(&push, &storage, &membership, Some("0xsomeoneelse")).await;
 
     mock.verify().await;
 }

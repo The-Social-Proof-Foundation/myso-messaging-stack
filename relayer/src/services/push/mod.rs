@@ -105,6 +105,8 @@ impl PushService {
     }
 
     /// Notify offline group members about a new message (metadata-only).
+    /// `only_recipient` narrows the fan-out to one member (reaction pushes go to the
+    /// reacted-to message's author only, like Messages tapbacks).
     pub async fn notify_new_message(
         &self,
         storage: &Arc<dyn StorageAdapter>,
@@ -116,6 +118,7 @@ impl PushService {
         sender: &str,
         attribution: &crate::models::MessageAttribution,
         message_kind: &str,
+        only_recipient: Option<&str>,
     ) {
         if !self.is_enabled() {
             return;
@@ -138,6 +141,7 @@ impl PushService {
         let recipients: Vec<String> = members
             .into_iter()
             .filter(|member| member != sender)
+            .filter(|member| only_recipient.map_or(true, |only| only.eq_ignore_ascii_case(member)))
             .collect();
 
         let presence = match storage
