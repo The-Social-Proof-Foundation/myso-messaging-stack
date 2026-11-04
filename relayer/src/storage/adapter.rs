@@ -301,6 +301,18 @@ pub trait StorageAdapter: Send + Sync {
         chain_seq: Option<i64>,
     ) -> StorageResult<Vec<ReactionEntry>>;
 
+    /// Inbox reaction activity for `viewer` in a group: unread qualifying reactions since
+    /// `after` and the newest one when it postdates the latest message. Storage without
+    /// reaction timestamps reports none.
+    async fn get_reaction_activity(
+        &self,
+        _group_id: &str,
+        _viewer: &str,
+        _after: chrono::DateTime<chrono::Utc>,
+    ) -> StorageResult<crate::models::ReactionActivity> {
+        Ok(crate::models::ReactionActivity::default())
+    }
+
     async fn set_pin_for_seq(&self, group_id: &str, chain_seq: i64, on: bool) -> StorageResult<()>;
 
     async fn list_pins(&self, group_id: &str) -> StorageResult<Vec<i64>>;

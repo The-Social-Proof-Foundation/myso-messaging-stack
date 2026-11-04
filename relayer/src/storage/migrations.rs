@@ -72,6 +72,10 @@ const MIGRATIONS: &[(i32, &str)] = &[
         21,
         include_str!("../../migrations/021_message_signature_version.sql"),
     ),
+    (
+        22,
+        include_str!("../../migrations/022_message_reactions_activity_index.sql"),
+    ),
 ];
 
 /// Strip line comments, then split into individual SQL statements.

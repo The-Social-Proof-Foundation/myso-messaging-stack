@@ -14,6 +14,29 @@ pub struct ReactionEntry {
     pub reactors: Vec<String>,
 }
 
+/// Reactions a member should see as inbox activity (same audience as reaction pushes:
+/// reactions by others on the member's messages, or by an author on their own message).
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct ReactionActivity {
+    /// Qualifying reactions created after the member's `reactions_after` watermark.
+    pub unread_count: i64,
+    /// Newest qualifying reaction, only when it is newer than the group's latest message
+    /// (it is the conversation's most recent activity → inbox subtitle).
+    pub latest: Option<LatestReaction>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct LatestReaction {
+    pub member: String,
+    pub emoji: String,
+    pub chain_seq: i64,
+    /// Reacted-to message, so clients can quote its (client-decrypted) text.
+    pub message_id: uuid::Uuid,
+    pub message_kind: String,
+    pub message_sender: String,
+    pub created_at_ms: i64,
+}
+
 /// One member's peer-visible delivery/read watermarks in a group.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct MemberReceipt {

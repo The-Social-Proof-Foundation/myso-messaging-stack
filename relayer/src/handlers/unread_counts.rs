@@ -32,6 +32,10 @@ pub struct UnreadCountsItem {
     /// (count everything).
     #[serde(default)]
     pub after_order: i64,
+    /// Opt-in: unix ms the client last saw this chat's reactions. When present the
+    /// response also carries reaction unread + the newest reaction (inbox subtitle).
+    #[serde(default)]
+    pub reactions_after_ms: Option<i64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -44,6 +48,10 @@ pub struct GroupActivityWire {
     pub group_id: String,
     pub latest_order: i64,
     pub unread_count: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reaction_unread_count: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub latest_reaction: Option<crate::models::LatestReaction>,
 }
 
 pub async fn post_unread_counts(
@@ -80,10 +88,27 @@ pub async fn post_unread_counts(
             .await
             .map_err(ApiError::from)?;
 
+        let reactions = match item.reactions_after_ms {
+            Some(ms) => {
+                let after = chrono::DateTime::from_timestamp_millis(ms.max(0))
+                    .unwrap_or_else(chrono::Utc::now);
+                Some(
+                    state
+                        .storage
+                        .get_reaction_activity(&item.group_id, &auth.sender_address, after)
+                        .await
+                        .map_err(ApiError::from)?,
+                )
+            }
+            None => None,
+        };
+
         items.push(GroupActivityWire {
             group_id: item.group_id.clone(),
             latest_order: activity.latest_order,
             unread_count: activity.unread_count,
+            reaction_unread_count: reactions.as_ref().map(|r| r.unread_count),
+            latest_reaction: reactions.and_then(|r| r.latest),
         });
     }
 

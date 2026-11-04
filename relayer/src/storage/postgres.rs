@@ -710,6 +710,72 @@ impl StorageAdapter for PostgresStorage {
         })
     }
 
+    async fn get_reaction_activity(
+        &self,
+        group_id: &str,
+        viewer: &str,
+        after: chrono::DateTime<chrono::Utc>,
+    ) -> StorageResult<crate::models::ReactionActivity> {
+        // Audience mirrors reaction pushes: someone else reacted to the viewer's message, or
+        // an author reacted to their own message. Reactions on deleted messages never count.
+        let row = sqlx::query(
+            r#"WITH qualifying AS (
+                   SELECT r.member_address, r.emoji, r.chain_seq, r.created_at,
+                          m.id AS message_id,
+                          COALESCE(m.kind, 'text') AS message_kind,
+                          m.sender_wallet_addr AS message_sender
+                   FROM message_reactions r
+                   JOIN messages m ON m.group_id = r.group_id AND m.order_num = r.chain_seq
+                   WHERE r.group_id = $1
+                     AND LOWER(r.member_address) <> LOWER($2)
+                     AND (LOWER(m.sender_wallet_addr) = LOWER($2)
+                          OR LOWER(m.sender_wallet_addr) = LOWER(r.member_address))
+                     AND m.sync_status NOT IN ('DELETE_PENDING', 'DELETED')
+               ),
+               latest_message AS (
+                   SELECT MAX(created_at) AS at FROM messages
+                   WHERE group_id = $1
+                     AND sync_status NOT IN ('DELETE_PENDING', 'DELETED')
+                     AND COALESCE(kind, 'text') <> 'system'
+               ),
+               newest AS (
+                   SELECT q.* FROM qualifying q, latest_message lm
+                   WHERE q.created_at > COALESCE(lm.at, 'epoch'::timestamptz)
+                   ORDER BY q.created_at DESC
+                   LIMIT 1
+               )
+               SELECT (SELECT COUNT(*) FROM qualifying WHERE created_at > $3) AS unread_count,
+                      n.member_address, n.emoji, n.chain_seq, n.created_at,
+                      n.message_id, n.message_kind, n.message_sender
+               FROM (SELECT 1) one
+               LEFT JOIN newest n ON TRUE"#,
+        )
+        .bind(group_id)
+        .bind(viewer)
+        .bind(after)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|e| StorageError::OperationFailed(e.to_string()))?;
+
+        let unread_count: i64 = row.try_get("unread_count").unwrap_or(0);
+        let latest = match row.try_get::<Option<String>, _>("member_address").ok().flatten() {
+            Some(member) => {
+                let created_at: chrono::DateTime<chrono::Utc> = row.get("created_at");
+                Some(crate::models::LatestReaction {
+                    member,
+                    emoji: row.get("emoji"),
+                    chain_seq: row.get("chain_seq"),
+                    message_id: row.get("message_id"),
+                    message_kind: row.get("message_kind"),
+                    message_sender: row.get("message_sender"),
+                    created_at_ms: created_at.timestamp_millis(),
+                })
+            }
+            None => None,
+        };
+        Ok(crate::models::ReactionActivity { unread_count, latest })
+    }
+
     async fn set_reaction(
         &self,
         group_id: &str,

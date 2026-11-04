@@ -23,7 +23,7 @@ pub use attachment::Attachment;
 pub use conversation_report::ConversationReport;
 pub use group_aux::{
     ConversationPreferences, ConversationPreferencesPatch, GroupActivity, GroupReceiptsResponse,
-    MemberReceipt, ReactionEntry, ReceiptStateResponse,
+    LatestReaction, MemberReceipt, ReactionActivity, ReactionEntry, ReceiptStateResponse,
 };
 #[allow(unused_imports)]
 pub use membership::GroupMembership;

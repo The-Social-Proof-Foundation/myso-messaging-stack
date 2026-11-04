@@ -197,6 +197,13 @@ async fn notify_reaction_author(
         body.notification_envelopes.len()
     );
 
+    // Wake open inboxes (user feed) so badges / subtitles refetch reaction activity now.
+    if let Ok(activity) = state.storage.get_group_activity(group_id, i64::MAX).await {
+        state
+            .realtime_hub
+            .publish_group_activity(group_id, activity.latest_order);
+    }
+
     // Envelopes are keyed by a fresh event id so they never collide with message previews.
     let event_id = uuid::Uuid::new_v4();
     store_notification_envelopes(state, event_id, &body.notification_envelopes)?;
