@@ -103,6 +103,7 @@ impl BeginChatNotify {
                     &MessageAttribution::human_message(),
                     "system",
                     None,
+                    None,
                 )
                 .await;
         });

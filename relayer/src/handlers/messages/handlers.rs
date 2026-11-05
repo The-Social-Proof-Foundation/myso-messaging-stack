@@ -415,6 +415,8 @@ pub async fn create_message(
     let push_sender = sender_address.clone();
     let push_message_id = created.id;
     let push_kind = kind.as_str().to_string();
+    // Same wire the client fetches, so the iOS extension can pre-decrypt it from the push.
+    let push_wire = serde_json::to_value(MessageResponse::from(created.clone())).ok();
     let skip_push = req.skip_push;
     tokio::spawn(async move {
         if skip_push {
@@ -431,6 +433,7 @@ pub async fn create_message(
             &push_attribution,
             &push_kind,
             None,
+            push_wire.as_ref(),
         )
         .await;
     });

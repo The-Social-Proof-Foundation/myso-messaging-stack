@@ -119,6 +119,7 @@ impl PushService {
         attribution: &crate::models::MessageAttribution,
         message_kind: &str,
         only_recipient: Option<&str>,
+        message_wire: Option<&serde_json::Value>,
     ) {
         if !self.is_enabled() {
             return;
@@ -249,6 +250,8 @@ impl PushService {
         let group_id_owned = group_id.to_string();
         let attribution = attribution.clone();
         let sender_wallet = sender.to_string();
+        // Shared across the fan-out; each job only borrows it.
+        let message_wire = message_wire.cloned().map(Arc::new);
 
         let outcomes: Vec<PushSendOutcome> = stream::iter(jobs)
             .map(|job| {
@@ -258,6 +261,7 @@ impl PushService {
                 let group_id = group_id_owned.clone();
                 let attribution = attribution.clone();
                 let sender_wallet = sender_wallet.clone();
+                let message_wire = message_wire.clone();
                 async move {
                     let encrypted_notification = job
                         .device_id
@@ -283,6 +287,7 @@ impl PushService {
                                 &sender_wallet,
                                 message_kind,
                                 encrypted_notification.as_deref(),
+                                message_wire.as_deref(),
                                 &attribution,
                             )
                             .await

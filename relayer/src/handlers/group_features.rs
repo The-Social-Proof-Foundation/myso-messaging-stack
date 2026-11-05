@@ -227,6 +227,7 @@ async fn notify_reaction_author(
             &crate::models::MessageAttribution::human_message(),
             "reaction",
             only_recipient.as_deref(),
+            None,
         )
         .await;
     });

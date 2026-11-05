@@ -113,12 +113,16 @@ pub fn new_message_payload_json(
     payload
 }
 
+/// APNs rejects payloads over 4096 bytes. Leave headroom for the `aps` block a2 rebuilds.
+const ALERT_PAYLOAD_BUDGET_BYTES: usize = 3800;
+
 pub fn new_message_alert_payload_json(
     group_id: &str,
     message_id: uuid::Uuid,
     sender_wallet: &str,
     message_kind: &str,
     encrypted_notification: Option<&str>,
+    message_wire: Option<&Value>,
     attribution: &MessageAttribution,
 ) -> Value {
     let mut payload = json!({
@@ -144,6 +148,19 @@ pub fn new_message_alert_payload_json(
     if let Some(principal) = &attribution.principal_owner {
         if let Some(obj) = payload.as_object_mut() {
             obj.insert("principal_owner".to_string(), json!(principal));
+        }
+    }
+    // Full message wire (still E2E ciphertext) so the iOS Notification Service Extension can
+    // decrypt with its cached group key and the chat opens without a fetch + decrypt.
+    // Best-effort: long messages that would overflow the APNs limit are left out.
+    if let Some(wire) = message_wire {
+        let base_len = serde_json::to_vec(&payload).map(|v| v.len()).unwrap_or(usize::MAX);
+        let wire_len = serde_json::to_vec(wire).map(|v| v.len()).unwrap_or(usize::MAX);
+        // `,"message":` separator overhead.
+        if base_len.saturating_add(wire_len).saturating_add(12) <= ALERT_PAYLOAD_BUDGET_BYTES {
+            if let Some(obj) = payload.as_object_mut() {
+                obj.insert("message".to_string(), wire.clone());
+            }
         }
     }
     payload
@@ -296,6 +313,7 @@ impl ApnsClient {
         sender_wallet: &str,
         message_kind: &str,
         encrypted_notification: Option<&str>,
+        message_wire: Option<&Value>,
         attribution: &crate::models::MessageAttribution,
     ) -> Result<(), ApnsSendError> {
         if !Self::is_ios_token(token) {
@@ -318,6 +336,7 @@ impl ApnsClient {
                     sender_wallet,
                     message_kind,
                     encrypted_notification,
+                    message_wire,
                     attribution,
                 )
                 .await
@@ -332,6 +351,7 @@ impl ApnsClient {
                     sender_wallet,
                     message_kind,
                     encrypted_notification,
+                    message_wire,
                     attribution,
                 )
                 .await
@@ -489,6 +509,7 @@ impl ApnsClient {
         sender_wallet: &str,
         message_kind: &str,
         encrypted_notification: Option<&str>,
+        message_wire: Option<&Value>,
         attribution: &crate::models::MessageAttribution,
     ) -> Result<(), ApnsSendError> {
         let body = new_message_alert_payload_json(
@@ -497,6 +518,7 @@ impl ApnsClient {
             sender_wallet,
             message_kind,
             encrypted_notification,
+            message_wire,
             attribution,
         );
         let mut payload = DefaultNotificationBuilder::new()
@@ -577,6 +599,7 @@ impl ApnsClient {
         sender_wallet: &str,
         message_kind: &str,
         encrypted_notification: Option<&str>,
+        message_wire: Option<&Value>,
         attribution: &crate::models::MessageAttribution,
     ) -> Result<(), ApnsSendError> {
         let url = format!(
@@ -590,6 +613,7 @@ impl ApnsClient {
             sender_wallet,
             message_kind,
             encrypted_notification,
+            message_wire,
             attribution,
         );
 
@@ -701,10 +725,43 @@ mod tests {
             "0xsender",
             "text",
             Some("abc123"),
+            None,
             &MessageAttribution::human_message(),
         );
         assert_eq!(payload["aps"]["mutable-content"], 1);
         assert!(payload.get("message_unread_count").is_none());
+        assert_eq!(payload["encrypted_notification"], "abc123");
+        assert!(payload.get("message").is_none());
+    }
+
+    #[test]
+    fn new_message_alert_payload_includes_small_wire() {
+        let wire = json!({ "message_id": "m1", "encrypted_text": "ab", "nonce": "cd" });
+        let payload = new_message_alert_payload_json(
+            "group-123",
+            uuid::Uuid::nil(),
+            "0xsender",
+            "text",
+            None,
+            Some(&wire),
+            &MessageAttribution::human_message(),
+        );
+        assert_eq!(payload["message"]["message_id"], "m1");
+    }
+
+    #[test]
+    fn new_message_alert_payload_drops_oversized_wire() {
+        let wire = json!({ "encrypted_text": "a".repeat(ALERT_PAYLOAD_BUDGET_BYTES) });
+        let payload = new_message_alert_payload_json(
+            "group-123",
+            uuid::Uuid::nil(),
+            "0xsender",
+            "text",
+            Some("abc123"),
+            Some(&wire),
+            &MessageAttribution::human_message(),
+        );
+        assert!(payload.get("message").is_none());
         assert_eq!(payload["encrypted_notification"], "abc123");
     }
 
