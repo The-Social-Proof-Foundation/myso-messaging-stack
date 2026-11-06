@@ -1,11 +1,16 @@
 # aws-sdk-s3 (R2 archive) requires rustc >= 1.94
 FROM rust:1.96-bookworm AS builder
 
-WORKDIR /app
+# Build context is the repo root: the relayer depends on the sibling `mls` crate (path = "../mls").
+#   docker build -f relayer/Dockerfile .
+WORKDIR /app/relayer
 
-COPY Cargo.toml Cargo.lock ./
-COPY migrations ./migrations
-COPY src ./src
+COPY mls/Cargo.toml mls/uniffi-bindgen.rs /app/mls/
+COPY mls/src /app/mls/src
+
+COPY relayer/Cargo.toml relayer/Cargo.lock ./
+COPY relayer/migrations ./migrations
+COPY relayer/src ./src
 
 RUN cargo build --release
 
@@ -18,7 +23,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-COPY --from=builder /app/target/release/messaging-relayer ./messaging-relayer
+COPY --from=builder /app/relayer/target/release/messaging-relayer ./messaging-relayer
 
 EXPOSE 3000
 

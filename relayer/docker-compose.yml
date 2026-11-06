@@ -1,6 +1,9 @@
 services:
   relayer:
-    build: .
+    build:
+      # Repo root, so the image can copy the sibling `mls` crate.
+      context: ..
+      dockerfile: relayer/Dockerfile
     ports:
       - "${PORT:-3000}:${PORT:-3000}"
     env_file:

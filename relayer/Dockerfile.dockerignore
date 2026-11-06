@@ -1,0 +1,24 @@
+# Used by BuildKit when building with -f relayer/Dockerfile from the repo root.
+# Only relayer/ and mls/ sources are needed.
+**/target/
+**/node_modules/
+**/.git/
+.github/
+chat-app/
+ts-sdks/
+move/
+docs/
+publish/
+file-storage-discovery-indexer/
+mls/npm/
+mls/pkg/
+mls/pkg-node/
+mls/scripts/
+relayer/e2e/
+relayer/docs/
+relayer/diagrams/
+relayer/tests/
+relayer/examples/
+**/.env*
+**/.DS_Store
+**/*.log
