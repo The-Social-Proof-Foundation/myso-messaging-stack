@@ -53,6 +53,7 @@ import {
   isPaymentRequiredError,
   isTransientMyDataError,
 } from '../lib/format-relayer-error';
+import { mlsErrorMessage, withMlsVerificationRetry } from '../lib/mls/mls-errors';
 import { isMessageRecoveryEnabled } from '../lib/messaging-client-factory';
 import { signAndExecuteTransactionAndWait } from '../lib/sign-and-wait';
 import {
@@ -80,6 +81,12 @@ import {
 import { invalidateGroupMembers } from '../lib/group-members-cache';
 import { isMembershipSystemType } from '../lib/system-message-copy';
 import { publishSidebarMessagePreview } from './useSidebarMessagePreviews';
+import {
+  applyPendingReactions,
+  foldTimeline,
+  mergeReactionMaps,
+} from '../lib/timeline-fold';
+import type { MessageEvent } from '@socialproof/myso-messaging-stack';
 import {
   isRelayerMembershipPending,
   waitForRelayerMembership,
@@ -113,6 +120,10 @@ export interface Message {
   paymentMetadata?: PaymentMetadata;
   /** Decrypted payment body (amount, asset, note/description). */
   payment?: PaymentPayload;
+  /** 2 = content envelope v2 (inner type, events and attachment keys inside the ciphertext). */
+  contentVersion?: 1 | 2;
+  /** v2 `event` rows only (never rendered; folded into reactions / edits / deletes). */
+  event?: MessageEvent;
 }
 
 export type MessageKindValue =
@@ -121,7 +132,8 @@ export type MessageKindValue =
   | 'post'
   | 'request_payment'
   | 'poll'
-  | 'token_transfer';
+  | 'token_transfer'
+  | 'event';
 
 const KNOWN_MESSAGE_KINDS: ReadonlySet<string> = new Set([
   'text',
@@ -130,6 +142,7 @@ const KNOWN_MESSAGE_KINDS: ReadonlySet<string> = new Set([
   'request_payment',
   'poll',
   'token_transfer',
+  'event',
 ]);
 
 /** Reaction entries per message, keyed by the message's relayer `order`. */
@@ -331,6 +344,8 @@ function localAttachmentHandles(files: AttachmentFile[]): AttachmentHandle[] {
         encryptedMetadata: '',
         metadataNonce: '',
       },
+      // Local bytes for the optimistic bubble; nothing is decrypted.
+      aadBound: false,
       data: async () => bytes,
     };
   });
@@ -471,9 +486,59 @@ export function useMessages(
   const isLoadingInitialRef = useRef(false);
   const isLoadingOlderRef = useRef(false);
   const isCatchingUpRef = useRef(false);
+  // Content envelope v2: does this group write encrypted events? (on-chain metadata flag)
+  const [writesV2, setWritesV2] = useState(false);
+  const writesV2Ref = useRef(false);
+  writesV2Ref.current = writesV2;
+  useEffect(() => {
+    let cancelled = false;
+    setWritesV2(false);
+    void client.messaging
+      .writesContentEnvelopeV2({ uuid })
+      .then((v2) => {
+        if (!cancelled) setWritesV2(v2);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [client, uuid]);
+  /** My v2 reaction toggles not yet echoed back as events: `order|emoji` → add. */
+  const [pendingV2Reactions, setPendingV2Reactions] = useState<Map<string, boolean>>(new Map());
+
+  // `messages` keeps v2 event rows (cursors / read marks need them); the UI gets the folded view.
+  const folded = useMemo(() => foldTimeline(messages), [messages]);
+  const visibleReactions = useMemo(
+    () =>
+      applyPendingReactions(
+        mergeReactionMaps(reactions, folded.reactionsByOrder),
+        pendingV2Reactions,
+        myAddress,
+      ) as MessageReactions,
+    [reactions, folded.reactionsByOrder, pendingV2Reactions, myAddress],
+  );
+  // Drop pending toggles once the folded (echoed) state agrees with them.
+  useEffect(() => {
+    if (pendingV2Reactions.size === 0) return;
+    let changed = false;
+    const next = new Map(pendingV2Reactions);
+    for (const [key, add] of pendingV2Reactions) {
+      const sep = key.indexOf('|');
+      const chips = folded.reactionsByOrder.get(Number(key.slice(0, sep))) ?? [];
+      const mine = chips
+        .find((c) => c.emoji === key.slice(sep + 1))
+        ?.reactors.includes(myAddress.toLowerCase());
+      if (Boolean(mine) === add) {
+        next.delete(key);
+        changed = true;
+      }
+    }
+    if (changed) setPendingV2Reactions(next);
+  }, [folded.reactionsByOrder, pendingV2Reactions, myAddress]);
+
   // Latest reactions for toggle decisions without re-creating callbacks.
-  const reactionsRef = useRef<MessageReactions>(reactions);
-  reactionsRef.current = reactions;
+  const reactionsRef = useRef<MessageReactions>(visibleReactions);
+  reactionsRef.current = visibleReactions;
   // Highest watermark already sent for *private* encrypted read-state.
   const lastSentReadUptoRef = useRef(0);
   /** Highest peer-visible read_upto successfully POSTed (separate from private read-state). */
@@ -982,7 +1047,8 @@ export function useMessages(
         if (cancelled || uuidRef.current !== uuid) return;
         console.error('Failed to load messages:', err);
         setError(
-          err instanceof Error ? err.message : 'Failed to load messages.',
+          mlsErrorMessage(err) ??
+            (err instanceof Error ? err.message : 'Failed to load messages.'),
         );
       } finally {
         if (!cancelled && uuidRef.current === uuid) {
@@ -1384,7 +1450,11 @@ export function useMessages(
       try {
         for (let attempt = 0; attempt < maxAttempts; attempt++) {
           try {
-            ({ messageId } = await client.messaging.sendMessage(sendPayload));
+            // MLS: if a member's device can't be verified yet, the SDK pauses the send (nothing
+            // goes out, nobody is removed); retry a few times before surfacing it.
+            ({ messageId } = await withMlsVerificationRetry(() =>
+              client.messaging.sendMessage(sendPayload),
+            ));
             break;
           } catch (err) {
             lastErr = err;
@@ -1501,7 +1571,10 @@ export function useMessages(
           return false;
         }
         console.error('Failed to send message:', err);
-        if (err instanceof BlockedMessagingError) {
+        const mlsCopy = mlsErrorMessage(err);
+        if (mlsCopy) {
+          setError(mlsCopy);
+        } else if (err instanceof BlockedMessagingError) {
           setError('You cannot message this user.');
         } else if (
           err instanceof RelayerTransportError ||
@@ -1635,7 +1708,47 @@ export function useMessages(
       const myAddress = signer.toMySoAddress();
       const entries = reactionsRef.current.get(order) ?? [];
       const entry = entries.find((e) => e.emoji === emoji);
-      const hasReacted = entry?.reactors.includes(myAddress) ?? false;
+      const hasReacted =
+        entry?.reactors.some((r) => r.toLowerCase() === myAddress.toLowerCase()) ?? false;
+
+      // v2: the reaction is an encrypted event addressed by message id; the relayer only learns
+      // that the target's author was notified.
+      if (writesV2Ref.current) {
+        const target = messagesRef.current.find(
+          (m) => m.order === order && m.kind !== 'event',
+        );
+        if (!target) return;
+        const key = `${order}|${emoji}`;
+        setPendingV2Reactions((prev) => new Map(prev).set(key, !hasReacted));
+        try {
+          const reaction = {
+            signer,
+            groupRef: { uuid: uuidRef.current },
+            order,
+            emoji,
+            messageId: target.messageId,
+            targetSenderAddress: target.senderAddress,
+          };
+          if (hasReacted) await client.messaging.removeReaction(reaction);
+          else await client.messaging.addReaction(reaction);
+        } catch (err) {
+          setPendingV2Reactions((prev) => {
+            const next = new Map(prev);
+            next.delete(key);
+            return next;
+          });
+          console.error('Failed to toggle reaction:', err);
+          setError(
+            err instanceof RelayerTransportError
+              ? formatRelayerError(err)
+              : err instanceof Error
+                ? err.message
+                : 'Failed to update reaction.',
+          );
+          throw err;
+        }
+        return;
+      }
 
       // Optimistic absolute-state update, shaped like a relayer event so the
       // eventual reaction.updated broadcast converges to the same state.
@@ -1926,13 +2039,13 @@ export function useMessages(
   }, [loading, uuid, postTransferMessage]);
 
   return {
-    messages,
+    messages: folded.visible,
     loading,
     sending,
     error,
     hasMore,
     loadingOlder,
-    reactions,
+    reactions: visibleReactions,
     typingMembers: [...typingUntil.keys()],
     onlineMembers,
     presenceRecords,

@@ -2,6 +2,7 @@
 // Copyright (c) The Social Proof Foundation, LLC.
 // SPDX-License-Identifier: Apache-2.0
 
+import type { EnvelopeAttachment, MessageEvent } from './content/envelope.js';
 import type { Signer } from '@socialproof/myso/cryptography';
 
 import type { Attachment, AttachmentFile, AttachmentHandle } from './attachments/types.js';
@@ -79,6 +80,15 @@ export interface DecryptedMessage extends MessageAttribution {
 	paymentMetadata?: PaymentMetadata;
 	/** Decrypted payment body (amount, asset, note/description). Undefined if malformed. */
 	payment?: PaymentPayload;
+	/** 1 = legacy plaintext, 2 = content envelope v2. */
+	contentVersion: 1 | 2;
+	/**
+	 * Set when `kind === 'event'`: a reaction / edit / delete / pin / poll vote. Events never belong in
+	 * the timeline; feed them to a {@link TimelineFold}.
+	 */
+	event?: MessageEvent;
+	/** Envelope v2 attachment references (keys included) — kept for edits and backups. */
+	envelopeAttachments?: EnvelopeAttachment[];
 }
 
 // ── Options types ────────────────────────────────────────────────
@@ -163,6 +173,8 @@ export interface GetMessagesResult {
 export interface EditAttachments {
 	/** The current attachments on the message (from {@link DecryptedMessage}). */
 	current: Attachment[];
+	/** v2 messages: the current envelope attachments (from {@link DecryptedMessage.envelopeAttachments}). */
+	currentEnvelope?: EnvelopeAttachment[];
 	/** Storage IDs of attachments to remove. */
 	remove?: string[];
 	/** New files to encrypt and upload. */
@@ -285,6 +297,19 @@ export interface ReactionOptions {
 	order: number;
 	/** The reaction emoji. Canonicalized (NFC) by the client before sending. */
 	emoji: string;
+	/** Target message id. Required in content-envelope-v2 groups (reactions are encrypted events). */
+	messageId?: string;
+	/** Target message author, pushed about the reaction (v2 groups). */
+	targetSenderAddress?: string;
+}
+
+/** Options for {@link MySoMessagingStackClient.sendEvent}. */
+export interface SendEventOptions {
+	signer: Signer;
+	groupRef: GroupRef;
+	event: MessageEvent;
+	/** Members to push about this event (e.g. the target's author). */
+	notifyWallets?: string[];
 }
 
 // ── Recovery ─────────────────────────────────────────────────────

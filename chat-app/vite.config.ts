@@ -58,14 +58,17 @@ export default defineConfig(({ mode }) => {
       }
       const connect=[...origins].join(' ');
       return [{tag:'meta',attrs:{'http-equiv':'Content-Security-Policy',content:
-        `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob: https:; connect-src 'self' ${connect}; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'`},injectTo:'head-prepend'}];
+        `default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob: https:; connect-src 'self' ${connect}; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'`},injectTo:'head-prepend'}];
     },
   };
 
   return {
     plugins: [tailwindcss(), react(), typegpu({}), vaultCsp],
     resolve: {
-      alias: [...memorySdkAliases, {find: '@', replacement: path.resolve(rootDir, 'src')}],
+      alias: [
+        ...memorySdkAliases,
+        {find: '@', replacement: path.resolve(rootDir, 'src')},
+      ],
       dedupe: sharedMySoDependencies,
     },
     optimizeDeps: {

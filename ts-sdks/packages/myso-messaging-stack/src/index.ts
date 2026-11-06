@@ -64,6 +64,8 @@ export * from './http/index.js';
 export * from './attachments/index.js';
 export * from './recovery/index.js';
 export * from './messaging-types.js';
+export * from './content/index.js';
+export * from './mls/index.js';
 export { emojiToStorage, storageToEmoji } from './emoji.js';
 export { MIST_PER_MYSO, mistToMyso, mysoToMist } from './coin.js';
 export {

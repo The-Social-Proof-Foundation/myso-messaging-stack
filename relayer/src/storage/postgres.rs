@@ -672,7 +672,7 @@ impl StorageAdapter for PostgresStorage {
                         COUNT(*) FILTER (
                           WHERE order_num > $2
                             AND sync_status NOT IN ('DELETE_PENDING', 'DELETED')
-                            AND COALESCE(kind, 'text') <> 'system'
+                            AND COALESCE(kind, 'text') NOT IN ('system', 'event', 'commit')
                         )
                         + COUNT(*) FILTER (
                           WHERE order_num > $2
@@ -684,7 +684,7 @@ impl StorageAdapter for PostgresStorage {
                             WHEN COUNT(*) FILTER (
                                    WHERE order_num > $2
                                      AND sync_status NOT IN ('DELETE_PENDING', 'DELETED')
-                                     AND COALESCE(kind, 'text') <> 'system'
+                                     AND COALESCE(kind, 'text') NOT IN ('system', 'event', 'commit')
                                  ) = 0
                              AND COUNT(*) FILTER (
                                    WHERE order_num > $2
@@ -736,7 +736,7 @@ impl StorageAdapter for PostgresStorage {
                    SELECT MAX(created_at) AS at FROM messages
                    WHERE group_id = $1
                      AND sync_status NOT IN ('DELETE_PENDING', 'DELETED')
-                     AND COALESCE(kind, 'text') <> 'system'
+                     AND COALESCE(kind, 'text') NOT IN ('system', 'event', 'commit')
                ),
                newest AS (
                    SELECT q.* FROM qualifying q, latest_message lm
@@ -773,7 +773,35 @@ impl StorageAdapter for PostgresStorage {
             }
             None => None,
         };
-        Ok(crate::models::ReactionActivity { unread_count, latest })
+        let mut activity = crate::models::ReactionActivity { unread_count, latest };
+        merge_event_notification_activity(&self.pool, group_id, viewer, after, &mut activity)
+            .await?;
+        Ok(activity)
+    }
+
+    async fn record_event_notifications(
+        &self,
+        group_id: &str,
+        event_id: Uuid,
+        event_order: i64,
+        sender: &str,
+        wallets: &[String],
+    ) -> StorageResult<()> {
+        for wallet in wallets {
+            sqlx::query(
+                "INSERT INTO event_notifications (group_id, wallet, event_id, event_order, sender)
+                 VALUES ($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING",
+            )
+            .bind(group_id)
+            .bind(wallet)
+            .bind(event_id)
+            .bind(event_order)
+            .bind(sender)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| StorageError::OperationFailed(e.to_string()))?;
+        }
+        Ok(())
     }
 
     async fn set_reaction(
@@ -1472,4 +1500,67 @@ mod tests {
         let err = map_db_error(sqlx::Error::RowNotFound);
         assert!(matches!(err, StorageError::OperationFailed(_)));
     }
+}
+
+/// Folds v2 encrypted-event pushes into `activity`: they count as unread reactions, and the newest
+/// one becomes `latest` (with `message_kind = "event"`, `emoji = ""`, `message_id` = the event row)
+/// when it is newer than both the latest message and any legacy reaction. Clients decrypt the
+/// event row to render it.
+async fn merge_event_notification_activity(
+    pool: &PgPool,
+    group_id: &str,
+    viewer: &str,
+    after: chrono::DateTime<chrono::Utc>,
+    activity: &mut crate::models::ReactionActivity,
+) -> StorageResult<()> {
+    let row = sqlx::query(
+        r#"WITH mine AS (
+               SELECT n.event_id, n.event_order, n.sender, n.created_at
+               FROM event_notifications n
+               JOIN messages m ON m.id = n.event_id
+               WHERE n.group_id = $1 AND LOWER(n.wallet) = LOWER($2)
+                 AND m.sync_status NOT IN ('DELETE_PENDING', 'DELETED')
+           ),
+           latest_message AS (
+               SELECT MAX(created_at) AS at FROM messages
+               WHERE group_id = $1
+                 AND sync_status NOT IN ('DELETE_PENDING', 'DELETED')
+                 AND COALESCE(kind, 'text') NOT IN ('system', 'event', 'commit')
+           ),
+           newest AS (
+               SELECT mine.* FROM mine, latest_message lm
+               WHERE mine.created_at > COALESCE(lm.at, 'epoch'::timestamptz)
+               ORDER BY mine.created_at DESC LIMIT 1
+           )
+           SELECT (SELECT COUNT(*) FROM mine WHERE created_at > $3) AS unread_count,
+                  n.event_id, n.event_order, n.sender, n.created_at
+           FROM (SELECT 1) one LEFT JOIN newest n ON TRUE"#,
+    )
+    .bind(group_id)
+    .bind(viewer)
+    .bind(after)
+    .fetch_one(pool)
+    .await
+    .map_err(|e| StorageError::OperationFailed(e.to_string()))?;
+
+    activity.unread_count += row.try_get::<i64, _>("unread_count").unwrap_or(0);
+    if let Some(event_id) = row.try_get::<Option<Uuid>, _>("event_id").ok().flatten() {
+        let created_at: chrono::DateTime<chrono::Utc> = row.get("created_at");
+        let newer = activity
+            .latest
+            .as_ref()
+            .map_or(true, |l| created_at.timestamp_millis() > l.created_at_ms);
+        if newer {
+            activity.latest = Some(crate::models::LatestReaction {
+                member: row.get("sender"),
+                emoji: String::new(),
+                chain_seq: row.get("event_order"),
+                message_id: event_id,
+                message_kind: "event".to_string(),
+                message_sender: viewer.to_string(),
+                created_at_ms: created_at.timestamp_millis(),
+            });
+        }
+    }
+    Ok(())
 }

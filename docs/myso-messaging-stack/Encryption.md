@@ -148,6 +148,14 @@ Decrypted DEKs are cached in-memory (via `ClientCache` backed by a `TtlMap`), ke
 
 Each file attachment is encrypted with the same group DEK but a separate random nonce. File metadata (fileName, mimeType, fileSize) is encrypted separately with its own nonce. See [Attachments](./Attachments.md) for the full attachment encryption model.
 
+Attachment ciphertexts carry **attachment AAD v1**: the message AAD followed by a role label,
+
+```
+[groupId (32)][keyVersion (8 LE)][senderAddress (32)] || UTF-8("myso-attachment-v1:" + role)
+```
+
+where `role` is `data` (file bytes), `meta` (metadata JSON) or `poster` (iOS video poster frame). This binds each blob to the message that carries it, so a member cannot re-post another member's attachment as their own. Readers try v1 first and fall back to legacy no-AAD ciphertexts. Whichever mode the metadata opens under is the only mode used for that attachment's bytes (`AttachmentHandle.aadBound`), so a bound blob can never be opened as legacy.
+
 ## Nonce Handling
 
 AES-GCM uses random 96-bit nonces. NIST SP 800-38D recommends at most 2^32 (~4 billion) encryptions per key to keep the nonce collision probability at or below 2^-32. A nonce collision under the same key is catastrophic: it leaks the XOR of two plaintexts and breaks authentication. In practice this limit is extremely high and unlikely to be reached in typical messaging usage before key rotation.

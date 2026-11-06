@@ -13,6 +13,13 @@ pub enum MessageKind {
     RequestPayment,
     Poll,
     TokenTransfer,
+    /// Content envelope v2: any timeline message; the inner type is inside the ciphertext.
+    Message,
+    /// Content envelope v2: reaction / edit / delete / pin / poll vote; type and target are
+    /// inside the ciphertext.
+    Event,
+    /// MLS commit (E2EE M4): ordered in the message log, one per epoch, never a timeline row.
+    Commit,
 }
 
 impl MessageKind {
@@ -24,6 +31,9 @@ impl MessageKind {
             Self::RequestPayment => "request_payment",
             Self::Poll => "poll",
             Self::TokenTransfer => "token_transfer",
+            Self::Message => "message",
+            Self::Event => "event",
+            Self::Commit => "commit",
         }
     }
 
@@ -35,6 +45,9 @@ impl MessageKind {
             "request_payment" => Self::RequestPayment,
             "poll" => Self::Poll,
             "token_transfer" => Self::TokenTransfer,
+            "message" => Self::Message,
+            "event" => Self::Event,
+            "commit" => Self::Commit,
             _ => Self::Text,
         }
     }
@@ -47,6 +60,9 @@ impl MessageKind {
             "request_payment" => Some(Self::RequestPayment),
             "poll" => Some(Self::Poll),
             "token_transfer" => Some(Self::TokenTransfer),
+            "message" => Some(Self::Message),
+            "event" => Some(Self::Event),
+            "commit" => Some(Self::Commit),
             _ => None,
         }
     }
@@ -59,8 +75,25 @@ impl MessageKind {
     pub fn is_encrypted_client_kind(self) -> bool {
         matches!(
             self,
-            Self::Text | Self::Post | Self::RequestPayment | Self::Poll | Self::TokenTransfer
+            Self::Text
+                | Self::Post
+                | Self::RequestPayment
+                | Self::Poll
+                | Self::TokenTransfer
+                | Self::Message
+                | Self::Event
+                | Self::Commit
         )
+    }
+
+    /// Content envelope v2 opaque kinds: no relayer-visible attachments or metadata allowed.
+    pub fn is_opaque_v2_kind(self) -> bool {
+        matches!(self, Self::Message | Self::Event | Self::Commit)
+    }
+
+    /// Rows that are not timeline messages (encrypted events, MLS commits).
+    pub fn is_control(self) -> bool {
+        matches!(self, Self::Event | Self::Commit)
     }
 
     /// 1:1 DM-only payment kinds. The relayer rejects these in groups with more than two members.

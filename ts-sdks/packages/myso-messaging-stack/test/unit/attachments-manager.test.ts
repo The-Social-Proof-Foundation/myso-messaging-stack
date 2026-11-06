@@ -10,7 +10,10 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { AttachmentsManager } from '../../src/attachments/attachments-manager.js';
 import type { AttachmentFile } from '../../src/attachments/types.js';
-import { EnvelopeEncryption } from '../../src/encryption/envelope-encryption.js';
+import {
+	EnvelopeEncryption,
+	buildAttachmentAad,
+} from '../../src/encryption/envelope-encryption.js';
 import { MySoMessagingStackClientError } from '../../src/error.js';
 import type {
 	StorageAdapter,
@@ -466,6 +469,94 @@ describe('AttachmentsManager', () => {
 			const handles = await manager.resolve(attachments, { uuid }, 0n);
 
 			expect(handles[0].extras).toEqual(expect.objectContaining({ customTag: 'important' }));
+		});
+	});
+	describe('attachment AAD v1', () => {
+		const groupId = '0x' + 'ab'.repeat(32);
+		const sender = '0x' + 'cd'.repeat(32);
+		const other = '0x' + 'ef'.repeat(32);
+
+		it('builds message AAD + role label (parity vector for iOS)', () => {
+			const aad = buildAttachmentAad({ groupId, keyVersion: 3n, senderAddress: sender, role: 'meta' });
+			const expectedHex =
+				'ab'.repeat(32) +
+				'0300000000000000' +
+				'cd'.repeat(32) +
+				Buffer.from('myso-attachment-v1:meta', 'utf8').toString('hex');
+			expect(Buffer.from(aad).toString('hex')).toBe(expectedHex);
+		});
+
+		it('round-trips bound attachments and marks them aadBound', async () => {
+			const encryption = createEnvelopeEncryption();
+			const { uuid } = await encryption.generateGroupDEK();
+			const manager = new AttachmentsManager(encryption, { storageAdapter: createMockStorageAdapter() });
+
+			const attachments = await manager.upload([makeFile('a.txt', 'hello')], { uuid }, undefined, {
+				groupId,
+				keyVersion: 0n,
+				senderAddress: sender,
+			});
+			const handles = await manager.resolve(attachments, { uuid }, 0n, undefined, {
+				groupId,
+				senderAddress: sender,
+			});
+
+			expect(handles[0].aadBound).toBe(true);
+			expect(new TextDecoder().decode(await handles[0].data())).toBe('hello');
+		});
+
+		it('still opens legacy (no-AAD) attachments when a binding is supplied', async () => {
+			const encryption = createEnvelopeEncryption();
+			const { uuid } = await encryption.generateGroupDEK();
+			const manager = new AttachmentsManager(encryption, { storageAdapter: createMockStorageAdapter() });
+
+			const legacy = await manager.upload([makeFile('old.txt', 'legacy')], { uuid });
+			const handles = await manager.resolve(legacy, { uuid }, 0n, undefined, {
+				groupId,
+				senderAddress: sender,
+			});
+
+			expect(handles[0].aadBound).toBe(false);
+			expect(new TextDecoder().decode(await handles[0].data())).toBe('legacy');
+		});
+
+		it('rejects a bound attachment re-posted under a different sender', async () => {
+			const encryption = createEnvelopeEncryption();
+			const { uuid } = await encryption.generateGroupDEK();
+			const manager = new AttachmentsManager(encryption, { storageAdapter: createMockStorageAdapter() });
+
+			const attachments = await manager.upload([makeFile('a.txt', 'mine')], { uuid }, undefined, {
+				groupId,
+				keyVersion: 0n,
+				senderAddress: sender,
+			});
+
+			await expect(
+				manager.resolve(attachments, { uuid }, 0n, undefined, { groupId, senderAddress: other }),
+			).rejects.toThrow();
+		});
+
+		it('never decrypts bound file bytes without AAD (no downgrade via swapped metadata)', async () => {
+			const encryption = createEnvelopeEncryption();
+			const { uuid } = await encryption.generateGroupDEK();
+			const storage = createMockStorageAdapter();
+			const manager = new AttachmentsManager(encryption, { storageAdapter: storage });
+
+			// Bound file bytes paired with a legacy metadata blob.
+			const [bound] = await manager.upload([makeFile('a.txt', 'secret')], { uuid }, undefined, {
+				groupId,
+				keyVersion: 0n,
+				senderAddress: sender,
+			});
+			const [legacy] = await manager.upload([makeFile('b.txt', 'x')], { uuid });
+			const mixed = { ...bound, encryptedMetadata: legacy.encryptedMetadata, metadataNonce: legacy.metadataNonce };
+
+			const [handle] = await manager.resolve([mixed], { uuid }, 0n, undefined, {
+				groupId,
+				senderAddress: other,
+			});
+			expect(handle.aadBound).toBe(false);
+			await expect(handle.data()).rejects.toThrow();
 		});
 	});
 });

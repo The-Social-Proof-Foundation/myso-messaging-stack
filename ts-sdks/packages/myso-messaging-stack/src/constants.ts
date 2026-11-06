@@ -46,6 +46,12 @@ export const GROUP_MANAGER_DERIVATION_KEY = 'group_manager';
 export const GROUP_HANDLE_REGISTRY_DERIVATION_KEY = 'group_handle_registry';
 
 /**
+ * Derivation key for `MlsDeviceRegistry` (myso-core `messaging::mls_device_registry`) from
+ * `MessagingNamespace`. Must match Move `MLS_DEVICE_REGISTRY_DERIVATION_KEY`.
+ */
+export const MLS_DEVICE_REGISTRY_DERIVATION_KEY = 'mls_device_registry';
+
+/**
  * Derivation key for `PaidMessagingRegistry` from `MessagingNamespace`.
  * Must match Move `PAID_MESSAGING_REGISTRY_DERIVATION_KEY` (`b"paid_messaging_registry"`).
  */

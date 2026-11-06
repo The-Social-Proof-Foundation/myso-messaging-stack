@@ -174,6 +174,17 @@ export interface CreateGroupCallOptions {
 	/** Human-readable group name. */
 	name: string;
 	/**
+	 * Store the name encrypted with the group DEK (`enc:v1:…`, E2EE M2) instead of in cleartext
+	 * on-chain. Only for groups whose readers support it (content envelope v2 clients).
+	 */
+	encryptName?: boolean;
+	/**
+	 * Group metadata `data` entries written in the same transaction that creates the group (e.g.
+	 * `{ e2ee: 'mls1' }`), so the group never exists without them. The creator holds
+	 * `MetadataAdmin`, so this needs no extra permission.
+	 */
+	groupData?: Record<string, string>;
+	/**
 	 * Addresses to grant MessagingReader permission on creation.
 	 * The creator is automatically granted all permissions and should not be included.
 	 */
@@ -182,6 +193,11 @@ export interface CreateGroupCallOptions {
 
 /** Options for creating an agent-associated messaging group. */
 export interface CreateAgentGroupCallOptions extends CreateGroupCallOptions {
+	/**
+	 * Encryption protocol written into the group's metadata while it is created (`mls1` for every
+	 * new chat). Uses `create_agent_group_with_e2ee`: the agent sender has no `MetadataAdmin`.
+	 */
+	e2ee?: 'v2' | 'mls1';
 	/** Shared Platform object id for capability / join checks. */
 	platformId: string;
 	/** Creator MemoryAccount shared object id. */
@@ -307,8 +323,8 @@ export interface SetGroupNameCallOptions {
 
 /** Options for inserting a key-value pair into group metadata (call-level, no signer). */
 export interface InsertGroupDataCallOptions {
-	/** Object ID of the PermissionedGroup<Messaging> */
-	groupId: string;
+	/** Object ID of the PermissionedGroup<Messaging>, or the group result of a create call in the same transaction */
+	groupId: string | TransactionArgument;
 	/** The metadata key */
 	key: string;
 	/** The metadata value */

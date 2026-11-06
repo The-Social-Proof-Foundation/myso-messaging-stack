@@ -43,6 +43,8 @@ export interface OpenPaidDmOptions {
 export interface OpenAgentPaidDmOptions extends OpenPaidDmOptions {
 	platformId: string;
 	memoryAccountId: string;
+	/** Encryption protocol written during creation (`mls1` for every new chat). */
+	e2ee?: 'v2' | 'mls1';
 }
 
 /**
@@ -54,6 +56,8 @@ export interface OpenAgentPaidDmOptions extends OpenPaidDmOptions {
 export interface BuildOpenPaidDmOptions {
 	/** Transaction sender (the group creator). */
 	sender: string;
+	/** Group metadata `data` written in this transaction before sharing (e.g. `{ e2ee: 'mls1' }`). */
+	groupData?: Record<string, string>;
 	recipient: string;
 	escrowAmount: bigint;
 	/** Coin object ID to fund the escrow. When omitted, split from gas. */
@@ -288,6 +292,9 @@ export class PaidMessagingClient {
 				nonce: options.nonce ?? randomNonce(),
 			}),
 		);
+		for (const [key, value] of Object.entries(options.groupData ?? {})) {
+			transaction.add(this.#messaging.call.insertGroupData({ groupId: created[0]!, key, value }));
+		}
 		transaction.add(
 			this.#messaging.call.shareGroup({
 				group: created[0],
@@ -405,6 +412,7 @@ export class PaidMessagingClient {
 				platformId: options.platformId,
 				creatorMemoryAccountId: options.memoryAccountId,
 				crossPrincipalPeerMemoryAccountId: options.memoryAccountId,
+				...(options.e2ee && { e2ee: options.e2ee }),
 			}),
 		);
 		tx.add(

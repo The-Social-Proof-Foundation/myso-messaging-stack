@@ -272,7 +272,7 @@ Security: plaintext lives only in RAM (`MessagingPlaintextCache`); DEKs are RAM-
 
 ### SQLite ciphertext store + RAM plaintext (Signal-like load path)
 
-Wire ciphertext + metadata persist in SQLite under Application Support (`MessagingMessages/{wallet}/messages.sqlite`): `PRAGMA journal_mode=WAL`, file protection `completeUntilFirstUserAuthentication`. **No plaintext column.** After decrypt, bodies go to `MessagingPlaintextCache` (LRU ~20 groups × ~150 msgs). DEKs: RAM → Keychain-wrapped (`messagingWrappedDEK`, sealed with `messagingVaultKey`) → MyData last resort. Reaction absolute-state rows (`reactions` table: order/emoji/count/reactors) are public metadata and cached for instant chip paint. Inbox chrome (preview text) is vault-sealed on disk — not UserDefaults cleartext. Legacy `.json.sealed` plaintext blobs migrate into SQLite once then delete. Caps ~150 messages/group. Attachment **bytes** stay session/RAM. Logout wipes DB dir + vault key + RAM caches.
+Wire ciphertext + metadata persist in SQLite under Application Support (`MessagingMessages/{wallet}/messages.sqlite`): `PRAGMA journal_mode=WAL`, file protection `completeUntilFirstUserAuthentication`. **No plaintext column.** After decrypt, bodies go to `MessagingPlaintextCache` (LRU ~20 groups × ~150 msgs). DEKs: RAM → Keychain-wrapped (`messagingWrappedDEK`, sealed with `messagingVaultKey`) → MyData last resort. Reaction absolute-state rows (`reactions` table: order/emoji/count/reactors) are public metadata and cached for instant chip paint. Inbox chrome (preview text) is vault-sealed on disk — not UserDefaults cleartext (web parity: `chat-app/src/lib/sealed-preview-store.ts`, non-extractable IndexedDB key, wiped on logout). Legacy `.json.sealed` plaintext blobs migrate into SQLite once then delete. Caps ~150 messages/group. Attachment **bytes** stay session/RAM. Logout wipes DB dir + vault key + RAM caches.
 
 Open thread: hydrate SQLite tip page + cached reactions → local AES for missing plaintext (Keychain DEK, before tip REST) → paint → `fetchMessages` + `listReactions` in parallel → decrypt only still-missing ids → write ciphertext + reaction rows + RAM cache. Gap-fill / catch-up never block first message or chip paint. Inbox warm is incremental (skip groups already at tip order).
 
@@ -327,3 +327,21 @@ Protocol source of truth: [`PaidMessaging.md`](./PaidMessaging.md). Follow exemp
 Unread badges stay on the relayer path (not product backend). Merge with likes/comments badges only at the UI if needed.
 
 Mirror the TypeScript SDK contracts in `auth-headers.ts` / `http-transport.ts` / `ws-transport.ts`. Ensure the messaging-relayer binary includes `/v1/users/ws` (stale release builds previously 401'd browser clients).
+
+
+### Notification key certificates & attachment AAD
+
+- **Registration** (`DeviceNotificationKeyService.ensureRegistered`): every `PUT /v1/devices/notification-keys` carries `key_certificate`, signed via `MessagingRelayerAuth.signDeviceKeyCertificate`. That is the same signer as request auth: wallet ed25519, or the full zkLogin signature with `public_key = 05`. The relayer verifies it and serves it back on `GET /v1/groups/:id/notification-keys`. Re-registration (foreground, at most every 30 min) re-signs, so zkLogin certs carry a live proof.
+- **Sending** (`NotificationPreviewCrypto.buildEnvelopes`): only seals to keys where `DeviceNotificationKeyCertificate.isTrusted` passes. Verified `(wallet, device, key)` triples are pinned in UserDefaults, so a cert keeps working after its zkLogin epoch window closes. Unsigned keys (older builds) get no envelope and fall back to "New message". Recipients are also filtered to wallets holding `MessagingReader` on-chain (`MessagingPermissionsService.onChainReaders`: fullnode RPC, 60 s cache, fail closed), so the relayer can't add a wallet of its own as a fake recipient.
+- **Deploy order:** relayer first (migration `023`), then clients. An older relayer drops the certificate, and new senders would then seal to nobody.
+- **Attachments:** `encryptAttachment` / `encryptBlob` take `senderAddress` and seal with `MessagingAttachmentAAD` (`data` / `meta` / `poster`). `decryptOneAttachmentMeta` tries v1 first, then legacy, and records `aadSenderAddress`. File bytes and the poster then open only under the same binding.
+
+### Content envelope v2 (M1)
+
+Spec: [E2EE-Protocol-v2.md](./E2EE-Protocol-v2.md). `MessagingContentEnvelope.swift` (app + NSE) holds the codec, Padmé padding, per-file crypto (`MessagingFileCryptoV2`) and `MessagingTimelineFold`.
+
+- **Flag:** `MessagingGroupMetadata.writesContentEnvelopeV2(groupId:)` reads on-chain `data["e2ee"]` (5-minute cache). New groups set it only when Info.plist `E2EE_V2_NEW_GROUPS` is `YES`.
+- **Decrypt:** `MessagingContentEnvelope.plaintextString(from:)` keeps the `String` cache contract: v1 text, a v2 message's text, or a sentinel-prefixed event JSON. `MessageKind` gained `.message` / `.event` and decodes unknown kinds as `.text`. Older builds fail whole-page decodes on unknown kinds, so this build must ship before any group writes v2.
+- **Thread:** `messages.didSet` moves `.event` rows to `v2EventRows`. They are decrypted, sender-verified and folded into `v2ReactionEntries` (merged into `reactions`), edits (re-applied on every `plaintexts` change) and deletes. Event rows persist with the thread snapshot.
+- **Send:** `encryptMessage` wraps text in an envelope and returns `wireKind`. With attachments, files are sealed with per-file keys and uploaded first (`encryptAndPostMessageOnceV2`). Reactions, edits and deletes go through `sendV2Event`, which pushes only `notify_wallets` (a reaction's author).
+- **Inbox:** event rows are never tips. v2 reaction activity (`message_kind == "event"`) is resolved by decrypting that one event row.

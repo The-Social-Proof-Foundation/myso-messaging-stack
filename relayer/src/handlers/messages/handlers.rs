@@ -97,7 +97,7 @@ pub async fn create_message(
     let kind_str = req.kind.as_deref().unwrap_or("text");
     let kind = MessageKind::parse_client_kind(kind_str).ok_or_else(|| {
         ApiError::BadRequest(format!(
-            "Invalid message kind '{}': expected text, post, request_payment, poll, or token_transfer",
+            "Invalid message kind '{}': expected text, post, request_payment, poll, token_transfer, message, or event",
             kind_str
         ))
     })?;
@@ -171,6 +171,50 @@ pub async fn create_message(
     )?;
 
     let attachments = decode_attachments(req.attachments)?;
+
+    // Content envelope v2 rows keep attachments and metadata inside the ciphertext.
+    if kind.is_opaque_v2_kind() {
+        if !attachments.is_empty() || req.metadata.is_some() {
+            return Err(ApiError::BadRequest(
+                "message/event rows carry attachments and metadata inside the encrypted envelope"
+                    .to_string(),
+            ));
+        }
+    }
+    // MLS commits: the relayer reads the cleartext header and accepts exactly one commit per
+    // epoch (first wins). Losers get 409, catch up, and retry.
+    if kind == MessageKind::Commit {
+        match myso_mls::inspect(&encrypted_msg) {
+            Ok(myso_mls::MessageInfo::Commit { group_id, epoch })
+                if group_id == req.group_id.as_bytes() =>
+            {
+                if !state
+                    .mls
+                    .try_advance_epoch(&req.group_id, epoch)
+                    .await
+                    .map_err(|e| ApiError::Internal(format!("mls epoch: {e}")))?
+                {
+                    let current = state.mls.current_epoch(&req.group_id).await.unwrap_or(0);
+                    return Err(ApiError::Conflict(format!(
+                        "stale MLS commit for epoch {epoch}; group is at epoch {current}"
+                    )));
+                }
+            }
+            // Proposals (e.g. a device removing itself on logout) ride the same control rows;
+            // they don't move the epoch — the next commit does.
+            Ok(myso_mls::MessageInfo::Proposal { group_id, .. }) if group_id == req.group_id.as_bytes() => {}
+            _ => {
+                return Err(ApiError::BadRequest(
+                    "commit rows must carry an MLS commit for this group".to_string(),
+                ))
+            }
+        }
+    }
+    if kind != MessageKind::Event && !req.notify_wallets.is_empty() {
+        return Err(ApiError::BadRequest(
+            "notify_wallets is only valid for event rows".to_string(),
+        ));
+    }
 
     // Verify per-message signature over canonical content (includes kind;
     // post / token_transfer bind a cleartext reference + idempotency_key).
@@ -404,6 +448,89 @@ pub async fn create_message(
         }
     }
 
+    // Encrypted events push only the members the sender named (e.g. a reaction's author), never
+    // the whole group. The relayer records who was notified, not what happened.
+    if created.kind == MessageKind::Commit {
+        // Commits wake open clients (realtime above) but never push or count as unread.
+        let _ = state.sync_notifier.send(());
+        return Ok((
+            StatusCode::CREATED,
+            Json(CreateMessageResponse {
+                message_id: created.id,
+            }),
+        ));
+    }
+
+    if created.kind == MessageKind::Event {
+        let members = state.membership_store.list_member_addresses(&group_id);
+        let mut targets: Vec<String> = req
+            .notify_wallets
+            .iter()
+            .map(|w| w.trim().to_ascii_lowercase())
+            .filter(|w| !w.eq_ignore_ascii_case(&sender_address))
+            .filter(|w| members.iter().any(|m| m.eq_ignore_ascii_case(w)))
+            .collect();
+        targets.sort();
+        targets.dedup();
+        if !targets.is_empty() {
+            if let Err(err) = state
+                .storage
+                .record_event_notifications(
+                    &group_id,
+                    created.id,
+                    created.order.unwrap_or(0),
+                    &sender_address,
+                    &targets,
+                )
+                .await
+            {
+                tracing::warn!("event notification bookkeeping failed: {err}");
+            }
+            // Wake open inboxes so reaction badges refetch now.
+            if let Ok(activity) = state.storage.get_group_activity(&group_id, i64::MAX).await {
+                state
+                    .realtime_hub
+                    .publish_group_activity(&group_id, activity.latest_order);
+            }
+        }
+        if !req.skip_push {
+            for target in targets {
+                let push = state.push_service.clone();
+                let storage = state.storage.clone();
+                let membership = state.membership_store.clone();
+                let notification_push = state.notification_push.clone();
+                let visible = state.push_service.visible_alerts();
+                let attribution = created.attribution.clone();
+                let group = group_id.clone();
+                let sender = sender_address.clone();
+                let event_id = created.id;
+                tokio::spawn(async move {
+                    push.notify_new_message(
+                        &storage,
+                        &membership,
+                        &notification_push,
+                        visible,
+                        &group,
+                        event_id,
+                        &sender,
+                        &attribution,
+                        "event",
+                        Some(target.as_str()),
+                        None,
+                    )
+                    .await;
+                });
+            }
+        }
+        let _ = state.sync_notifier.send(());
+        return Ok((
+            StatusCode::CREATED,
+            Json(CreateMessageResponse {
+                message_id: created.id,
+            }),
+        ));
+    }
+
     // Notify push worker for offline group members (metadata-only APNs).
     let push = state.push_service.clone();
     let storage = state.storage.clone();
@@ -488,27 +615,16 @@ pub async fn get_messages(
         .unwrap_or(DEFAULT_PAGE_LIMIT)
         .min(MAX_PAGE_LIMIT);
 
-    // Fetch one extra to determine hasNext.
-    // Storage returns ascending order (oldest → newest) within the page window.
-    // - after_order set: oldest-first of newer messages → keep the first `limit`
-    // - otherwise (initial / before_order): newest window → keep the last `limit`
-    //   so the absolute newest message is never dropped when trimming hasNext.
-    let fetched = state
-        .storage
-        .get_messages_by_group(&group_id, query.after_order, query.before_order, limit + 1)
-        .await?;
-
-    let has_next = fetched.len() > limit;
-    let page = if query.after_order.is_some() {
-        fetched.into_iter().take(limit).collect::<Vec<_>>()
-    } else {
-        let skip = fetched.len().saturating_sub(limit);
-        fetched
-            .into_iter()
-            .skip(skip)
-            .take(limit)
-            .collect::<Vec<_>>()
-    };
+    // `limit` counts timeline rows only; encrypted `event` rows inside the same order window
+    // ride along so a burst of reactions never hides messages (see paging.rs).
+    let (page, has_next) = super::paging::fetch_page(
+        state.storage.as_ref(),
+        &group_id,
+        query.after_order,
+        query.before_order,
+        limit,
+    )
+    .await?;
     let messages: Vec<MessageResponse> = page.into_iter().map(|m| m.into()).collect();
 
     let response = MessagesListResponse { messages, has_next };

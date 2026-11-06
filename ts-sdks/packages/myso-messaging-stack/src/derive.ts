@@ -7,6 +7,7 @@ import { deriveObjectID } from '@socialproof/myso/utils';
 
 import {
 	GROUP_HANDLE_REGISTRY_DERIVATION_KEY,
+	MLS_DEVICE_REGISTRY_DERIVATION_KEY,
 	GROUP_LEAVER_DERIVATION_KEY,
 	GROUP_MANAGER_DERIVATION_KEY,
 	PAID_MESSAGING_REGISTRY_DERIVATION_KEY,
@@ -133,6 +134,16 @@ export class MySoMessagingStackDerive {
 	 */
 	groupHandleRegistryId(): string {
 		const key = bcs.string().serialize(GROUP_HANDLE_REGISTRY_DERIVATION_KEY).toBytes();
+		return deriveObjectID(this.#packageConfig.namespaceId, '0x1::string::String', key);
+	}
+
+	/**
+	 * Derive the `MlsDeviceRegistry` singleton object ID (E2EE device authority keys).
+	 *
+	 * Matches `mls_device_registry::new` derivation from `MessagingNamespace`.
+	 */
+	mlsDeviceRegistryId(): string {
+		const key = bcs.string().serialize(MLS_DEVICE_REGISTRY_DERIVATION_KEY).toBytes();
 		return deriveObjectID(this.#packageConfig.namespaceId, '0x1::string::String', key);
 	}
 

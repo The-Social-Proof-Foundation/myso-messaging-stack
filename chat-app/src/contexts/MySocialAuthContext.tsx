@@ -49,6 +49,9 @@ import {
   resolveOAuthSubForKeypair,
   shouldUseRedirectAuth,
 } from '../lib/auth-utils';
+import { clearSealedPreviews } from '../lib/sealed-preview-store';
+import { stopMls } from '../lib/mls/mls-runtime';
+import { getStoredGroups } from '../lib/group-store';
 import {
   ZKLOGIN_PROOF_EXPIRED_EVENT,
   clearZkLoginSessionMemory,
@@ -680,6 +683,10 @@ export function MySocialAuthProvider({
       // Clear OAuth session only. Keep IndexedDB zk proof for the next sign-in.
       removeAuthSession();
       clearZkLoginSessionMemory();
+      // Decrypted previews must not outlive the session (iOS parity: logout wipes the vault).
+      void clearSealedPreviews();
+      // MLS: leave every group, retire this device's KeyPackages, wipe its sealed state.
+      void stopMls(getStoredGroups().map((g) => g.groupId));
       setSession(null);
       setKeypair(null);
       setIsUsingDevMessengerSigner(false);

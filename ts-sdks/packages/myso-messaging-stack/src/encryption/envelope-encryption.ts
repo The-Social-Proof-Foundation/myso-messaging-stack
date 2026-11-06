@@ -54,6 +54,35 @@ export function buildMessageAad(params: {
 	return MessageAAD.serialize(params).toBytes();
 }
 
+/** What an attachment ciphertext holds: file bytes, the metadata JSON, or a video poster frame. */
+export type AttachmentAadRole = 'data' | 'meta' | 'poster';
+
+/** Domain label appended to the message AAD for attachment ciphertexts (v1). */
+export const ATTACHMENT_AAD_LABEL_V1 = 'myso-attachment-v1:';
+
+/**
+ * Build the AAD for an attachment ciphertext (attachment AAD v1).
+ *
+ * Layout: `buildMessageAad(groupId, keyVersion, senderAddress) || UTF-8("myso-attachment-v1:" + role)`.
+ *
+ * Binding the sender means a member cannot re-post another member's blob as their own,
+ * and the role label stops a metadata blob from being swapped in for file bytes.
+ * Must match iOS `MessagingAttachmentAAD.build` byte-for-byte.
+ */
+export function buildAttachmentAad(params: {
+	groupId: string;
+	keyVersion: bigint;
+	senderAddress: string;
+	role: AttachmentAadRole;
+}): Uint8Array {
+	const base = buildMessageAad(params);
+	const label = new TextEncoder().encode(ATTACHMENT_AAD_LABEL_V1 + params.role);
+	const out = new Uint8Array(base.length + label.length);
+	out.set(base, 0);
+	out.set(label, base.length);
+	return out;
+}
+
 /** The result of encrypting data with envelope encryption. */
 export interface EncryptedEnvelope {
 	/** AES-256-GCM ciphertext (with 16-byte auth tag appended). */

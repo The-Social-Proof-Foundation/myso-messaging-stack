@@ -18,7 +18,19 @@ export type SyncStatus =
 	| 'DELETED';
 
 /** Timeline message kind. */
-export type MessageKind = 'text' | 'system' | 'post' | 'request_payment' | 'poll' | 'token_transfer';
+export type MessageKind =
+	| 'text'
+	| 'system'
+	| 'post'
+	| 'request_payment'
+	| 'poll'
+	| 'token_transfer'
+	/** Content envelope v2: any timeline message, inner type hidden from the relayer. */
+	| 'message'
+	/** Content envelope v2: reaction / edit / delete / pin / poll vote, type and target hidden. */
+	| 'event'
+	/** MLS commit / proposal (E2EE M4): ordered control row, never a timeline message. */
+	| 'commit';
 
 /** Asset class of a chat payment. */
 export type PaymentAssetKind = 'native' | 'spt';
@@ -138,6 +150,11 @@ export interface SendMessageParams {
 	attachments?: Attachment[];
 	/** Hex-encoded per-message signature for sender verification. */
 	messageSignature?: string;
+	/**
+	 * `event` rows only: members to push (e.g. a reaction's target author). The relayer learns who
+	 * was notified, never what the event was.
+	 */
+	notifyWallets?: string[];
 	/** Agent attribution (required when sending as a sub-agent). */
 	attribution?: {
 		principalOwner: string;

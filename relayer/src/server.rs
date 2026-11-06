@@ -153,6 +153,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             .await
         {
             Ok(pool) => {
+                app_state.mls.attach_postgres(pool.clone());
                 if let Err(e) = app_state.notification_push.attach_postgres(pool).await {
                     tracing::error!("notification push store load failed: {e}");
                 }
@@ -228,6 +229,24 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         config: config.clone(),
     };
 
+    let app = build_router(app_state, auth_state, &config);
+
+    let addr = format!("0.0.0.0:{}", config.port);
+
+    let listener = tokio::net::TcpListener::bind(&addr)
+        .await
+        .map_err(|e| format!("Failed to bind to {}: {}", addr, e))?;
+
+    info!("Messaging Relayer listening on {}", listener.local_addr()?);
+
+    axum::serve(listener, app.into_make_service()).await?;
+
+    Ok(())
+}
+
+/// Every route with its auth layers, as served in production. Also used by the MLS end-to-end
+/// test server (`examples/mls_e2e_server.rs`) so integration tests hit the real routing.
+pub fn build_router(app_state: AppState, auth_state: AuthState, config: &Config) -> Router {
     let message_routes = Router::new()
         .route(
             "/messages",
@@ -276,6 +295,14 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             get(attachments::download_attachment),
         )
         .route(
+            "/groups/:group_id/mls/welcomes",
+            post(crate::handlers::mls::post_welcome),
+        )
+        .route(
+            "/groups/:group_id/mls/group-info",
+            get(crate::handlers::mls::get_group_info).post(crate::handlers::mls::put_group_info),
+        )
+        .route(
             "/archive/groups/:group_id/messages",
             get(get_archive_messages),
         );
@@ -296,6 +323,24 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 .put(notification_push::put_notification_prefs),
         )
         .route("/messaging/dm-gate", get(dm_gate::get_dm_gate))
+        .route("/mls/key-packages", post(crate::handlers::mls::put_key_packages))
+        .route("/mls/key-packages/claim", post(crate::handlers::mls::claim_key_packages))
+        .route("/mls/welcomes", get(crate::handlers::mls::take_welcomes))
+        .route(
+            "/mls/self/group-info",
+            get(crate::handlers::mls::get_self_group_info).put(crate::handlers::mls::put_self_group_info),
+        )
+        .route(
+            "/mls/self/messages",
+            get(crate::handlers::mls::get_self_messages).post(crate::handlers::mls::post_self_message),
+        )
+        .route("/mls/devices", get(crate::handlers::mls::list_devices))
+        .route(
+            "/mls/backup/segments",
+            get(crate::handlers::mls::get_backup_segments).post(crate::handlers::mls::post_backup_segment),
+        )
+        .route("/mls/backup/:key_id", delete(crate::handlers::mls::delete_backup))
+        .route("/mls/devices/:device_id", delete(crate::handlers::mls::delete_device))
         .route("/reports", post(post_report))
         .route(
             "/agent-conversations",
@@ -365,21 +410,9 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .allow_methods(Any)
         .allow_headers(Any);
 
-    let app = Router::new()
+    Router::new()
         .merge(public_routes)
         .merge(internal_routes)
         .merge(authenticated_routes)
-        .layer(cors);
-
-    let addr = format!("0.0.0.0:{}", config.port);
-
-    let listener = tokio::net::TcpListener::bind(&addr)
-        .await
-        .map_err(|e| format!("Failed to bind to {}: {}", addr, e))?;
-
-    info!("Messaging Relayer listening on {}", listener.local_addr()?);
-
-    axum::serve(listener, app.into_make_service()).await?;
-
-    Ok(())
+        .layer(cors)
 }

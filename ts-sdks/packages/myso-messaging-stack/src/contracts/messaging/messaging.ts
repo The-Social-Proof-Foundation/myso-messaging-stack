@@ -477,6 +477,66 @@ export function createAgentGroup(options: CreateAgentGroupOptions) {
 			arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
 		});
 }
+export interface CreateAgentGroupWithE2eeArguments extends CreateAgentGroupArguments {
+	e2ee: RawTransactionArgument<string>;
+}
+export interface CreateAgentGroupWithE2eeOptions {
+	package?: string;
+	arguments: CreateAgentGroupWithE2eeArguments;
+}
+/**
+ * `create_agent_group`, plus `data["e2ee"] = e2ee` (`v2` | `mls1`) written while the group is
+ * being built (the agent sender has no `MetadataAdmin`). Returns `(group, encryptionHistory,
+ * messageLog)` to share afterwards. Added by hand ahead of the next codegen run; it mirrors the
+ * Move signature in myso-core `messaging.move`.
+ */
+export function createAgentGroupWithE2ee(options: CreateAgentGroupWithE2eeOptions) {
+	const packageAddress = options.package ?? '@local-pkg/messaging';
+	const argumentsTypes = [
+		null,
+		null,
+		null,
+		null,
+		null,
+		null,
+		null,
+		null,
+		null,
+		'0x1::string::String',
+		'0x1::string::String',
+		'vector<u8>',
+		null,
+		'0x1::option::Option<u8>',
+		'0x1::option::Option<0x2::object::ID>',
+		'0x1::string::String',
+		'0x2::clock::Clock',
+	] satisfies (string | null)[];
+	const parameterNames = [
+		'version',
+		'namespace',
+		'groupManager',
+		'groupLeaver',
+		'blockList',
+		'platform',
+		'memoryConfig',
+		'creatorMemoryAccount',
+		'crossPrincipalPeerAccount',
+		'name',
+		'uuid',
+		'initialEncryptedDek',
+		'initialMembers',
+		'roomKind',
+		'roomTaskId',
+		'e2ee',
+	];
+	return (tx: Transaction) =>
+		tx.moveCall({
+			package: packageAddress,
+			module: 'messaging',
+			function: 'create_agent_group_with_e2ee',
+			arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
+		});
+}
 export interface CreateAgentAndShareGroupArguments {
 	version: RawTransactionArgument<string>;
 	namespace: RawTransactionArgument<string>;

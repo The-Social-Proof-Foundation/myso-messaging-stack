@@ -1,6 +1,14 @@
 /// <reference types="vite/client" />
 
 interface ImportMetaEnv {
+  /** `true`: new groups write content envelope v2 (see docs/myso-messaging-stack/E2EE-Protocol-v2.md). */
+  readonly VITE_E2EE_V2_NEW_GROUPS?: string;
+  /** MLS (forward secrecy) is on by default; `false` turns it off in this build. New groups use it. */
+  readonly VITE_MLS_ENABLED?: string;
+  /** `true`: renew MLS device certificates via the on-chain `MlsDeviceRegistry` (must exist on-chain). */
+  readonly VITE_MLS_DEVICE_REGISTRY?: string;
+  /** Passkey relying party for the message backup (default `mysocial.network`). */
+  readonly VITE_PASSKEY_RP_ID?: string;
   readonly VITE_MEMORY_SERVER_URL?: string;
   readonly VITE_SOCIAL_SERVER_URL?: string;
   readonly VITE_MYSO_GRAPHQL_URL?: string;

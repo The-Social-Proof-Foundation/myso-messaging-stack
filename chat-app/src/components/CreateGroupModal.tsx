@@ -6,6 +6,8 @@ import {
   useMemo,
   useState,
 } from 'react';
+import { isE2eeV2ForNewGroups } from '../lib/messaging-client-factory';
+import { isMlsEnabled } from '../lib/mls/mls-runtime';
 import { X } from 'lucide-react';
 import { MYSO_CLOCK_OBJECT_ID } from '@socialproof/myso/utils';
 import { createPaidMessagingClient } from '@socialproof/myso-messaging-stack';
@@ -64,6 +66,22 @@ interface PendingPaidDm {
   recipient: string;
   minCost: bigint;
   name: string;
+}
+
+/**
+ * Set up a new `mls1` group's MLS group with every reader's devices. Not awaited: if it can't
+ * finish yet (relayer still learning the group), the first member to open the chat finishes it.
+ */
+function startMlsSetup(
+  client: { messaging: { setupMlsGroup(o: { groupRef: { uuid: string } }): Promise<boolean> } },
+  uuid: string,
+) {
+  void client.messaging
+    .setupMlsGroup({ groupRef: { uuid } })
+    .then((ok) => {
+      if (!ok) console.warn('[chat-app] MLS setup deferred: finished when the chat is opened');
+    })
+    .catch((err: unknown) => console.warn('[chat-app] MLS setup failed (finished when the chat is opened):', err));
 }
 
 export function CreateGroupModal({
@@ -348,11 +366,17 @@ export function CreateGroupModal({
           ? [...initialMembers, zkMember]
           : initialMembers;
 
+      // New groups are MLS (forward secrecy from message one). The `e2ee` flag is written in the
+      // creating transaction itself, so the group never exists without it.
+      const e2ee = isMlsEnabled() ? 'mls1' : isE2eeV2ForNewGroups() ? 'v2' : null;
       const tx = client.messaging.tx.createAndShareGroup({
         uuid,
         name: groupName,
         sender,
         initialMembers: chainMembers,
+        // v2 / MLS groups keep their name encrypted on-chain (padded to a fixed length).
+        encryptName: e2ee !== null,
+        groupData: e2ee ? { e2ee } : undefined,
       });
 
       await logCreateGroupTxInputs(
@@ -394,6 +418,8 @@ export function CreateGroupModal({
       } catch (err) {
         console.warn('[chat-app] creator send permission grant failed (group still created):', err);
       }
+
+      if (e2ee === 'mls1' && client.messaging.mlsSession) startMlsSetup(client, uuid);
 
       addStoredGroup({
         uuid,
@@ -465,6 +491,8 @@ export function CreateGroupModal({
         name: pendingPaidDm.name,
         uuid,
         creatorMemoryAccountId: resolvedMemoryAccountId ?? undefined,
+        // New chats are MLS: flag written in the creating transaction.
+        groupData: isMlsEnabled() ? { e2ee: 'mls1' } : undefined,
       });
 
       await logCreateGroupTxInputs(
@@ -505,6 +533,8 @@ export function CreateGroupModal({
       } catch (err) {
         console.warn('[chat-app] creator send permission grant failed (group still created):', err);
       }
+
+      if (isMlsEnabled() && client.messaging.mlsSession) startMlsSetup(client, uuid);
 
       addStoredGroup({
         uuid,

@@ -100,6 +100,10 @@ pub fn new_message_payload_json(
     group_id: &str,
     attribution: &MessageAttribution,
 ) -> Value {
+    if minimal_push_payload() {
+        // The app does a full inbox refresh on a bare wake; Apple learns no group.
+        return json!({ "aps": { "content-available": 1 }, "relayer_wake": true });
+    }
     let mut payload = json!({
         "aps": { "content-available": 1 },
         "group_id": group_id,
@@ -116,6 +120,18 @@ pub fn new_message_payload_json(
 /// APNs rejects payloads over 4096 bytes. Leave headroom for the `aps` block a2 rebuilds.
 const ALERT_PAYLOAD_BUDGET_BYTES: usize = 3800;
 
+/// `PUSH_MINIMAL_PAYLOAD=true`: APNs payloads carry only `message_id` + the per-device encrypted
+/// preview, which now holds the group / sender routing. Apple learns nothing about who talks to whom.
+/// Turn on only once every iOS build in use reads routing from the envelope.
+fn minimal_push_payload() -> bool {
+    static FLAG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *FLAG.get_or_init(|| {
+        std::env::var("PUSH_MINIMAL_PAYLOAD")
+            .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+            .unwrap_or(false)
+    })
+}
+
 pub fn new_message_alert_payload_json(
     group_id: &str,
     message_id: uuid::Uuid,
@@ -125,6 +141,9 @@ pub fn new_message_alert_payload_json(
     message_wire: Option<&Value>,
     attribution: &MessageAttribution,
 ) -> Value {
+    if minimal_push_payload() {
+        return minimal_alert_payload_json(message_id, encrypted_notification);
+    }
     let mut payload = json!({
         "aps": {
             "alert": {
@@ -162,6 +181,23 @@ pub fn new_message_alert_payload_json(
                 obj.insert("message".to_string(), wire.clone());
             }
         }
+    }
+    payload
+}
+
+/// Metadata-free alert: no group, sender, kind or message wire — only the opaque id and the
+/// device-sealed preview. The NSE restores routing from the decrypted envelope.
+pub fn minimal_alert_payload_json(message_id: uuid::Uuid, encrypted_notification: Option<&str>) -> Value {
+    let mut payload = json!({
+        "aps": {
+            "alert": { "title": "New message", "body": "Open to read" },
+            "sound": "default",
+            "mutable-content": 1
+        },
+        "message_id": message_id.to_string(),
+    });
+    if let (Some(envelope), Some(obj)) = (encrypted_notification, payload.as_object_mut()) {
+        obj.insert("encrypted_notification".to_string(), json!(envelope));
     }
     payload
 }
@@ -715,6 +751,17 @@ mod tests {
         // Unread is client-owned (read state is E2E); the relayer never sends a count.
         assert!(payload.get("message_unread_count").is_none());
         assert_eq!(payload["is_agent_message"], false);
+    }
+
+    #[test]
+    fn minimal_payload_carries_no_routing_metadata() {
+        let payload = minimal_alert_payload_json(uuid::Uuid::nil(), Some("sealed"));
+        let obj = payload.as_object().unwrap();
+        for leaked in ["group_id", "sender_wallet", "message_kind", "principal_owner", "message", "is_agent_message"] {
+            assert!(!obj.contains_key(leaked), "{leaked} must not reach APNs");
+        }
+        assert_eq!(payload["encrypted_notification"], "sealed");
+        assert_eq!(payload["aps"]["mutable-content"], 1);
     }
 
     #[test]

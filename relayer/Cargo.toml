@@ -64,6 +64,7 @@ tonic = { version = "0.14", features = ["transport"] }
 # Cloudflare R2 via S3-compatible API
 aws-sdk-s3 = "1"
 aws-credential-types = "1"
+myso-mls = { version = "0.1.0", path = "../mls" }
 
 [dev-dependencies]
 rand = "0.8"

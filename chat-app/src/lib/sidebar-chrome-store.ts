@@ -1,9 +1,11 @@
 /**
- * localStorage-backed sidebar chrome: previews, peer wallets, profile bits.
+ * localStorage-backed sidebar chrome: peer wallets, profile bits.
  * Hydrate on open so the dialogue list paints without waiting on network/decrypt.
+ *
+ * Last-message previews are decrypted message text, so they are NOT kept here: they are
+ * sealed at rest by `sealed-preview-store.ts`.
  */
 
-const PREVIEW_KEY = 'chat-app-sidebar-previews';
 const PEER_KEY = 'chat-app-sidebar-peers';
 const PROFILE_KEY = 'chat-app-sidebar-profiles';
 
@@ -59,38 +61,6 @@ function writeMap<T>(
   } catch {
     // Quota / private mode — ignore.
   }
-}
-
-export function loadSidebarPreviews(
-  wallet: string | null | undefined,
-): Map<string, StoredSidebarPreview> {
-  const w = walletKey(wallet);
-  const out = new Map<string, StoredSidebarPreview>();
-  if (!w) return out;
-  const slice = readMap<StoredSidebarPreview>(PREVIEW_KEY, w);
-  for (const [groupId, entry] of Object.entries(slice)) {
-    if (!entry || typeof entry.order !== 'number') continue;
-    out.set(groupId, {
-      text: typeof entry.text === 'string' ? entry.text : '',
-      order: entry.order,
-      verified: Boolean(entry.verified),
-      ...(typeof entry.at === 'number' ? { at: entry.at } : {}),
-    });
-  }
-  return out;
-}
-
-export function saveSidebarPreviews(
-  wallet: string | null | undefined,
-  cache: Map<string, StoredSidebarPreview>,
-): void {
-  const w = walletKey(wallet);
-  if (!w) return;
-  const slice: Record<string, StoredSidebarPreview> = {};
-  for (const [groupId, entry] of cache) {
-    slice[groupId] = entry;
-  }
-  writeMap(PREVIEW_KEY, w, slice);
 }
 
 /** groupId → peer wallet (DM other party). */

@@ -298,6 +298,12 @@ function parseMessageKind(raw: string | undefined | null): MessageKind {
 			return 'poll';
 		case 'token_transfer':
 			return 'token_transfer';
+		case 'message':
+			return 'message';
+		case 'event':
+			return 'event';
+		case 'commit':
+			return 'commit';
 		default:
 			return 'text';
 	}

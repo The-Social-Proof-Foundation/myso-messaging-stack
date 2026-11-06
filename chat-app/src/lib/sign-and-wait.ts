@@ -100,6 +100,7 @@ export async function signAndExecuteTransactionAndWait(
     reserveDurationSecs,
     logPrefix,
     options.signal,
+    options.signTransactionBytes,
   );
 }
 
@@ -190,6 +191,7 @@ async function executeSponsored(
   reserveDurationSecs: number,
   logPrefix: string,
   signal?: AbortSignal,
+  signTransactionBytes?: (txBytes: Uint8Array) => Promise<string>,
 ): Promise<string | null> {
   const reservation = await reserveGas(gasBudget, reserveDurationSecs);
   const { sponsor_address, reservation_id, gas_coins } = reservation.result;
@@ -210,7 +212,10 @@ async function executeSponsored(
 
   const txBytes = await transaction.build({ client });
   signal?.throwIfAborted();
-  const { signature } = await signer.signTransaction(txBytes);
+  // zkLogin sender (e.g. MLS device registration): the account's proof signs, not the key.
+  const signature = signTransactionBytes
+    ? await signTransactionBytes(txBytes)
+    : (await signer.signTransaction(txBytes)).signature;
   const txBytesBase64 = toBase64(txBytes);
 
   signal?.throwIfAborted();

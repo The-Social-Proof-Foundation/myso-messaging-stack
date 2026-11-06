@@ -208,6 +208,25 @@ describe('PaidMessagingClient builders', () => {
 		}
 	});
 
+	it('buildOpenPaidDm writes groupData after escrow and before share', () => {
+		const { transaction } = paid.buildOpenPaidDm({
+			sender: SENDER,
+			recipient: RECIPIENT,
+			escrowAmount: 1n,
+			uuid: 'mls-paid-dm',
+			creatorMemoryAccountId: CREATOR_MEMORY_ACCOUNT,
+			groupData: { e2ee: 'mls1' },
+		});
+		const names = commandsOf(transaction).map((c) => c.MoveCall?.function ?? c.$Intent?.name ?? '');
+		const insert = names.indexOf('insert_group_data');
+		expect(insert).toBeGreaterThan(names.indexOf('send_paid_message_digest'));
+		const firstShare = names.indexOf('public_share_object');
+		expect(firstShare).toBeGreaterThan(insert);
+		// The group is the same-transaction create result, not an object input.
+		const groupArg = findMoveCall(transaction, 'insert_group_data')?.arguments?.[1];
+		expect(groupArg?.$kind === 'NestedResult' || groupArg?.$kind === 'Result').toBe(true);
+	});
+
 	it('buildOpenPaidDm generates a UUID when omitted', () => {
 		const first = paid.buildOpenPaidDm({
 			sender: SENDER,

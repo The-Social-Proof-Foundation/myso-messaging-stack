@@ -39,6 +39,16 @@ const ENABLE_MESSAGE_RECOVERY =
   import.meta.env.VITE_ENABLE_MESSAGE_RECOVERY === '1';
 
 /** True when relayer R2 archive recovery is enabled for this build. */
+/**
+ * New groups write content envelope v2 (encrypted reactions/edits/deletes, hidden message types).
+ * Turn on only after every client that may join can read v2 (iOS + web).
+ */
+const E2EE_V2_FOR_NEW_GROUPS = import.meta.env.VITE_E2EE_V2_NEW_GROUPS === 'true';
+
+export function isE2eeV2ForNewGroups(): boolean {
+  return E2EE_V2_FOR_NEW_GROUPS;
+}
+
 export function isMessageRecoveryEnabled(): boolean {
   return ENABLE_MESSAGE_RECOVERY;
 }

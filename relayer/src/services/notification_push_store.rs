@@ -20,6 +20,34 @@ pub struct DeviceNotificationKeyRecord {
     pub public_key: String,
     pub platform: String,
     pub updated_at: DateTime<Utc>,
+    /// Wallet-signed certificate over this key (`None` = legacy unsigned registration).
+    pub certificate: Option<DeviceKeyCertificate>,
+}
+
+/// The owning wallet's signature over a device notification key. Stored and served verbatim
+/// so senders can verify it themselves; see `handlers::notification_push::key_certificate_canonical`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeviceKeyCertificate {
+    pub version: i16,
+    pub issued_at_ms: i64,
+    /// Hex signature in request-auth encoding (raw 64 bytes, or a full serialized zkLogin signature).
+    pub signature: String,
+    /// Hex flagged public key in request-auth encoding (`00…` ed25519, or `05` for zkLogin).
+    pub public_key: String,
+}
+
+fn certificate_from_columns(
+    version: Option<i16>,
+    issued_at_ms: Option<i64>,
+    signature: Option<String>,
+    public_key: Option<String>,
+) -> Option<DeviceKeyCertificate> {
+    Some(DeviceKeyCertificate {
+        version: version?,
+        issued_at_ms: issued_at_ms?,
+        signature: signature?,
+        public_key: public_key?,
+    })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -72,7 +100,9 @@ impl NotificationPushStore {
     /// Enable write-through persistence and load every stored key / pref into memory.
     pub async fn attach_postgres(&self, pool: PgPool) -> Result<(), sqlx::Error> {
         let key_rows = sqlx::query(
-            "SELECT wallet, device_id, public_key, platform, updated_at FROM device_notification_keys",
+            "SELECT wallet, device_id, public_key, platform, updated_at,
+                    cert_version, cert_issued_at_ms, cert_signature, cert_public_key
+             FROM device_notification_keys",
         )
         .fetch_all(&pool)
         .await?;
@@ -88,6 +118,12 @@ impl NotificationPushStore {
                     public_key: row.get("public_key"),
                     platform: row.get("platform"),
                     updated_at: row.get("updated_at"),
+                    certificate: certificate_from_columns(
+                        row.get("cert_version"),
+                        row.get("cert_issued_at_ms"),
+                        row.get("cert_signature"),
+                        row.get("cert_public_key"),
+                    ),
                 };
                 inner
                     .keys
@@ -114,18 +150,28 @@ impl NotificationPushStore {
     pub async fn save_device_key(&self, record: DeviceNotificationKeyRecord) -> Result<(), sqlx::Error> {
         if let Some(pool) = self.pool.get() {
             sqlx::query(
-                "INSERT INTO device_notification_keys (wallet, device_id, public_key, platform, updated_at)
-                 VALUES ($1, $2, $3, $4, $5)
+                "INSERT INTO device_notification_keys
+                    (wallet, device_id, public_key, platform, updated_at,
+                     cert_version, cert_issued_at_ms, cert_signature, cert_public_key)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
                  ON CONFLICT (wallet, device_id) DO UPDATE
                  SET public_key = EXCLUDED.public_key,
                      platform = EXCLUDED.platform,
-                     updated_at = EXCLUDED.updated_at",
+                     updated_at = EXCLUDED.updated_at,
+                     cert_version = EXCLUDED.cert_version,
+                     cert_issued_at_ms = EXCLUDED.cert_issued_at_ms,
+                     cert_signature = EXCLUDED.cert_signature,
+                     cert_public_key = EXCLUDED.cert_public_key",
             )
             .bind(&record.wallet)
             .bind(&record.device_id)
             .bind(&record.public_key)
             .bind(&record.platform)
             .bind(record.updated_at)
+            .bind(record.certificate.as_ref().map(|c| c.version))
+            .bind(record.certificate.as_ref().map(|c| c.issued_at_ms))
+            .bind(record.certificate.as_ref().map(|c| c.signature.clone()))
+            .bind(record.certificate.as_ref().map(|c| c.public_key.clone()))
             .execute(pool)
             .await?;
         }
