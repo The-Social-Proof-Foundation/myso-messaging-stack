@@ -16,6 +16,7 @@ import {
 import type {SubAgentRow} from '../../lib/agents/social-api';
 import {writeSelectedAgent} from '../../lib/agents/selected-agent-store';
 import {addStoredGroup} from '../../lib/group-store';
+import {isMlsEnabled, startMls} from '../../lib/mls/mls-runtime';
 import {waitForAgentChatReady} from '../../lib/wait-for-relayer-membership';
 import {useAuthenticatedAddress, useMySocialAuth} from '../../contexts/MySocialAuthContext';
 import {useMessagingClient} from '../../contexts/MessagingClientContext';
@@ -281,10 +282,17 @@ export function useCreateAgentChat(): CreateAgentChatState {
       vault.assertCurrent(epoch);
       const uuid = crypto.randomUUID();
       const name = options?.name?.trim() || `${agent.label.trim() || 'Agent'} chat`;
+      const mls = isMlsEnabled();
+      if (mls) {
+        // The agent is its own MLS device: publish its KeyPackages before the room is set up so
+        // it is added at once (otherwise it joins on its first reply).
+        await startMls(client as never, derived.keypair, {primary: false}).catch(() => null);
+      }
+      // New chats are MLS: `e2ee=mls1` is written during creation (the agent has no MetadataAdmin).
       const tx = client.messaging.tx.createAgentAndShareGroup({uuid, name,
         platformId: targetPlatform.platformId, creatorMemoryAccountId: memoryAccount.account_id,
         crossPrincipalPeerMemoryAccountId: memoryAccount.account_id, initialMembers: [],
-        room: options?.room});
+        room: options?.room, ...(mls ? {e2ee: 'mls1' as const} : {})});
       const groupId = client.messaging.derive.groupId({uuid});
       setStage('signing');
       await executeAsAgent(
@@ -320,6 +328,13 @@ export function useCreateAgentChat(): CreateAgentChatState {
         uuid,
         principalAddress: messagingAddress,
       });
+      if (mls && client.messaging.mlsSession) {
+        // The human's device sets up the MLS room (agent + human devices). Not awaited: whoever
+        // opens or replies first finishes it if this can't yet.
+        void client.messaging.setupMlsGroup({groupRef: {uuid}}).catch((err: unknown) =>
+          console.warn('[chat-app] agent room MLS setup deferred:', err),
+        );
+      }
 
       const hydrated = await openChat({
         groupId,

@@ -11,6 +11,11 @@ import * as messaging from './contracts/messaging/messaging.js';
 import * as paidMessagingPolicy from './contracts/messaging/paid_messaging_policy.js';
 import type { MySoMessagingStackDerive } from './derive.js';
 import { MySoMessagingStackClientError } from './error.js';
+import {
+	formatEncryptedGroupName,
+	groupNameAad,
+	padGroupName,
+} from './content/group-name.js';
 import type {
 	ArchiveGroupCallOptions,
 	ClearGroupHandleCallOptions,
@@ -149,6 +154,18 @@ export class MySoMessagingStackCall {
 		};
 	}
 
+	/** Seal a group name with the group's version-0 DEK (`enc:v1:0:…`). */
+	async #sealGroupName(uuid: string, name: string): Promise<string> {
+		const groupId = this.#derive.groupId({ uuid });
+		const sealed = await this.#encryption.encrypt({
+			uuid,
+			data: padGroupName(name),
+			keyVersion: 0n,
+			aad: groupNameAad(groupId),
+		} as Parameters<EnvelopeEncryption<any>['encrypt']>[0]);
+		return formatEncryptedGroupName(0n, sealed.nonce, sealed.ciphertext);
+	}
+
 	/**
 	 * Creates a new messaging group and shares both objects.
 	 * The transaction sender automatically becomes the creator with all permissions.
@@ -160,6 +177,10 @@ export class MySoMessagingStackCall {
 		return async (tx: Transaction) => {
 			const { uuid, encryptedDek } = await this.#encryption.generateGroupDEK(options?.uuid);
 			const groupManagerId = this.#derive.groupManagerId();
+			// The plaintext DEK was cached by generateGroupDEK, so this seals locally.
+			const name = options.encryptName
+				? await this.#sealGroupName(uuid, options.name)
+				: options.name;
 			const creatorMemoryAccount = await this.#resolveCreatorMemoryAccountId(
 				options,
 				options.sender,
@@ -170,11 +191,41 @@ export class MySoMessagingStackCall {
 				namespace: this.#packageConfig.namespaceId,
 				groupManager: groupManagerId,
 				blockList: this.#packageConfig.blockListRegistryId,
-				name: options.name,
+				name,
 				uuid,
 				initialEncryptedDek: Array.from(encryptedDek),
 				initialMembers: options?.initialMembers ?? [],
 			};
+
+			// Initial metadata (e.g. `e2ee=mls1`): create, write the data, then share, all in this
+			// transaction, so no one ever sees the group without it.
+			const groupData = Object.entries(options.groupData ?? {});
+			if (groupData.length > 0) {
+				const args = { ...commonArgs, initialMembers: this.#buildAddressVecSet(tx, commonArgs.initialMembers) };
+				const [group, encryptionHistory, messageLog] = creatorMemoryAccount
+					? tx.add(
+							messaging.createGroup({
+								package: this.#packageConfig.latestPackageId,
+								arguments: { ...args, creatorMemoryAccount },
+							}),
+						)
+					: tx.add(
+							messaging.createWalletGroup({
+								package: this.#packageConfig.latestPackageId,
+								arguments: args,
+							}),
+						);
+				for (const [key, value] of groupData) {
+					tx.add(
+						messaging.insertGroupData({
+							package: this.#packageConfig.latestPackageId,
+							arguments: { groupManager: groupManagerId, group: group!, key, value },
+						}),
+					);
+				}
+				this.shareGroup({ group: group!, encryptionHistory: encryptionHistory!, messageLog: messageLog! })(tx);
+				return;
+			}
 
 			if (creatorMemoryAccount) {
 				return tx.add(
@@ -205,54 +256,69 @@ export class MySoMessagingStackCall {
 	 */
 	createAgentGroup(options: CreateAgentGroupCallOptions) {
 		return async (tx: Transaction) => {
-			const { uuid, encryptedDek } = await this.#encryption.generateGroupDEK(options?.uuid);
-			const initialMembers = this.#buildAddressVecSet(tx, options?.initialMembers ?? []);
-			const groupManagerId = this.#derive.groupManagerId();
-			const groupLeaverId = this.#derive.groupLeaverId();
+			const args = await this.#agentGroupArgs(tx, options);
+			if (options.e2ee) {
+				return tx.add(
+					messaging.createAgentGroupWithE2ee({
+						package: this.#packageConfig.latestPackageId,
+						arguments: { ...args, e2ee: options.e2ee },
+					}),
+				);
+			}
+			return tx.add(messaging.createAgentGroup({ package: this.#packageConfig.latestPackageId, arguments: args }));
+		};
+	}
 
-			return tx.add(
-				messaging.createAgentGroup({
-					package: this.#packageConfig.latestPackageId,
-					arguments: {
-						version: this.#packageConfig.versionId,
-						namespace: this.#packageConfig.namespaceId,
-						groupManager: groupManagerId,
-						groupLeaver: groupLeaverId,
-						blockList: this.#packageConfig.blockListRegistryId,
-						platform: options.platformId,
-						memoryConfig: this.#packageConfig.memoryConfigId,
-						creatorMemoryAccount: options.creatorMemoryAccountId,
-						crossPrincipalPeerAccount: options.crossPrincipalPeerMemoryAccountId,
-						name: options.name,
-						uuid,
-						initialEncryptedDek: Array.from(encryptedDek),
-						initialMembers,
-						roomKind: options.room?.kind ?? null,
-						roomTaskId: options.room?.taskId ?? null,
-					},
-				}),
-			);
+	/** Arguments shared by the agent group create calls (DEK generated here). */
+	async #agentGroupArgs(tx: Transaction, options: CreateAgentGroupCallOptions): Promise<messaging.CreateAgentGroupArguments> {
+		const { uuid, encryptedDek } = await this.#encryption.generateGroupDEK(options?.uuid);
+		return {
+			version: this.#packageConfig.versionId,
+			namespace: this.#packageConfig.namespaceId,
+			groupManager: this.#derive.groupManagerId(),
+			groupLeaver: this.#derive.groupLeaverId(),
+			blockList: this.#packageConfig.blockListRegistryId,
+			platform: options.platformId,
+			memoryConfig: this.#packageConfig.memoryConfigId,
+			creatorMemoryAccount: options.creatorMemoryAccountId,
+			crossPrincipalPeerAccount: options.crossPrincipalPeerMemoryAccountId,
+			name: options.name,
+			uuid,
+			initialEncryptedDek: Array.from(encryptedDek),
+			initialMembers: this.#buildAddressVecSet(tx, options?.initialMembers ?? []),
+			roomKind: options.room?.kind ?? null,
+			roomTaskId: options.room?.taskId ?? null,
 		};
 	}
 
 	/**
 	 * Creates and shares a messaging group on behalf of a sub-agent.
 	 * The transaction sender must be the agent derived address with CAP_MESSAGE_SEND.
+	 * With `e2ee`, the flag is written during creation and the group is shared afterwards in
+	 * the same transaction.
 	 */
 	createAgentAndShareGroup(options: CreateAgentGroupCallOptions) {
 		return async (tx: Transaction) => {
+			if (options.e2ee) {
+				const args = await this.#agentGroupArgs(tx, options);
+				const [group, encryptionHistory, messageLog] = tx.add(
+					messaging.createAgentGroupWithE2ee({
+						package: this.#packageConfig.latestPackageId,
+						arguments: { ...args, e2ee: options.e2ee },
+					}),
+				);
+				this.shareGroup({ group: group!, encryptionHistory: encryptionHistory!, messageLog: messageLog! })(tx);
+				return;
+			}
 			const { uuid, encryptedDek } = await this.#encryption.generateGroupDEK(options?.uuid);
-			const groupManagerId = this.#derive.groupManagerId();
-			const groupLeaverId = this.#derive.groupLeaverId();
-
 			return tx.add(
 				messaging.createAgentAndShareGroup({
 					package: this.#packageConfig.latestPackageId,
 					arguments: {
 						version: this.#packageConfig.versionId,
 						namespace: this.#packageConfig.namespaceId,
-						groupManager: groupManagerId,
-						groupLeaver: groupLeaverId,
+						groupManager: this.#derive.groupManagerId(),
+						groupLeaver: this.#derive.groupLeaverId(),
 						blockList: this.#packageConfig.blockListRegistryId,
 						platform: options.platformId,
 						memoryConfig: this.#packageConfig.memoryConfigId,

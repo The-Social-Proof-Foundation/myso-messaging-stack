@@ -1,0 +1,23 @@
+{
+	"name": "@socialproof/myso-mls",
+	"version": "0.1.0",
+	"description": "myso-mls (OpenMLS) WebAssembly bindings for MySocial end-to-end encrypted messaging: browser and Node builds.",
+	"license": "Apache-2.0",
+	"exports": {
+		".": {
+			"node": {
+				"types": "./node/myso_mls.d.ts",
+				"default": "./node/myso_mls.js"
+			},
+			"types": "./web/myso_mls.d.ts",
+			"default": "./web/myso_mls.js"
+		}
+	},
+	"types": "./web/myso_mls.d.ts",
+	"files": [
+		"web",
+		"node",
+		"README.md"
+	],
+	"sideEffects": false
+}

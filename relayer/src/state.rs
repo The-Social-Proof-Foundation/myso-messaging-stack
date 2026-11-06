@@ -14,6 +14,7 @@ use crate::services::block_check::BlockCheckService;
 use crate::services::message_gate::MessageGateService;
 use crate::services::messaging_config::{fallback_messaging_config_cache, MessagingConfigCache};
 use crate::services::presence_sync::PresenceRegistry;
+use crate::services::mls_store::MlsStore;
 use crate::services::notification_push_store::NotificationPushStore;
 use crate::services::push::PushService;
 use crate::services::realtime::RealtimeHub;
@@ -73,6 +74,8 @@ pub struct AppState {
     pub messaging_config: MessagingConfigCache,
     pub push_service: PushService,
     pub notification_push: NotificationPushStore,
+    /// MLS delivery service: KeyPackages, accepted epochs, Welcomes (E2EE M4).
+    pub mls: MlsStore,
     pub realtime_hub: Arc<RealtimeHub>,
     pub realtime_enabled: bool,
     pub inline_realtime_publish: bool,
@@ -174,6 +177,7 @@ impl AppState {
             messaging_config,
             push_service,
             notification_push: NotificationPushStore::new(),
+            mls: MlsStore::new(),
             realtime_hub,
             realtime_enabled,
             inline_realtime_publish,

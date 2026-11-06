@@ -79,6 +79,12 @@ export interface AttachmentHandle {
 	extras?: Record<string, unknown>;
 	/** The on-the-wire {@link Attachment} this handle was resolved from. Useful for edits. */
 	wire: Attachment;
+	/**
+	 * `true` when the metadata decrypted under attachment AAD v1 (bound to group, key version
+	 * and sender); the file bytes are then decrypted under the same binding. `false` for
+	 * legacy attachments sealed without AAD.
+	 */
+	aadBound: boolean;
 	/** Download and decrypt the attachment data on demand. */
 	data(): Promise<Uint8Array>;
 }

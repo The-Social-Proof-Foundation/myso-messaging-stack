@@ -5,6 +5,7 @@
 //! - `file_storage_sync`: Re-exports [`crate::archive::ArchiveSyncService`]
 
 pub mod agent_group_detector;
+pub mod mls_store;
 pub mod attribution_verify;
 pub mod begin_chat_notify;
 pub mod block_check;

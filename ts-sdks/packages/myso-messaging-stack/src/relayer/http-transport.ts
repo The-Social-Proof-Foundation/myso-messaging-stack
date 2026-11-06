@@ -363,6 +363,9 @@ export class HTTPRelayerTransport implements RelayerTransport {
 		if (params.idempotencyKey) {
 			wirePayload.idempotency_key = params.idempotencyKey;
 		}
+		if (params.notifyWallets && params.notifyWallets.length > 0) {
+			wirePayload.notify_wallets = params.notifyWallets.map((w) => w.toLowerCase());
+		}
 		if (params.sharedPostAddress) {
 			const normalized = normalizeSharedPostAddress(params.sharedPostAddress);
 			wirePayload.shared_post_address =

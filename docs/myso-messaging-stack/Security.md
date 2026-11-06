@@ -52,7 +52,8 @@ This reflects a deliberate architectural shift from fully on-chain ordering towa
 - **Ciphertext integrity**: AES-GCM's 16-byte authentication tag detects any tampering with the ciphertext in transit or at rest.
 - **Sender verification**: Each message includes a per-message signature and sender public key. Legacy v1 signatures cover the canonical ciphertext fields and post/payment reference where applicable. New v2 messages encode a canonical JSON tuple and bind the ordered attachment storage IDs, nonces, and encrypted metadata as well as the ciphertext fields. The relayer rejects v1 writes that contain attachments. Legacy v1 messages with attachments remain text-verifiable, but the SDK will not fetch or decrypt those unbound attachment references.
 - **Permission-gated decryption**: Access to the group DEK (Data Encryption Key) is controlled by MyData. Only addresses with `MessagingReader` permission on the group can decrypt the DEK.
-- **AAD binding**: Additional Authenticated Data (`[groupId][keyVersion][senderAddress]`) is included in AES-GCM encryption. If any field mismatches (e.g., a message is moved to a different group or attributed to a different sender), decryption fails.
+- **AAD binding**: Additional Authenticated Data (`[groupId][keyVersion][senderAddress]`) is included in AES-GCM encryption. If any field mismatches (e.g., a message is moved to a different group or attributed to a different sender), decryption fails. Attachments use the same binding plus a role label (attachment AAD v1).
+- **Authenticated notification keys**: push previews are sealed per recipient device. Each device key is registered with a certificate, which is the owning wallet's personal-message signature over `myso-notification-key-v1:{wallet}:{device_id}:{public_key}:{platform}:{issued_at_ms}`. Senders verify the certificate themselves before sealing a preview: ed25519 locally, zkLogin via a fullnode's `verifyZkloginSignature`, never by trusting the relayer. They pin keys once verified, and never seal to unsigned keys. Senders also seal only to wallets that hold `MessagingReader` on-chain, read from a fullnode and not from the relayer's member list. That stops the relayer from listing a wallet it controls as a recipient. If the chain read fails, the sender seals to nobody (fail closed). A relayer that substitutes its own key therefore gets no preview; that device just receives the generic "New message" push.
 
 ## Security Properties: What We Provide and What We Don't
 
@@ -97,6 +98,7 @@ The relayer is the primary trust dependency for delivery guarantees. While it **
 
 It **can**:
 - Observe metadata: who sent messages, when, to which group, and attachment storage IDs
+- Observe reactions (emoji, reactor, target message), pins, message `kind`, read/delivery receipts, typing and presence. These are not yet encrypted.
 - Influence message delivery and ordering
 - Attribute messages to the wrong sender in the stored `senderAddress` field (though the per-message signature lets clients detect this)
 

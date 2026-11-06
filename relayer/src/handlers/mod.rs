@@ -5,6 +5,7 @@ pub mod dm_gate;
 pub mod group_features;
 pub mod health;
 pub mod messages;
+pub mod mls;
 pub mod notification_push;
 pub mod presence;
 pub mod push_devices;

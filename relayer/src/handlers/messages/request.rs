@@ -104,6 +104,10 @@ pub struct CreateMessageRequest {
     /// Sender-constructed opaque notification envelopes (relayer stores/forwards only).
     #[serde(default)]
     pub notification_envelopes: Vec<NotificationEnvelopeRequest>,
+    /// `event` rows only: members to push (e.g. a reaction's target author). Only current
+    /// members other than the sender are honored.
+    #[serde(default)]
+    pub notify_wallets: Vec<String>,
     /// Sender opt-out of the APNs push for this message (realtime / unread still apply).
     /// Used when a companion message already pushed this content — e.g. the note sent
     /// right after a shared post rides in the post's push.

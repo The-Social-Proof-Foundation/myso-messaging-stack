@@ -72,9 +72,9 @@ See [Encryption](./Encryption.md) for the underlying DEK management and AES-GCM 
 When `sendMessage()` or `editMessage()` includes files:
 
 1. **Validate**: check file count and sizes against configured limits
-2. **Encrypt each file**: individually with the group DEK and a per-file random nonce
+2. **Encrypt each file**: individually with the group DEK, a per-file random nonce, and attachment AAD v1 (`role = data`, bound to the message's group, key version and sender; see [Encryption](./Encryption.md#attachment-encryption))
 3. **Batch upload**: all encrypted files are uploaded to the `StorageAdapter` as a single batch (e.g., one File Storage quilt containing multiple patches)
-4. **Encrypt metadata**: for each file, a JSON blob containing `fileName`, `mimeType`, `fileSize`, and optional `extras` is encrypted with a separate nonce
+4. **Encrypt metadata**: for each file, a JSON blob containing `fileName`, `mimeType`, `fileSize`, and optional `extras` is encrypted with a separate nonce and attachment AAD v1 (`role = meta`)
 5. **Build wire format**: each file becomes an `Attachment` with `storageId`, `nonce`, `encryptedMetadata`, and `metadataNonce`
 6. **Send to relayer**: the `Attachment[]` array is included in the relayer request alongside the encrypted message text
 

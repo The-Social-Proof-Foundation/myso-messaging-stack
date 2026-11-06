@@ -24,6 +24,8 @@ import {
 } from '../lib/messaging-genesis-debug';
 import { clearMessageCache } from '../lib/message-session-cache';
 import { registerMessagingPresenceTeardown } from '../lib/messaging-presence-teardown';
+import { ensureMlsMembership, isMlsEnabled, startMls } from '../lib/mls/mls-runtime';
+import { getStoredGroups } from '../lib/group-store';
 import { useMySocialAuth } from './MySocialAuthContext';
 
 interface MessagingClientContextValue {
@@ -137,6 +139,17 @@ export function MessagingClientProvider({
         }
 
         setClient(resolvedClient);
+
+        // MLS (forward secrecy) for `e2ee=mls1` groups: one tab per wallet owns the device.
+        if (isMlsEnabled()) {
+          void startMls(resolvedClient as never, keypair).then((session) => {
+            if (!session || cancelled) return;
+            void ensureMlsMembership(
+              resolvedClient as never,
+              getStoredGroups().map((g) => g.groupId),
+            );
+          });
+        }
       })
       .catch((e) => {
         if (!cancelled) {

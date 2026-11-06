@@ -31,4 +31,10 @@ export {
 export type { PrincipalOversightPolicyOptions, AgentReaderPolicyOptions } from './mydata-policy.js';
 
 // Envelope Encryption
-export { EnvelopeEncryption, buildMessageAad } from './envelope-encryption.js';
+export {
+	EnvelopeEncryption,
+	buildMessageAad,
+	buildAttachmentAad,
+	ATTACHMENT_AAD_LABEL_V1,
+} from './envelope-encryption.js';
+export type { AttachmentAadRole } from './envelope-encryption.js';

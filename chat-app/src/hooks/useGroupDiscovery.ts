@@ -108,6 +108,20 @@ async function queryAllEventGroupIds(
 // Hook
 // ---------------------------------------------------------------------------
 
+
+/** On-chain names may be `enc:v1:` (E2EE v2 groups); decrypt for display, never show ciphertext. */
+async function displayGroupName(
+  client: { messaging: { decryptGroupName: (ref: { uuid: string }, name: string) => Promise<string | null> } },
+  uuid: string,
+  name: string,
+): Promise<string> {
+  try {
+    return (await client.messaging.decryptGroupName({ uuid }, name)) ?? 'Encrypted chat';
+  } catch {
+    return name.startsWith('enc:v1:') ? 'Encrypted chat' : name;
+  }
+}
+
 export interface UseGroupDiscoveryResult {
   /** All groups the user belongs to (localStorage cache + GraphQL discovery). */
   groups: StoredGroup[];
@@ -155,12 +169,13 @@ export function useGroupDiscovery(
 
       client.messaging.view
         .groupsMetadata({ groupIds: [groupId], refresh: true })
-        .then((metadata) => {
+        .then(async (metadata) => {
           const meta = metadata[groupId];
           if (!meta) return;
           addStoredGroup({
             uuid: meta.uuid,
-            name: meta.name,
+            // v2 groups store `enc:v1:` names on-chain; members decrypt them with the group DEK.
+            name: await displayGroupName(client, meta.uuid, meta.name),
             groupId,
             createdAt: Date.now(),
           });
@@ -249,7 +264,7 @@ export function useGroupDiscovery(
           if (!meta) continue;
           addStoredGroup({
             uuid: meta.uuid,
-            name: meta.name,
+            name: await displayGroupName(client!, meta.uuid, meta.name),
             groupId,
             createdAt: Date.now(),
           });

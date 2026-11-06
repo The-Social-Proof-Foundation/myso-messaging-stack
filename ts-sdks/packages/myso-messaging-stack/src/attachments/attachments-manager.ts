@@ -4,8 +4,14 @@
 
 import { fromHex, toHex } from '@socialproof/myso/utils';
 
-import type { EnvelopeEncryption } from '../encryption/envelope-encryption.js';
-import { MySoMessagingStackClientError } from '../error.js';
+import {
+	buildAttachmentAad,
+	type AttachmentAadRole,
+	type EnvelopeEncryption,
+} from '../encryption/envelope-encryption.js';
+import { EncryptionAccessDeniedError, MySoMessagingStackClientError } from '../error.js';
+import type { EnvelopeAttachment } from '../content/envelope.js';
+import { getDefaultCryptoPrimitives } from '../encryption/crypto-primitives.js';
 import type { StorageAdapter } from '../storage/storage-adapter.js';
 import type { GroupRef } from '../types.js';
 import type {
@@ -21,7 +27,25 @@ const DEFAULT_MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024; // 10 MB
 const DEFAULT_MAX_TOTAL_FILE_SIZE_BYTES = 50 * 1024 * 1024; // 50 MB
 
 /**
+ * Context an attachment ciphertext is bound to (attachment AAD v1). Must be the parent
+ * message's key version and sender, or the receiver's reconstruction will not match.
+ */
+/** AAD for content-envelope-v2 file bytes (each file has its own random key). */
+const FILE_V2_AAD = new TextEncoder().encode('myso-file-v2');
+
+export interface AttachmentAadBinding {
+	groupId: string;
+	keyVersion: bigint;
+	senderAddress: string;
+}
+
+/**
  * Orchestrates encrypting, uploading, downloading, and decrypting attachments.
+ *
+ * When an {@link AttachmentAadBinding} is given, file bytes and metadata are sealed with
+ * attachment AAD v1 (see `buildAttachmentAad`). Resolve tries v1 first and falls back to
+ * legacy no-AAD ciphertexts; whichever mode the metadata opens under is the only mode
+ * used for the file bytes, so a re-posted blob can't decrypt under someone else's message.
  *
  * Upload flow:
  * 1. Validate file count and sizes.
@@ -62,8 +86,13 @@ export class AttachmentsManager<TApproveContext = void> {
 		files: AttachmentFile[],
 		groupRef: GroupRef,
 		encryptOptions?: Omit<EncryptCallOptions<TApproveContext>, 'data'>,
+		binding?: AttachmentAadBinding,
 	): Promise<Attachment[]> {
 		this.#validateFiles(files);
+		const aadFor = (role: AttachmentAadRole) =>
+			binding ? buildAttachmentAad({ ...binding, role }) : undefined;
+		// Bound ciphertexts must be sealed under the same key version the AAD names.
+		const versionOption = binding ? { keyVersion: binding.keyVersion } : {};
 
 		// 1. Encrypt each file individually.
 		const encryptedEntries: {
@@ -74,7 +103,9 @@ export class AttachmentsManager<TApproveContext = void> {
 			const envelope = await this.#encryption.encrypt({
 				...groupRef,
 				...encryptOptions,
+				...versionOption,
 				data: file.data,
+				aad: aadFor('data'),
 			} as Parameters<EnvelopeEncryption<TApproveContext>['encrypt']>[0]);
 			encryptedEntries.push({
 				data: envelope.ciphertext,
@@ -110,7 +141,9 @@ export class AttachmentsManager<TApproveContext = void> {
 			const metadataEnvelope = await this.#encryption.encrypt({
 				...groupRef,
 				...encryptOptions,
+				...versionOption,
 				data: metadataBytes,
+				aad: aadFor('meta'),
 			} as Parameters<EnvelopeEncryption<TApproveContext>['encrypt']>[0]);
 
 			attachments.push({
@@ -139,22 +172,43 @@ export class AttachmentsManager<TApproveContext = void> {
 		groupRef: GroupRef,
 		keyVersion: bigint,
 		decryptOptions?: Omit<DecryptCallOptions<TApproveContext>, 'envelope'>,
+		binding?: { groupId: string; senderAddress: string },
 	): Promise<AttachmentHandle[]> {
 		const handles: AttachmentHandle[] = [];
+		const aadFor = (role: AttachmentAadRole) =>
+			binding ? buildAttachmentAad({ ...binding, keyVersion, role }) : undefined;
 
 		for (const attachment of attachments) {
-			// Decrypt the metadata blob.
-			const metadataBytes = await this.#encryption.decrypt({
-				...groupRef,
-				...decryptOptions,
-				envelope: {
-					ciphertext: fromHex(attachment.encryptedMetadata),
-					nonce: fromHex(attachment.metadataNonce),
-					keyVersion,
-				},
-			} as Parameters<EnvelopeEncryption<TApproveContext>['decrypt']>[0]);
+			const metaEnvelope = {
+				ciphertext: fromHex(attachment.encryptedMetadata),
+				nonce: fromHex(attachment.metadataNonce),
+				keyVersion,
+			};
+			const decryptMeta = (aad: Uint8Array | undefined) =>
+				this.#encryption.decrypt({
+					...groupRef,
+					...decryptOptions,
+					envelope: { ...metaEnvelope, aad },
+				} as Parameters<EnvelopeEncryption<TApproveContext>['decrypt']>[0]);
+
+			let metadataBytes: Uint8Array;
+			let aadBound = false;
+			const metaAad = aadFor('meta');
+			if (metaAad) {
+				try {
+					metadataBytes = await decryptMeta(metaAad);
+					aadBound = true;
+				} catch (error) {
+					// Access errors are not an AAD mismatch; retrying without AAD can't help.
+					if (error instanceof EncryptionAccessDeniedError) throw error;
+					metadataBytes = await decryptMeta(undefined);
+				}
+			} else {
+				metadataBytes = await decryptMeta(undefined);
+			}
 
 			const metadata: AttachmentMetadata = JSON.parse(new TextDecoder().decode(metadataBytes));
+			const dataAad = aadBound ? aadFor('data') : undefined;
 
 			handles.push({
 				fileName: metadata.fileName,
@@ -162,6 +216,7 @@ export class AttachmentsManager<TApproveContext = void> {
 				fileSize: metadata.fileSize,
 				extras: metadata.extras,
 				wire: attachment,
+				aadBound,
 				data: async () => {
 					const encrypted = await this.#storageAdapter.download(attachment.storageId);
 					return this.#encryption.decrypt({
@@ -171,6 +226,7 @@ export class AttachmentsManager<TApproveContext = void> {
 							ciphertext: encrypted,
 							nonce: fromHex(attachment.nonce),
 							keyVersion,
+							aad: dataAad,
 						},
 					} as Parameters<EnvelopeEncryption<TApproveContext>['decrypt']>[0]);
 				},
@@ -178,6 +234,68 @@ export class AttachmentsManager<TApproveContext = void> {
 		}
 
 		return handles;
+	}
+
+	/**
+	 * Content envelope v2 upload: each file gets a fresh random AES-256-GCM key; the key and
+	 * nonce travel only inside the (encrypted) envelope, never in a relayer column.
+	 */
+	async uploadV2(files: AttachmentFile[], groupRef: GroupRef): Promise<EnvelopeAttachment[]> {
+		this.#validateFiles(files);
+		const crypto = getDefaultCryptoPrimitives();
+		const sealed: { key: Uint8Array; nonce: Uint8Array; data: Uint8Array }[] = [];
+		for (const file of files) {
+			const key = crypto.generateRandomBytes(32);
+			const nonce = crypto.generateRandomBytes(12);
+			const data = await crypto.aesGcmEncrypt(key, file.data, nonce, FILE_V2_AAD);
+			sealed.push({ key, nonce, data });
+		}
+		const uploadResult = await this.#storageAdapter.upload(
+			// Opaque names: the storage backend must not learn file names.
+			sealed.map((e, i) => ({ name: `f${i}`, data: e.data })),
+			{ groupRef },
+		);
+		return files.map((file, i) => ({
+			id: uploadResult.ids[i]!,
+			k: toHex(sealed[i]!.key),
+			n: toHex(sealed[i]!.nonce),
+			name: file.fileName,
+			mime: file.mimeType,
+			size: file.data.byteLength,
+		}));
+	}
+
+	/** Lazy handles for v2 envelope attachments (integrity follows the envelope's signature). */
+	resolveV2(refs: EnvelopeAttachment[]): AttachmentHandle[] {
+		const crypto = getDefaultCryptoPrimitives();
+		return refs.map((ref) => ({
+			fileName: ref.name,
+			mimeType: ref.mime,
+			fileSize: ref.size,
+			extras: {
+				...(ref.poster ? { poster: ref.poster } : {}),
+				...(ref.dur !== undefined ? { durationMs: ref.dur } : {}),
+				...(ref.w !== undefined ? { width: ref.w } : {}),
+				...(ref.h !== undefined ? { height: ref.h } : {}),
+			},
+			wire: { storageId: ref.id, nonce: ref.n, encryptedMetadata: '', metadataNonce: '' },
+			aadBound: true,
+			data: async () => {
+				const encrypted = await this.#storageAdapter.download(ref.id);
+				return crypto.aesGcmDecrypt(fromHex(ref.k), encrypted, fromHex(ref.n), FILE_V2_AAD);
+			},
+		}));
+	}
+
+	/** Download + decrypt a v2 poster (or any `{id, k, n}` blob reference). */
+	async downloadV2Blob(ref: { id: string; k: string; n: string }): Promise<Uint8Array> {
+		const encrypted = await this.#storageAdapter.download(ref.id);
+		return getDefaultCryptoPrimitives().aesGcmDecrypt(
+			fromHex(ref.k),
+			encrypted,
+			fromHex(ref.n),
+			FILE_V2_AAD,
+		);
 	}
 
 	/**

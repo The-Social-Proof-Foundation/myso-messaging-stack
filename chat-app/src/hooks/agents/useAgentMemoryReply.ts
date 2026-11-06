@@ -1,5 +1,6 @@
 import {useCallback, useEffect, useRef, useSyncExternalStore} from 'react';
 import {createAgentMessagingClient} from '@socialproof/myso-messaging-stack';
+import {isMlsEnabled, startMls} from '../../lib/mls/mls-runtime';
 import {useMessagingClient} from '../../contexts/MessagingClientContext';
 import {useMySocialAuth, useAuthenticatedAddress} from '../../contexts/MySocialAuthContext';
 import {
@@ -553,6 +554,10 @@ async function runAgentReply(deps: ReplyDeps, job: AgentReplyJob) {
             platformId: joined.platformId,
           },
         });
+        // MLS groups: the agent sends as its own certified MLS device (never the human's).
+        if (isMlsEnabled()) {
+          await startMls(client as never, derived.keypair, { primary: false });
+        }
         setStatus(REPLY_STATUS.sending);
         const post = (text: string) =>
           // The answer is already generated and billed — retry key-server blips so it lands.

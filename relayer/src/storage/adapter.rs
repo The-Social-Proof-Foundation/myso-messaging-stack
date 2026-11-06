@@ -313,6 +313,20 @@ pub trait StorageAdapter: Send + Sync {
         Ok(crate::models::ReactionActivity::default())
     }
 
+    /// Records that encrypted `event` row `event_id` (at `event_order`, by `sender`) was pushed
+    /// to `wallets`. Backs v2 reaction unread counts and inbox activity; the relayer never
+    /// learns what the event was.
+    async fn record_event_notifications(
+        &self,
+        _group_id: &str,
+        _event_id: Uuid,
+        _event_order: i64,
+        _sender: &str,
+        _wallets: &[String],
+    ) -> StorageResult<()> {
+        Ok(())
+    }
+
     async fn set_pin_for_seq(&self, group_id: &str, chain_seq: i64, on: bool) -> StorageResult<()>;
 
     async fn list_pins(&self, group_id: &str) -> StorageResult<Vec<i64>>;

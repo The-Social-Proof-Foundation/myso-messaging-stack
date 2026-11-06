@@ -7,6 +7,7 @@ import type { MyDataClient } from '@socialproof/mydata';
 import type { Signer } from '@socialproof/myso/cryptography';
 import type { ClientWithCoreApi } from '@socialproof/myso/client';
 import type { Transaction } from '@socialproof/myso/transactions';
+import { fromHex, toBase64 } from '@socialproof/myso/utils';
 
 import { BlockedMessagingError, BlockGatingClient } from './block-gating.js';
 import { emojiToStorage } from './emoji.js';
@@ -22,11 +23,33 @@ import {
 import { MySoMessagingStackClientError } from './error.js';
 import { MessagingSyncManager } from './sync/messaging-sync-manager.js';
 import type { UserReadState } from './sync/types.js';
-import { AttachmentsManager } from './attachments/attachments-manager.js';
+import { AttachmentsManager, type AttachmentAadBinding } from './attachments/attachments-manager.js';
 import type { Attachment, AttachmentFile, AttachmentHandle } from './attachments/types.js';
 import { EnvelopeEncryption, buildMessageAad } from './encryption/envelope-encryption.js';
 import type { EncryptOptions, DecryptOptions } from './encryption/envelope-encryption.js';
+import {
+	decodeContentEnvelope,
+	encodeContentEnvelope,
+	relayerKindForEnvelope,
+	type ContentEnvelope,
+	type EnvelopeAttachment,
+	type EnvelopeMessageType,
+	type MessageEvent,
+} from './content/envelope.js';
+import {
+	formatEncryptedGroupName,
+	groupNameAad,
+	isEncryptedGroupName,
+	padGroupName,
+	parseEncryptedGroupName,
+	unpadGroupName,
+} from './content/group-name.js';
 import { HTTPRelayerTransport } from './relayer/http-transport.js';
+import { HttpMlsRelayer } from './mls/relayer.js';
+import { MlsSession, createCertificateVerifier } from './mls/session.js';
+import { MlsGroupUnavailableError, type MlsUnavailableReason } from './mls/errors.js';
+import type { MlsStateStore, MlsWasmModule, UnwrappedRow } from './mls/types.js';
+import { ChainMlsDeviceRegistry, type MlsRegistrySubmitter } from './mls/registry.js';
 import { HybridRelayerTransport } from './relayer/hybrid-transport.js';
 import type { RelayerTransport } from './relayer/transport.js';
 import { withRelayerAuthSigner, type RelayerAuthSigner } from './relayer/relayer-auth-signer.js';
@@ -68,6 +91,7 @@ import type {
 	ReactionOptions,
 	RecoverMessagesOptions,
 	RespondToPaymentRequestOptions,
+	SendEventOptions,
 	SendMessageOptions,
 	SendPaymentRequestOptions,
 	SendTokenTransferOptions,
@@ -196,6 +220,14 @@ export function mysoMessagingStack<
  * await client.groups.grantPermission({ ... });
  * ```
  */
+/** Attachment metadata couldn't be resolved; the message body itself decrypted fine. */
+class AttachmentResolutionError extends MySoMessagingStackClientError {
+	constructor(cause: unknown) {
+		super('attachment metadata unavailable');
+		this.cause = cause;
+	}
+}
+
 export class MySoMessagingStackClient<TApproveContext = void> {
 	#packageConfig: MySoMessagingStackPackageConfig;
 	#client: ClientWithCoreApi;
@@ -203,6 +235,11 @@ export class MySoMessagingStackClient<TApproveContext = void> {
 	#blockGating: BlockGatingClient | undefined;
 	#sync: MessagingSyncManager;
 	#relayerAuthSigner: RelayerAuthSigner | undefined;
+	#relayerUrl: string | undefined;
+	/** Primary (reading) MLS session: the signed-in human's device. */
+	#mls: MlsSession | undefined;
+	/** Every opened session by wallet (human + agents, each its own MLS device). */
+	#mlsSessions = new Map<string, MlsSession>();
 	#attachments: AttachmentsManager<TApproveContext> | undefined;
 	#recovery: RecoveryTransport | undefined;
 	readonly #textEncoder = new TextEncoder();
@@ -292,6 +329,7 @@ export class MySoMessagingStackClient<TApproveContext = void> {
 		const transport = options.relayer.transport
 			? options.relayer.transport
 			: buildDefaultRelayerTransport(options.relayer);
+		this.#relayerUrl = (options.relayer as { relayerUrl?: string }).relayerUrl;
 		this.#relayerAuthSigner = options.relayer.authSigner;
 		this.transport = this.#relayerAuthSigner
 			? withRelayerAuthSigner(transport, this.#relayerAuthSigner)
@@ -360,6 +398,10 @@ export class MySoMessagingStackClient<TApproveContext = void> {
 			options.principalOwner ?? options.attribution?.principalOwner,
 		);
 
+		if (await this.writesContentEnvelopeV2(options.groupRef)) {
+			return this.#sendMessageV2(options, { groupId, encryptionHistoryId }, approveContext, senderAddress);
+		}
+
 		// 1. Encrypt text (empty string for attachment-only messages).
 		const textBytes = this.#textEncoder.encode(options.text ?? '');
 		const keyVersion = await this.view.getCurrentKeyVersion({ encryptionHistoryId });
@@ -379,6 +421,7 @@ export class MySoMessagingStackClient<TApproveContext = void> {
 			options.files,
 			{ groupId, encryptionHistoryId },
 			approveContext,
+			{ groupId, keyVersion, senderAddress },
 		);
 
 		const kind = options.kind ?? 'text';
@@ -529,6 +572,19 @@ export class MySoMessagingStackClient<TApproveContext = void> {
 		const { groupId, encryptionHistoryId } = this.derive.resolveGroupRef(options.groupRef);
 		const approveContext = this.#approveContextSpread(options);
 
+		// MLS groups: the readable copy is the one this device stored when it synced (or sent) it.
+		if (await this.#readsMls(groupId)) {
+			let stored = await this.#storedMlsRow(groupId, options.messageId);
+			if (!stored) {
+				await this.#mls!.sync(groupId);
+				stored = await this.#storedMlsRow(groupId, options.messageId);
+			}
+			if (!stored) throw new MySoMessagingStackClientError('Message not found on this device');
+			const [message] = await this.#decryptUnwrapped([stored], { groupId, encryptionHistoryId }, approveContext);
+			if (!message) throw new MySoMessagingStackClientError('Message could not be decrypted');
+			return message;
+		}
+
 		const raw = await this.transport.fetchMessage({
 			signer: options.signer,
 			messageId: options.messageId,
@@ -547,6 +603,23 @@ export class MySoMessagingStackClient<TApproveContext = void> {
 	async getMessages(options: GetMessagesOptions<TApproveContext>): Promise<GetMessagesResult> {
 		const { groupId, encryptionHistoryId } = this.derive.resolveGroupRef(options.groupRef);
 		const approveContext = this.#approveContextSpread(options);
+
+		// MLS groups: process the log forward into the local store, then page from the store
+		// (MLS keys are single use; the relayer copy can't be decrypted twice).
+		if (await this.#readsMls(groupId)) {
+			await this.#mls!.sync(groupId);
+			const limit = options.limit ?? 50;
+			const rows = await this.#mls!.rows(groupId, { before: options.beforeOrder, limit });
+			const after = options.afterOrder;
+			return {
+				messages: await this.#decryptUnwrapped(
+					after === undefined ? rows : rows.filter((r) => r.order > after),
+					{ groupId, encryptionHistoryId },
+					approveContext,
+				),
+				hasNext: rows.length === limit,
+			};
+		}
 
 		const result = await this.transport.fetchMessages({
 			signer: options.signer,
@@ -603,13 +676,19 @@ export class MySoMessagingStackClient<TApproveContext = void> {
 			}
 		};
 		await assertReader();
-		const result = await this.transport.fetchMessages({
-			signer: options.signer,
-			groupId: groupIds.groupId,
-			afterOrder: options.afterOrder,
-			beforeOrder: options.beforeOrder,
-			limit,
-		});
+		// MLS rooms: the relayer copy is MLS ciphertext whose keys are used up once read, so the
+		// page comes from this device's store (after syncing the log). Rows there are already
+		// verified against their MLS sender (`senderVerified`).
+		const mls = await this.#readsMls(groupIds.groupId);
+		const result = mls
+			? await this.#mlsPage(groupIds.groupId, { afterOrder: options.afterOrder, beforeOrder: options.beforeOrder, limit })
+			: await this.transport.fetchMessages({
+					signer: options.signer,
+					groupId: groupIds.groupId,
+					afterOrder: options.afterOrder,
+					beforeOrder: options.beforeOrder,
+					limit,
+				});
 		const nextCursor = validateRoomHistoryPage(result, groupIds.groupId, { ...options, limit });
 		const hasNext = result.hasNext;
 		// Snapshot signed fields before asynchronous verification/decryption. Custom
@@ -626,16 +705,18 @@ export class MySoMessagingStackClient<TApproveContext = void> {
 			const row = { messageId: raw.messageId, order: raw.order };
 			if (raw.kind === 'system') return { ...row, status: 'system_metadata' };
 			if (raw.isDeleted) return { ...row, status: 'deleted_metadata' };
-			if (!(await this.#verifyRawMessage(raw))) return { ...row, status: 'unverified_content' };
+			const verified = mls ? (raw as UnwrappedRow).senderVerified === true : await this.#verifyRawMessage(raw);
+			if (!verified) return { ...row, status: 'unverified_content' };
 			try {
 				let message: DecryptedMessage;
 				try {
 					message = await this.#decryptMessage(raw, groupIds, approveContext, {
 						senderVerified: true,
 					});
-				} catch {
-					// Keep valid text readable if separately encrypted attachment
-					// metadata is unavailable or malformed.
+				} catch (error) {
+					// Keep valid text readable if separately encrypted attachment metadata is
+					// unavailable or malformed. Any other failure (e.g. the body's key) is final.
+					if (!(error instanceof AttachmentResolutionError)) throw error;
 					message = await this.#decryptMessage(raw, groupIds, approveContext, {
 						senderVerified: true,
 						resolveAttachments: false,
@@ -677,6 +758,31 @@ export class MySoMessagingStackClient<TApproveContext = void> {
 		const approveContext = this.#approveContextSpread(options);
 		const senderAddress = this.#relayerAddress(options.signer);
 
+		// v2: edits are encrypted events; the relayer never learns which message changed.
+		if (await this.writesContentEnvelopeV2(options.groupRef)) {
+			let att: EnvelopeAttachment[] | undefined;
+			if (options.attachments) {
+				const removeSet = new Set(options.attachments.remove ?? []);
+				const kept = (options.attachments.currentEnvelope ?? []).filter((a) => !removeSet.has(a.id));
+				const added =
+					options.attachments.new && options.attachments.new.length > 0
+						? await this.#requireAttachments().uploadV2(options.attachments.new, { groupId, encryptionHistoryId })
+						: [];
+				att = [...kept, ...added];
+			}
+			await this.#sendEnvelope({
+				signer: options.signer,
+				groupIds: { groupId, encryptionHistoryId },
+				approveContext,
+				senderAddress,
+				envelope: {
+					t: 'event',
+					e: { type: 'edit', target: options.messageId, text: options.text, ...(att ? { att } : {}) },
+				},
+			});
+			return;
+		}
+
 		// Resolve existing kind for the signed canonical string.
 		const existing = await this.transport.fetchMessage({
 			signer: options.signer,
@@ -716,6 +822,7 @@ export class MySoMessagingStackClient<TApproveContext = void> {
 				newFiles,
 				{ groupId, encryptionHistoryId },
 				approveContext,
+				{ groupId, keyVersion, senderAddress },
 			);
 
 			finalAttachments = [...kept, ...uploaded];
@@ -767,7 +874,19 @@ export class MySoMessagingStackClient<TApproveContext = void> {
 	 * Only the original sender can delete their messages.
 	 */
 	async deleteMessage(options: DeleteMessageOptions): Promise<void> {
-		const { groupId } = this.derive.resolveGroupRef(options.groupRef);
+		const { groupId, encryptionHistoryId } = this.derive.resolveGroupRef(options.groupRef);
+
+		// v2: an encrypted delete event lets every device drop its local copy (required once
+		// messages live in local stores under MLS); the DELETE below drops the relayer ciphertext.
+		if (await this.writesContentEnvelopeV2(options.groupRef)) {
+			await this.#sendEnvelope({
+				signer: options.signer,
+				groupIds: { groupId, encryptionHistoryId },
+				approveContext: {},
+				senderAddress: this.#relayerAddress(options.signer),
+				envelope: { t: 'event', e: { type: 'delete', target: options.messageId } },
+			});
+		}
 
 		await this.transport.deleteMessage({
 			signer: options.signer,
@@ -817,6 +936,24 @@ export class MySoMessagingStackClient<TApproveContext = void> {
 				case 'message.created':
 				case 'message.deleted':
 				case 'message.edited': {
+					let mlsGroup = false;
+					try {
+						mlsGroup = await this.#readsMls(groupId);
+					} catch {
+						break; // `mls1` group not readable here yet; the next event retries
+					}
+					if (mlsGroup) {
+						// Any new row (message, event, commit) advances the ordered MLS log.
+						try {
+							const fresh = await this.#mls!.sync(groupId);
+							for (const message of await this.#decryptUnwrapped(fresh, { groupId, encryptionHistoryId }, approveContext)) {
+								yield { type: 'message', message };
+							}
+						} catch {
+							// Retried on the next event / page load.
+						}
+						break;
+					}
 					try {
 						const message = await this.#decryptMessage(
 							event.message,
@@ -881,6 +1018,7 @@ export class MySoMessagingStackClient<TApproveContext = void> {
 	 * existing reaction is a no-op on the relayer.
 	 */
 	async addReaction(options: ReactionOptions): Promise<void> {
+		if (await this.#reactV2(options, true)) return;
 		const { groupId } = this.derive.resolveGroupRef(options.groupRef);
 		await this.transport.postGroupReaction({
 			signer: options.signer,
@@ -896,6 +1034,7 @@ export class MySoMessagingStackClient<TApproveContext = void> {
 	 * absent reaction is a no-op on the relayer.
 	 */
 	async removeReaction(options: ReactionOptions): Promise<void> {
+		if (await this.#reactV2(options, false)) return;
 		const { groupId } = this.derive.resolveGroupRef(options.groupRef);
 		await this.transport.postGroupReaction({
 			signer: options.signer,
@@ -904,6 +1043,537 @@ export class MySoMessagingStackClient<TApproveContext = void> {
 			emoji: emojiToStorage(options.emoji),
 			add: false,
 		});
+	}
+
+	/** v2 groups: reactions are encrypted events. Returns false for v1 groups (caller uses the legacy API). */
+	async #reactV2(options: ReactionOptions, add: boolean): Promise<boolean> {
+		if (!(await this.writesContentEnvelopeV2(options.groupRef))) return false;
+		if (!options.messageId) {
+			throw new MySoMessagingStackClientError(
+				'messageId is required to react in a content-envelope-v2 group',
+			);
+		}
+		const sender = this.#relayerAddress(options.signer);
+		const target = options.targetSenderAddress?.toLowerCase();
+		await this.sendEvent({
+			signer: options.signer,
+			groupRef: options.groupRef,
+			event: {
+				type: 'reaction',
+				target: options.messageId,
+				emoji: emojiToStorage(options.emoji),
+				add,
+			},
+			// Push the author on add, never on removal; reacting to yourself notifies nobody.
+			notifyWallets: add && target && target !== sender.toLowerCase() ? [target] : undefined,
+		});
+		return true;
+	}
+
+	// === Content envelope v2 ===
+
+	/**
+	 * Whether `groupRef` writes content envelope v2: its on-chain metadata `data["e2ee"]` is `v2`
+	 * (or a later protocol). Reads cached metadata; pass `refresh` after changing the flag.
+	 */
+	async writesContentEnvelopeV2(groupRef: GroupRef, refresh = false): Promise<boolean> {
+		const { groupId } = this.derive.resolveGroupRef(groupRef);
+		try {
+			const meta = (await this.view.groupsMetadata({ groupIds: [groupId], refresh }))[groupId];
+			const entry = meta?.data?.contents?.find((c: { key: string }) => c.key === 'e2ee');
+			return entry?.value === 'v2' || entry?.value === 'mls1';
+		} catch {
+			return false;
+		}
+	}
+
+	/** Turn on content envelope v2 for a group (requires `MetadataAdmin`). Readers must already support v2. */
+	async enableContentEnvelopeV2(options: { signer: Signer; groupRef: GroupRef }) {
+		const { groupId } = this.derive.resolveGroupRef(options.groupRef);
+		const result = await this.insertGroupData({
+			signer: options.signer,
+			groupId,
+			key: 'e2ee',
+			value: 'v2',
+		});
+		await this.view.groupsMetadata({ groupIds: [groupId], refresh: true }).catch(() => {});
+		return result;
+	}
+
+	/**
+	 * Send an encrypted event (reaction, edit, delete, pin, poll vote) in a v2 group. The relayer
+	 * stores an opaque `event` row; it never learns the type or the target.
+	 */
+	async sendEvent(options: SendEventOptions): Promise<{ messageId: string }> {
+		const groupIds = this.derive.resolveGroupRef(options.groupRef);
+		return this.#sendEnvelope({
+			signer: options.signer,
+			groupIds,
+			approveContext: {},
+			senderAddress: this.#relayerAddress(options.signer),
+			envelope: { t: 'event', e: options.event },
+			notifyWallets: options.notifyWallets,
+		});
+	}
+
+	/** Seal `name` with the group's current DEK for on-chain storage (`enc:v1:<v>:…`). */
+	async encryptGroupName(groupRef: GroupRef, name: string): Promise<string> {
+		const { groupId, encryptionHistoryId } = this.derive.resolveGroupRef(groupRef);
+		const keyVersion = await this.view.getCurrentKeyVersion({ encryptionHistoryId });
+		const sealed = await this.encryption.encrypt({
+			groupId,
+			encryptionHistoryId,
+			data: padGroupName(name),
+			keyVersion,
+			aad: groupNameAad(groupId),
+		} as EncryptOptions<TApproveContext>);
+		return formatEncryptedGroupName(keyVersion, sealed.nonce, sealed.ciphertext);
+	}
+
+	/**
+	 * Display name for an on-chain `Metadata.name`: cleartext names pass through; `enc:v1:` names are
+	 * decrypted (members only). Returns `null` when an encrypted name can't be opened.
+	 */
+	async decryptGroupName(groupRef: GroupRef, name: string): Promise<string | null> {
+		const parsed = parseEncryptedGroupName(name);
+		if (!parsed) return isEncryptedGroupName(name) ? null : name;
+		const { groupId, encryptionHistoryId } = this.derive.resolveGroupRef(groupRef);
+		try {
+			const padded = await this.encryption.decrypt({
+				groupId,
+				encryptionHistoryId,
+				envelope: {
+					ciphertext: parsed.ciphertext,
+					nonce: parsed.nonce,
+					keyVersion: parsed.keyVersion,
+					aad: groupNameAad(groupId),
+				},
+			} as DecryptOptions<TApproveContext>);
+			return unpadGroupName(padded);
+		} catch {
+			return null;
+		}
+	}
+
+	/** Pin or unpin a message (v2 groups). */
+	async setPinned(options: { signer: Signer; groupRef: GroupRef; messageId: string; pinned: boolean }) {
+		return this.sendEvent({
+			signer: options.signer,
+			groupRef: options.groupRef,
+			event: { type: 'pin', target: options.messageId, pinned: options.pinned },
+		});
+	}
+
+	async #sendMessageV2(
+		options: SendMessageOptions<TApproveContext>,
+		groupIds: { groupId: string; encryptionHistoryId: string },
+		approveContext: Record<string, unknown>,
+		senderAddress: string,
+	): Promise<{ messageId: string }> {
+		const kind = options.kind ?? 'text';
+		const att =
+			options.files && options.files.length > 0
+				? await this.#requireAttachments().uploadV2(options.files, groupIds)
+				: undefined;
+		const sharedPostAddress =
+			kind === 'post' ? (normalizeSharedPostAddress(options.sharedPostAddress) ?? undefined) : undefined;
+		if (kind === 'post' && (!sharedPostAddress || !options.idempotencyKey?.trim())) {
+			throw new Error('sharedPostAddress and idempotencyKey are required when kind is post');
+		}
+		let transferDigest: string | undefined;
+		if (kind === 'token_transfer') {
+			transferDigest = options.paymentMetadata?.digest?.trim();
+			if (!transferDigest) throw new Error('paymentMetadata.digest is required when kind is token_transfer');
+			if (options.idempotencyKey !== transferIdempotencyKey(senderAddress, transferDigest)) {
+				throw new Error('idempotencyKey must be transferIdempotencyKey(sender, digest)');
+			}
+		} else if (kind === 'request_payment') {
+			if (!options.paymentMetadata?.assetKind) {
+				throw new Error('paymentMetadata.assetKind is required when kind is request_payment');
+			}
+			if (!options.idempotencyKey?.startsWith('request:')) {
+				throw new Error('idempotencyKey must start with "request:" when kind is request_payment');
+			}
+		}
+		return this.#sendEnvelope({
+			signer: options.signer,
+			groupIds,
+			approveContext,
+			senderAddress,
+			envelope: { t: kind as EnvelopeMessageType, text: options.text ?? '', ...(att ? { att } : {}) },
+			idempotencyKey: options.idempotencyKey,
+			sharedPostAddress,
+			transferDigest,
+			paymentMetadata:
+				kind === 'token_transfer' || kind === 'request_payment' ? options.paymentMetadata : undefined,
+			attribution: options.attribution,
+		});
+	}
+
+	/** Encrypt + sign + POST one content-envelope-v2 row. */
+	async #sendEnvelope(params: {
+		signer: Signer;
+		groupIds: { groupId: string; encryptionHistoryId: string };
+		approveContext: Record<string, unknown>;
+		senderAddress: string;
+		envelope: ContentEnvelope;
+		notifyWallets?: string[];
+		idempotencyKey?: string;
+		sharedPostAddress?: string;
+		transferDigest?: string;
+		paymentMetadata?: SendMessageOptions<TApproveContext>['paymentMetadata'];
+		attribution?: SendMessageOptions<TApproveContext>['attribution'];
+	}): Promise<{ messageId: string }> {
+		const { groupId, encryptionHistoryId } = params.groupIds;
+		const kind = relayerKindForEnvelope(params.envelope);
+		const keyVersion = await this.view.getCurrentKeyVersion({ encryptionHistoryId });
+		const aad = buildMessageAad({ groupId, keyVersion, senderAddress: params.senderAddress });
+		const sealed = await this.encryption.encrypt({
+			groupId,
+			encryptionHistoryId,
+			data: encodeContentEnvelope(params.envelope),
+			keyVersion,
+			aad,
+			...params.approveContext,
+		} as EncryptOptions<TApproveContext>);
+		// MLS groups: the sender's own MLS device wraps the DEK-sealed row (agents have their own),
+		// after enforcing the on-chain membership rule.
+		let rowText = sealed.ciphertext;
+		let rowNonce = sealed.nonce;
+		const sender = await this.#senderMlsSession(groupId, params.senderAddress);
+		const mls = sender !== null;
+		if (sender) {
+			// Membership rule + encrypt atomically; pauses (MlsMembersUnverifiedError) rather than
+			// encrypt to a device it couldn't verify.
+			rowText = await sender.seal(groupId, await this.#onChainReaders(groupId), {
+				nonce: sealed.nonce,
+				keyVersion: sealed.keyVersion,
+				ciphertext: sealed.ciphertext,
+			});
+			rowNonce = globalThis.crypto.getRandomValues(new Uint8Array(12));
+		}
+		const signatureVersion: 1 | 2 = params.attribution ? 2 : 1;
+		const messageSignature = await signMessageContent(params.signer, {
+			groupId,
+			kind,
+			signatureVersion,
+			encryptedText: rowText,
+			nonce: rowNonce,
+			keyVersion: sealed.keyVersion,
+			sharedPostAddress: params.sharedPostAddress,
+			transferDigest: params.transferDigest,
+			idempotencyKey: params.idempotencyKey,
+			attachments: [],
+			attribution: params.attribution,
+		});
+		const result = await this.transport.sendMessage({
+			signer: params.signer,
+			groupId,
+			encryptedText: rowText,
+			nonce: rowNonce,
+			keyVersion: sealed.keyVersion,
+			kind,
+			signatureVersion,
+			idempotencyKey: params.idempotencyKey,
+			sharedPostAddress: params.sharedPostAddress,
+			paymentMetadata: params.paymentMetadata,
+			messageSignature,
+			notifyWallets: params.notifyWallets,
+			attribution: params.attribution
+				? {
+						principalOwner: params.attribution.principalOwner,
+						subAgentId: params.attribution.subAgentId,
+						identityClass: params.attribution.identityClass,
+					}
+				: undefined,
+		});
+		if (mls) {
+			// MLS never hands our own message back; keep the readable copy now.
+			const stored = await this.transport.fetchMessage({
+				signer: params.signer,
+				messageId: result.messageId,
+				groupId,
+			});
+			// Stored in the reading (primary) session so the human's view shows it too.
+			await (this.#mls ?? sender!).storeOwn(groupId, {
+				...stored,
+				encryptedText: sealed.ciphertext,
+				nonce: sealed.nonce,
+				keyVersion: sealed.keyVersion,
+				senderVerified: true,
+			});
+		}
+		return { messageId: result.messageId };
+	}
+
+	// === MLS (E2EE M4–M6) ===
+
+	/**
+	 * Open this device's MLS session (restores or creates the device, certifies it with `signer`,
+	 * publishes KeyPackages) and attach it to the client. `wasm` is the `myso-mls` module the app
+	 * loads; `store` persists device state and unwrapped rows (sealed at rest by the app).
+	 */
+	async openMlsSession(options: {
+		wasm: MlsWasmModule;
+		store: MlsStateStore;
+		signer: Signer;
+		deviceId: string;
+		/**
+		 * zkLogin certificate check via a fullnode (`verifyZkloginSignature`): resolve its
+		 * `success`, throw when unreachable. Defaults to this client's own fullnode.
+		 */
+		verifyZkLogin?: (message: Uint8Array, signatureHex: string, wallet: string) => Promise<boolean>;
+		/**
+		 * `false` for an agent's own device: it only sends (as itself) and never becomes the
+		 * session messages are read through. Defaults to `true` for the first session.
+		 */
+		primary?: boolean;
+		/**
+		 * Certificate renewal through the on-chain `MlsDeviceRegistry` (requires the registry object
+		 * to exist on this chain). `submitter` executes registry transactions with sponsored gas;
+		 * without it the session verifies others' v2 certificates but doesn't renew its own.
+		 */
+		registry?: { submitter?: MlsRegistrySubmitter; rotateAfterMs?: number };
+	}): Promise<MlsSession> {
+		if (!this.#relayerUrl) {
+			throw new MySoMessagingStackClientError('MLS needs relayer.relayerUrl in the client options');
+		}
+		const core = this.#client.core;
+		const session = await MlsSession.open({
+			wasm: options.wasm,
+			store: options.store,
+			signer: options.signer,
+			// The account the groups list as the member (zkLogin: the zkLogin address, not the
+			// ephemeral key), so the certificate names a wallet that is an on-chain reader.
+			identity: this.#relayerAuthSigner ? this.#relayerAuthSigner(options.signer) : options.signer,
+			deviceId: options.deviceId,
+			relayer: new HttpMlsRelayer({ relayerUrl: this.#relayerUrl, transport: this.transport }),
+			verifyCertificate: createCertificateVerifier(
+				(c) => options.wasm.mlsCertificateCanonical(c.wallet, c.device_id, c.mls_key, c.issued_at_ms),
+				{
+					verifyZkLogin:
+						options.verifyZkLogin ??
+						(async (message, signatureHex, address) => {
+							const res = await core.verifyZkLoginSignature({
+								bytes: toBase64(message),
+								signature: toBase64(fromHex(signatureHex)),
+								intentScope: 'PersonalMessage',
+								address,
+							});
+							return res.success;
+						}),
+					currentEpoch: async () => BigInt((await core.getCurrentSystemState()).systemState.epoch),
+				},
+			),
+			verifyRow: (row) => this.#verifyRawMessage(row),
+			onChainReaders: (groupId) => this.#onChainReaders(groupId),
+			registry: options.registry
+				? {
+						chain: this.mlsDeviceRegistry(),
+						submitter: options.registry.submitter,
+						rotateAfterMs: options.registry.rotateAfterMs,
+					}
+				: undefined,
+			historyShareDays: async (groupId) => {
+				try {
+					const meta = (await this.view.groupsMetadata({ groupIds: [groupId] }))[groupId];
+					const raw = meta?.data?.contents?.find((c: { key: string }) => c.key === 'e2ee_history_days')?.value;
+					const days = Number(raw ?? 0);
+					return Number.isFinite(days) && days > 0 ? Math.min(days, 365) : 0;
+				} catch {
+					return 0;
+				}
+			},
+		});
+		this.#mlsSessions.set(session.wallet, session);
+		const primary = options.primary ?? !this.#mls;
+		if (primary) this.#mls = session;
+		await session.acceptWelcomes();
+		if (primary) {
+			// Own-device history: join/create the self-group; a new device receives history from
+			// an existing one, an existing one sends to any device that just joined.
+			await session.ensureSelfGroup().catch(() => {});
+			await session.syncSelf().catch(() => {});
+		}
+		return session;
+	}
+
+	/**
+	 * Use an already-open session (e.g. from another client of the same app and network) instead of
+	 * opening a second one. One device must have exactly one live session: two would each encrypt
+	 * from their own copy of the state.
+	 */
+	attachMlsSession(session: MlsSession, options: { primary?: boolean } = {}): void {
+		this.#mlsSessions.set(session.wallet, session);
+		if (options.primary ?? !this.#mls) this.#mls = session;
+	}
+
+	#mlsRegistry: ChainMlsDeviceRegistry | undefined;
+
+	/** The on-chain MLS device registry (reads + transaction builders). */
+	mlsDeviceRegistry(): ChainMlsDeviceRegistry {
+		this.#mlsRegistry ??= new ChainMlsDeviceRegistry({
+			client: this.#client,
+			originalPackageId: this.packageConfig.originalPackageId,
+			latestPackageId: this.packageConfig.latestPackageId,
+			registryId: this.derive.mlsDeviceRegistryId(),
+			versionId: this.packageConfig.versionId,
+		});
+		return this.#mlsRegistry;
+	}
+
+	get mlsSession(): MlsSession | undefined {
+		return this.#mls;
+	}
+
+	/** On-chain `data["e2ee"]` for a group (cached metadata). Throws if it can't be read. */
+	async #e2eeFlag(groupId: string): Promise<string | undefined> {
+		const meta = (await this.view.groupsMetadata({ groupIds: [groupId] }))[groupId];
+		return meta?.data?.contents?.find((c: { key: string }) => c.key === 'e2ee')?.value;
+	}
+
+	/**
+	 * Read path: `true` = read through MLS. For an `mls1` group this device isn't in yet, first
+	 * picks up a Welcome or joins by external commit; throws {@link MlsGroupUnavailableError} if
+	 * that isn't possible here (so the UI can say why instead of showing an empty thread).
+	 */
+	async #readsMls(groupId: string): Promise<boolean> {
+		let flag: string | undefined;
+		try {
+			flag = await this.#e2eeFlag(groupId);
+		} catch {
+			return false; // metadata unreachable: legacy rows still decrypt; MLS rows are skipped
+		}
+		if (flag !== 'mls1') return false;
+		if (!this.#mls) throw new MlsGroupUnavailableError(groupId, 'no-device');
+		if (await this.#mls.ensureGroup(groupId)) return true;
+		throw new MlsGroupUnavailableError(groupId, 'not-joined');
+	}
+
+	/** Whether `groupRef` runs MLS (`e2ee=mls1`) and this device is (now) in its MLS group. */
+	async usesMls(groupRef: GroupRef): Promise<boolean> {
+		const { groupId } = this.derive.resolveGroupRef(groupRef);
+		try {
+			return await this.#readsMls(groupId);
+		} catch {
+			return false;
+		}
+	}
+
+	/**
+	 * MLS status of a group on this device: `off` (not an MLS group), `ready`, or why it can't be
+	 * used here ({@link MlsUnavailableReason}).
+	 */
+	async mlsStatus(groupRef: GroupRef): Promise<'off' | 'ready' | MlsUnavailableReason> {
+		const { groupId } = this.derive.resolveGroupRef(groupRef);
+		try {
+			return (await this.#readsMls(groupId)) ? 'ready' : 'off';
+		} catch (error) {
+			return error instanceof MlsGroupUnavailableError ? error.reason : 'not-joined';
+		}
+	}
+
+	/**
+	 * Set up the MLS group of a group created as `mls1` (`createAndShareGroup({ groupData: {
+	 * e2ee: 'mls1' } })`): the MLS group with every device of the current on-chain readers.
+	 * Race-safe and idempotent; retried while the relayer catches up with the new group's
+	 * membership. If it still can't finish, the first member to open the group finishes it.
+	 * Returns whether this device ended up in the MLS group.
+	 */
+	async setupMlsGroup(options: { groupRef: GroupRef; attempts?: number }): Promise<boolean> {
+		if (!this.#mls) throw new MlsGroupUnavailableError(this.derive.resolveGroupRef(options.groupRef).groupId, 'no-device');
+		const { groupId } = this.derive.resolveGroupRef(options.groupRef);
+		const attempts = options.attempts ?? 5;
+		for (let attempt = 0; attempt < attempts; attempt++) {
+			try {
+				const readers = [...(await this.#onChainReaders(groupId))];
+				if (await this.#mls.createGroup(groupId, readers)) return true;
+			} catch {
+				// Relayer / chain not caught up yet: retry.
+			}
+			await new Promise((r) => setTimeout(r, 1_000 * (attempt + 1)));
+		}
+		return false;
+	}
+
+	/**
+	 * The MLS session `senderAddress` sends with in `mls1` group `groupId`, joining via external
+	 * commit if this device isn't in the group yet. `null` for non-MLS groups.
+	 */
+	async #senderMlsSession(groupId: string, senderAddress: string): Promise<MlsSession | null> {
+		// Never fall back to a non-MLS write because metadata couldn't be read: that would send
+		// without forward secrecy (and MLS readers couldn't see it).
+		const flag = await this.#e2eeFlag(groupId);
+		if (flag !== 'mls1') return null;
+		const session = this.#mlsSessions.get(senderAddress.toLowerCase());
+		if (!session) throw new MlsGroupUnavailableError(groupId, 'no-device');
+		if (!(await session.ensureGroup(groupId))) throw new MlsGroupUnavailableError(groupId, 'not-joined');
+		return session;
+	}
+
+	/**
+	 * Opt-in: share the last `days` of messages with members who join this MLS group later
+	 * (0 = off, max 365). Requires MetadataAdmin. Shared rows show as unverified to the newcomer.
+	 */
+	async setHistorySharing(options: { signer: Signer; groupRef: GroupRef; days: number }) {
+		const { groupId } = this.derive.resolveGroupRef(options.groupRef);
+		const days = Math.max(0, Math.min(365, Math.floor(options.days)));
+		const result = await this.insertGroupData({
+			signer: options.signer,
+			groupId,
+			key: 'e2ee_history_days',
+			value: String(days),
+		});
+		await this.view.groupsMetadata({ groupIds: [groupId], refresh: true }).catch(() => {});
+		return result;
+	}
+
+	/** Lowercase wallets holding MessagingReader on-chain (the MLS membership rule's source of truth). */
+	async #onChainReaders(groupId: string): Promise<Set<string>> {
+		const reader = messagingPermissionTypes(this.packageConfig.originalPackageId).MessagingReader;
+		const { members } = await this.#groupsClient.view.getMembers({ groupId, exhaustive: true });
+		return new Set(members.filter((m) => m.permissions.includes(reader)).map((m) => m.address.toLowerCase()));
+	}
+
+	async #storedMlsRow(groupId: string, messageId: string): Promise<UnwrappedRow | undefined> {
+		return (await this.#mls!.rows(groupId, { limit: 1_000_000 })).find((r) => r.messageId === messageId);
+	}
+
+	/** A room-history page from this device's MLS store (relayer page shape). */
+	async #mlsPage(
+		groupId: string,
+		o: { afterOrder?: number; beforeOrder?: number; limit: number },
+	): Promise<{ messages: UnwrappedRow[]; hasNext: boolean }> {
+		await this.#mls!.sync(groupId);
+		const all = (await this.#mls!.rows(groupId, { limit: 1_000_000 })).filter(
+			(r) => (o.afterOrder === undefined || r.order > o.afterOrder) && (o.beforeOrder === undefined || r.order < o.beforeOrder),
+		);
+		// Same paging as the relayer: oldest-first after a cursor, else the newest page.
+		const page = o.afterOrder !== undefined ? all.slice(0, o.limit) : all.slice(Math.max(0, all.length - o.limit));
+		return { messages: page, hasNext: all.length > page.length };
+	}
+
+	async #decryptUnwrapped(
+		rows: UnwrappedRow[],
+		groupIds: { groupId: string; encryptionHistoryId: string },
+		approveContext: Record<string, unknown>,
+	): Promise<DecryptedMessage[]> {
+		const settled = await Promise.allSettled(
+			rows.map((row) =>
+				this.#decryptMessage(row, groupIds, approveContext, { senderVerified: row.senderVerified }),
+			),
+		);
+		return settled.flatMap((s) => (s.status === 'fulfilled' ? [s.value] : []));
+	}
+
+	#requireAttachments(): AttachmentsManager<TApproveContext> {
+		if (!this.#attachments) {
+			throw new MySoMessagingStackClientError(
+				'Attachments support is not configured. Provide `attachments` ' +
+					'with a StorageAdapter when creating the messaging groups client.',
+			);
+		}
+		return this.#attachments;
 	}
 
 	// === User-scoped synchronization ===
@@ -1130,6 +1800,12 @@ export class MySoMessagingStackClient<TApproveContext = void> {
 		const { groupId, encryptionHistoryId } = this.derive.resolveGroupRef(options.groupRef);
 		const approveContext = this.#approveContextSpread(options);
 
+		// MLS groups: archived rows are MLS ciphertext whose keys were used up when first read
+		// (forward secrecy), so there is nothing to recover; readable copies live on the devices.
+		if ((await this.#e2eeFlag(groupId).catch(() => undefined)) === 'mls1') {
+			return { messages: [], hasNext: false };
+		}
+
 		const result = await this.#recovery.recoverMessages({
 			groupId,
 			afterOrder: options.afterOrder,
@@ -1203,6 +1879,7 @@ export class MySoMessagingStackClient<TApproveContext = void> {
 				isAgentMessage: false,
 				kind: 'system',
 				system: raw.system,
+				contentVersion: 1,
 			};
 		}
 
@@ -1227,7 +1904,9 @@ export class MySoMessagingStackClient<TApproveContext = void> {
 				subAgentId: raw.subAgentId,
 				identityClass: raw.identityClass,
 				isAgentMessage: raw.isAgentMessage,
-				kind: raw.kind ?? 'text',
+				// v2 rows hide the inner type; a deleted `message` renders like a deleted text.
+				kind: raw.kind === 'message' ? 'text' : (raw.kind ?? 'text'),
+				contentVersion: raw.kind === 'message' || raw.kind === 'event' ? 2 : 1,
 			};
 		}
 
@@ -1249,10 +1928,16 @@ export class MySoMessagingStackClient<TApproveContext = void> {
 			},
 		} as DecryptOptions<TApproveContext>);
 
-		const text = this.#textDecoder.decode(plaintext);
-
-		const kind = raw.kind ?? 'text';
 		const senderVerified = verifiedOptions.senderVerified ?? (await this.#verifyRawMessage(raw));
+
+		// Content envelope v2: inner type, events and attachment refs live inside the ciphertext.
+		const envelope = decodeContentEnvelope(plaintext);
+		if (envelope) {
+			return this.#fromEnvelope(raw, envelope, senderVerified, verifiedOptions.resolveAttachments !== false);
+		}
+
+		const text = this.#textDecoder.decode(plaintext);
+		const kind = raw.kind ?? 'text';
 
 		// Attachment references are relayer metadata until they are covered by a v2
 		// sender signature. Never download/decrypt legacy or signature-invalid refs.
@@ -1268,7 +1953,15 @@ export class MySoMessagingStackClient<TApproveContext = void> {
 		const attachments =
 			verifiedOptions.resolveAttachments === false || attachmentIntegrity !== 'verified'
 				? []
-				: await this.#resolveAttachments(raw.attachments, groupIds, raw.keyVersion, approveContext);
+				: await this.#resolveAttachments(
+						raw.attachments,
+						groupIds,
+						raw.keyVersion,
+						approveContext,
+						raw.senderAddress,
+					).catch((cause: unknown) => {
+						throw new AttachmentResolutionError(cause);
+					});
 
 		return {
 			messageId: raw.messageId,
@@ -1292,6 +1985,71 @@ export class MySoMessagingStackClient<TApproveContext = void> {
 			kind,
 			paymentMetadata: raw.paymentMetadata,
 			payment: parsePaymentPayload(kind, text),
+			contentVersion: 1,
+		};
+	}
+
+	/** Build a {@link DecryptedMessage} from a decoded v2 envelope. */
+	#fromEnvelope(
+		raw: RelayerMessage,
+		envelope: ContentEnvelope,
+		senderVerified: boolean,
+		resolveAttachments: boolean,
+	): DecryptedMessage {
+		const hasAttribution = Boolean(raw.principalOwner || raw.subAgentId || raw.identityClass !== undefined);
+		const attributionIntegrity: DecryptedMessage['attributionIntegrity'] = !hasAttribution
+			? 'none'
+			: raw.signatureVersion !== 2 ? 'legacy_unverified' : !senderVerified ? 'signature_unverified' : 'verified';
+		const base = {
+			messageId: raw.messageId,
+			groupId: raw.groupId,
+			order: raw.order,
+			senderAddress: raw.senderAddress,
+			createdAt: raw.createdAt,
+			updatedAt: raw.updatedAt,
+			isEdited: raw.isEdited,
+			isDeleted: false,
+			syncStatus: raw.syncStatus,
+			attributionIntegrity,
+			senderVerified,
+			principalOwner: raw.principalOwner,
+			subAgentId: raw.subAgentId,
+			identityClass: raw.identityClass,
+			isAgentMessage: raw.isAgentMessage && attributionIntegrity === 'verified',
+			paymentMetadata: raw.paymentMetadata,
+			contentVersion: 2 as const,
+		};
+		// The relayer-visible row kind must agree with the signed envelope; otherwise render nothing.
+		const rowKind = raw.kind ?? 'text';
+		if (rowKind !== relayerKindForEnvelope(envelope)) {
+			return { ...base, text: '', attachments: [], attachmentIntegrity: 'none', kind: 'text' };
+		}
+		if (envelope.t === 'event') {
+			return {
+				...base,
+				text: '',
+				attachments: [],
+				attachmentIntegrity: 'none',
+				kind: 'event',
+				// Unverified events must never change state.
+				...(senderVerified ? { event: envelope.e as MessageEvent } : {}),
+			};
+		}
+		const refs = envelope.att ?? [];
+		const attachmentIntegrity: DecryptedMessage['attachmentIntegrity'] =
+			refs.length === 0 ? 'none' : senderVerified ? 'verified' : 'signature_unverified';
+		const attachments =
+			resolveAttachments && attachmentIntegrity === 'verified' && this.#attachments
+				? this.#attachments.resolveV2(refs)
+				: [];
+		return {
+			...base,
+			text: envelope.text,
+			attachments,
+			attachmentIntegrity,
+			kind: envelope.t,
+			...(refs.length > 0 && senderVerified ? { envelopeAttachments: refs } : {}),
+			payment: parsePaymentPayload(envelope.t, envelope.text),
 		};
 	}
 
@@ -1334,6 +2092,7 @@ export class MySoMessagingStackClient<TApproveContext = void> {
 		files: AttachmentFile[] | undefined,
 		groupIds: { groupId: string; encryptionHistoryId: string },
 		approveContext: Record<string, unknown>,
+		binding: AttachmentAadBinding,
 	): Promise<Attachment[]> {
 		if (!files || files.length === 0) return [];
 
@@ -1348,6 +2107,7 @@ export class MySoMessagingStackClient<TApproveContext = void> {
 			files,
 			groupIds,
 			approveContext as Omit<EncryptOptions<TApproveContext>, 'data'>,
+			binding,
 		);
 	}
 
@@ -1356,6 +2116,7 @@ export class MySoMessagingStackClient<TApproveContext = void> {
 		groupIds: { groupId: string; encryptionHistoryId: string },
 		keyVersion: bigint,
 		approveContext: Record<string, unknown>,
+		senderAddress: string,
 	): Promise<AttachmentHandle[]> {
 		if (rawAttachments.length === 0) return [];
 		if (!this.#attachments) return [];
@@ -1365,6 +2126,7 @@ export class MySoMessagingStackClient<TApproveContext = void> {
 			groupIds,
 			keyVersion,
 			approveContext as Omit<DecryptOptions<TApproveContext>, 'envelope'>,
+			{ groupId: groupIds.groupId, senderAddress },
 		);
 	}
 
@@ -1422,17 +2184,33 @@ export class MySoMessagingStackClient<TApproveContext = void> {
 	async createAndShareGroup({
 		signer,
 		transaction,
+		contentEnvelopeV2,
 		...callOptions
-	}: CreateGroupOptions & { transaction?: Transaction }) {
-		return this.#executeTransaction(
+	}: CreateGroupOptions & {
+		transaction?: Transaction;
+		/**
+		 * Mark the new group as writing content envelope v2 (a second transaction, since a group
+		 * shared in a transaction can't be mutated later in it). Only enable once every client
+		 * that may join can read v2.
+		 */
+		contentEnvelopeV2?: boolean;
+	}) {
+		const uuid = callOptions.uuid ?? globalThis.crypto.randomUUID();
+		const result = await this.#executeTransaction(
 			this.tx.createAndShareGroup({
 				transaction,
 				sender: signer.toMySoAddress(),
 				...callOptions,
+				uuid,
+				encryptName: callOptions.encryptName ?? contentEnvelopeV2,
 			}),
 			signer,
 			'create and share group',
 		);
+		if (contentEnvelopeV2) {
+			await this.enableContentEnvelopeV2({ signer, groupRef: { uuid } });
+		}
+		return result;
 	}
 
 	/**
@@ -1529,6 +2307,15 @@ export class MySoMessagingStackClient<TApproveContext = void> {
 		transaction,
 		...callOptions
 	}: SetGroupNameOptions & { transaction?: Transaction }) {
+		// v2 groups keep their name encrypted on-chain. The encryption history derives from the
+		// group's uuid, which lives in its on-chain metadata.
+		const meta = (await this.view.groupsMetadata({ groupIds: [callOptions.groupId] }))[callOptions.groupId];
+		if (meta?.uuid && (await this.writesContentEnvelopeV2({ uuid: meta.uuid }))) {
+			callOptions = {
+				...callOptions,
+				name: await this.encryptGroupName({ uuid: meta.uuid }, callOptions.name),
+			};
+		}
 		return this.#executeTransaction(
 			this.tx.setGroupName({ transaction, ...callOptions }),
 			signer,

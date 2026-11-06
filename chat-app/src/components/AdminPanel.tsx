@@ -20,6 +20,7 @@ import { dmPeerAddress } from '../lib/wallet-profile';
 import { chatHasAnotherHuman } from '../lib/chat-has-another-human';
 import { getSelfAliases } from '../lib/self-aliases';
 import type { Permissions } from '../hooks/usePermissions';
+import { HistorySharingSection } from './admin/HistorySharingSection';
 import { OrganizationRow } from './agents/OrganizationRow';
 import { GroupNameSection } from './admin/GroupNameSection';
 import { MemberList } from './admin/MemberList';
@@ -684,6 +685,12 @@ export function AdminPanel({
           onToggleNotifications={handleToggleNotifications}
           onToggleReadReceipts={handleToggleReadReceipts}
           onToggleOnlinePresence={handleToggleOnlinePresence}
+        />
+
+        <HistorySharingSection
+          groupId={groupId}
+          groupUuid={groupUuid}
+          canEdit={permissions.canEditMetadata}
         />
 
         {(permissions.isAdmin || onLeaveGroup) && (

@@ -8,16 +8,26 @@ import type { StoredGroup } from '../lib/group-store';
 import { scheduleInboxDeliveredAck } from '../lib/inbox-delivered-ack';
 import { getCachedThread } from '../lib/message-session-cache';
 import {
-  loadSidebarPreviews,
-  saveSidebarPreviews,
-  type StoredSidebarPreview,
-} from '../lib/sidebar-chrome-store';
+  loadSealedPreviews,
+  saveSealedPreviews,
+} from '../lib/sealed-preview-store';
+import type { StoredSidebarPreview } from '../lib/sidebar-chrome-store';
+import { foldTimeline, type FoldableMessage } from '../lib/timeline-fold';
+
+/** Newest timeline row of a page, with v2 events (edits / deletes) applied and event rows skipped. */
+function tipOf<T extends FoldableMessage>(rows: readonly T[]): T | null {
+  const visible = foldTimeline(rows).visible;
+  return visible.length > 0 ? visible.reduce((best, m) => (m.order > best.order ? m : best)) : null;
+}
 
 type PreviewEntry = StoredSidebarPreview;
 
 /** Session cache of last-message previews keyed by groupId. */
 const previewCache = new Map<string, PreviewEntry>();
 let hydratedWallet: string | null = null;
+/** Wallet whose sealed previews have finished loading; persisting waits for this. */
+let readyWallet: string | null = null;
+let saveChain: Promise<void> = Promise.resolve();
 
 const listeners = new Set<() => void>();
 
@@ -25,19 +35,35 @@ function notifyPreviewListeners() {
   for (const listener of listeners) listener();
 }
 
+/**
+ * Load the wallet's sealed previews (async: IndexedDB + AES-GCM unseal). Entries merge through
+ * `applyPreview`, so anything fresher that arrived meanwhile wins.
+ */
 function ensureHydrated(wallet: string | null | undefined) {
   const key = wallet?.trim().toLowerCase() || null;
   if (!key || hydratedWallet === key) return;
   previewCache.clear();
-  for (const [groupId, entry] of loadSidebarPreviews(key)) {
-    previewCache.set(groupId, entry);
-  }
   hydratedWallet = key;
+  readyWallet = null;
+  void loadSealedPreviews(key).then((stored) => {
+    if (hydratedWallet !== key) return;
+    let changed = false;
+    for (const [groupId, entry] of stored) {
+      if (applyPreview(groupId, entry)) changed = true;
+    }
+    readyWallet = key;
+    // Persist anything learned before the load finished, merged with what was stored.
+    persistPreviews(key);
+    if (changed) notifyPreviewListeners();
+  });
 }
 
 function persistPreviews(wallet: string | null | undefined) {
-  if (!wallet) return;
-  saveSidebarPreviews(wallet, previewCache);
+  const key = wallet?.trim().toLowerCase() || null;
+  // Until the sealed copy has loaded, saving would overwrite it with a partial cache.
+  if (!key || readyWallet !== key) return;
+  const snapshot = new Map(previewCache);
+  saveChain = saveChain.then(() => saveSealedPreviews(key, snapshot));
 }
 
 function formatPreview(message: {
@@ -62,7 +88,10 @@ function previewFromSessionCache(uuid: string): PreviewEntry | null {
   if (!uuid) return null;
   const thread = getCachedThread(uuid);
   if (!thread?.messages.length) return null;
-  const last = thread.messages[thread.messages.length - 1]!;
+  const last = tipOf(thread.messages as unknown as FoldableMessage[]) as
+    | (FoldableMessage & { createdAt?: number; attachments?: unknown[] })
+    | null;
+  if (!last) return null;
   return {
     text: formatPreview(last),
     order: last.order,
@@ -128,7 +157,7 @@ export function sidebarPreviewActivityTime(groupId: string): number {
 
 /**
  * Last-message preview text for sidebar rows.
- * Instant paint from localStorage + thread session cache, then verifies
+ * Paint from the sealed on-device cache + thread session cache, then verifies
  * against the relayer (limit 1 tip) so a stale cache cannot stick.
  */
 export function useSidebarMessagePreviews(
@@ -213,13 +242,8 @@ export function useSidebarMessagePreviews(
               mydataApproveContext: undefined,
             });
             if (cancelled) return;
-            const last = result.messages.reduce<
-              (typeof result.messages)[number] | null
-            >(
-              (best, msg) =>
-                !best || msg.order > best.order ? msg : best,
-              null,
-            );
+            // A page is one timeline row plus any v2 events after it (edits, reactions).
+            const last = tipOf(result.messages);
             if (!last) {
               if ((latestOrdersRef.current[group.groupId] ?? 0) === 0) {
                 applyPreview(group.groupId, {

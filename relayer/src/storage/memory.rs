@@ -44,6 +44,9 @@ pub struct InMemoryStorage {
     conversation_preferences: RwLock<HashMap<(String, String), ConversationPreferences>>,
     /// Metadata-only conversation reports. No message content.
     conversation_reports: RwLock<Vec<ConversationReport>>,
+    /// v2 encrypted-event pushes: (group_id, wallet, event_id, event_order, sender, at).
+    event_notifications:
+        RwLock<Vec<(String, String, Uuid, i64, String, chrono::DateTime<chrono::Utc>)>>,
 }
 
 impl InMemoryStorage {
@@ -62,6 +65,7 @@ impl InMemoryStorage {
             paid_escrows: RwLock::new(HashMap::new()),
             conversation_preferences: RwLock::new(HashMap::new()),
             conversation_reports: RwLock::new(Vec::new()),
+            event_notifications: RwLock::new(Vec::new()),
         }
     }
 
@@ -472,6 +476,10 @@ impl StorageAdapter for InMemoryStorage {
             if order <= after_order || deleted {
                 continue;
             }
+            if m.kind.is_control() {
+                // Encrypted reactions / edits / deletes are not unread messages.
+                continue;
+            }
             if m.kind == MessageKind::System {
                 if m.system_type == Some(SystemType::MemberJoined) {
                     has_join = true;
@@ -491,6 +499,54 @@ impl StorageAdapter for InMemoryStorage {
             latest_order,
             unread_count,
         })
+    }
+
+    async fn record_event_notifications(
+        &self,
+        group_id: &str,
+        event_id: Uuid,
+        event_order: i64,
+        sender: &str,
+        wallets: &[String],
+    ) -> StorageResult<()> {
+        let mut rows = self
+            .event_notifications
+            .write()
+            .map_err(|e| StorageError::OperationFailed(format!("Lock poisoned: {}", e)))?;
+        let now = chrono::Utc::now();
+        for wallet in wallets {
+            if !rows.iter().any(|r| r.2 == event_id && &r.1 == wallet) {
+                rows.push((group_id.to_string(), wallet.clone(), event_id, event_order, sender.to_string(), now));
+            }
+        }
+        Ok(())
+    }
+
+    async fn get_reaction_activity(
+        &self,
+        group_id: &str,
+        viewer: &str,
+        after: chrono::DateTime<chrono::Utc>,
+    ) -> StorageResult<crate::models::ReactionActivity> {
+        let rows = self
+            .event_notifications
+            .read()
+            .map_err(|e| StorageError::OperationFailed(format!("Lock poisoned: {}", e)))?;
+        let mine: Vec<_> = rows
+            .iter()
+            .filter(|r| r.0 == group_id && r.1.eq_ignore_ascii_case(viewer))
+            .collect();
+        let unread_count = mine.iter().filter(|r| r.5 > after).count() as i64;
+        let latest = mine.iter().max_by_key(|r| r.5).map(|r| crate::models::LatestReaction {
+            member: r.4.clone(),
+            emoji: String::new(),
+            chain_seq: r.3,
+            message_id: r.2,
+            message_kind: "event".to_string(),
+            message_sender: viewer.to_string(),
+            created_at_ms: r.5.timestamp_millis(),
+        });
+        Ok(crate::models::ReactionActivity { unread_count, latest })
     }
 
     async fn set_reaction(
