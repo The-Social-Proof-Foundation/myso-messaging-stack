@@ -154,6 +154,14 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         {
             Ok(pool) => {
                 app_state.mls.attach_postgres(pool.clone());
+                // Durable retry/dead-letter for transient push failures (migration 029).
+                crate::services::push::retry_queue::init(pool.clone());
+                let retry_push = app_state.push_service.clone();
+                let retry_storage = storage.clone();
+                tokio::spawn(async move {
+                    crate::services::push::retry_queue::run_retry_worker(retry_push, retry_storage)
+                        .await;
+                });
                 if let Err(e) = app_state.notification_push.attach_postgres(pool).await {
                     tracing::error!("notification push store load failed: {e}");
                 }

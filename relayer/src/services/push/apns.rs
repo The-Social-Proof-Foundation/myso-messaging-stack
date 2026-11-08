@@ -672,7 +672,7 @@ fn map_apns_status(code: u16) -> Result<(), ApnsSendError> {
         200 => Ok(()),
         410 => Err(ApnsSendError::Unregistered),
         400 => Err(ApnsSendError::InvalidToken),
-        500..=599 => Err(ApnsSendError::Transient(format!("APNs status {code}"))),
+        429 | 500..=599 => Err(ApnsSendError::Transient(format!("APNs status {code}"))),
         other => Err(ApnsSendError::Other(format!("APNs status {other}"))),
     }
 }

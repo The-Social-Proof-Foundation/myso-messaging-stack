@@ -2,6 +2,7 @@
 
 mod apns;
 mod fcm;
+pub mod retry_queue;
 mod web_push;
 
 use std::collections::HashMap;
@@ -21,6 +22,7 @@ use crate::storage::StorageAdapter;
 pub use apns::{ApnsClient, ApnsEnvironment, ApnsSendError};
 pub use fcm::FcmClient;
 pub use web_push::WebPushClient;
+pub use retry_queue::PushRetryJob;
 
 #[derive(Clone)]
 pub struct PushService {
@@ -323,7 +325,27 @@ impl PushService {
                             PushSendOutcome::Failed
                         }
                         Err(ApnsSendError::Transient(err)) => {
-                            warn!("transient APNs send failure for {}: {}", job.member, err);
+                            warn!(
+                                "transient APNs send failure for {} (queued for retry): {}",
+                                job.member, err
+                            );
+                            let retry = if send_alert {
+                                PushRetryJob::NewMessageAlert {
+                                    group_id: group_id.clone(),
+                                    message_id,
+                                    sender: sender_wallet.clone(),
+                                    message_kind: message_kind.to_string(),
+                                    encrypted_notification: encrypted_notification.clone(),
+                                    message_wire: message_wire.as_deref().cloned(),
+                                    attribution: attribution.clone(),
+                                }
+                            } else {
+                                PushRetryJob::NewMessage {
+                                    group_id: group_id.clone(),
+                                    attribution: attribution.clone(),
+                                }
+                            };
+                            retry_queue::enqueue(&job.member, &job.token, &retry, &err).await;
                             PushSendOutcome::Failed
                         }
                         Err(ApnsSendError::EnvironmentMismatch) => {
@@ -396,6 +418,14 @@ impl PushService {
                         Err(ApnsSendError::Unregistered) => {
                             let _ = storage.delete_push_token(recipient, &token.token).await;
                         }
+                        Err(ApnsSendError::Transient(err)) => {
+                            warn!("workflow APNs send failed for {recipient} (queued for retry): {err}");
+                            let retry = PushRetryJob::WorkflowItem {
+                                item_type: item_type.to_string(),
+                                item_id: item_id.to_string(),
+                            };
+                            retry_queue::enqueue(recipient, &token, &retry, &err).await;
+                        }
                         Err(err) => warn!("workflow APNs send failed for {recipient}: {err}"),
                     }
                 }
@@ -413,6 +443,54 @@ impl PushService {
                         warn!("workflow web push failed for {recipient}: {err}");
                     }
                 }
+            }
+        }
+    }
+
+    /// Repeats a queued APNs send (called by [`retry_queue::run_retry_worker`]). A recipient
+    /// who came back online since the first attempt already has the message, so that counts
+    /// as delivered.
+    pub(crate) async fn redeliver(
+        &self,
+        storage: &Arc<dyn StorageAdapter>,
+        wallet: &str,
+        token: &PushTokenRecord,
+        job: &PushRetryJob,
+    ) -> Result<(), ApnsSendError> {
+        let Some(apns) = self.apns.as_ref().filter(|_| self.enabled) else {
+            return Err(ApnsSendError::Other("push disabled".to_string()));
+        };
+        if self.is_recently_active(storage, wallet).await {
+            debug!("drop push retry for {wallet} — recipient active again");
+            return Ok(());
+        }
+        match job {
+            PushRetryJob::NewMessage { group_id, attribution } => {
+                apns.send_new_message(token, group_id, attribution).await
+            }
+            PushRetryJob::NewMessageAlert {
+                group_id,
+                message_id,
+                sender,
+                message_kind,
+                encrypted_notification,
+                message_wire,
+                attribution,
+            } => {
+                apns.send_new_message_alert(
+                    token,
+                    group_id,
+                    *message_id,
+                    sender,
+                    message_kind,
+                    encrypted_notification.as_deref(),
+                    message_wire.as_ref(),
+                    attribution,
+                )
+                .await
+            }
+            PushRetryJob::WorkflowItem { item_type, item_id } => {
+                apns.send_workflow_item(token, item_type, item_id).await
             }
         }
     }
