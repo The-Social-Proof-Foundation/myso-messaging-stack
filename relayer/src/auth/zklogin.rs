@@ -73,8 +73,9 @@ const JWK_REFETCH_INTERVAL: Duration = Duration::from_secs(60);
 const EPOCH_TTL: Duration = Duration::from_secs(30);
 
 /// Validators reject a proof whose `max_epoch` is more than this many epochs ahead
-/// (protocol config `zklogin_max_epoch_upper_bound_delta`).
-const MAX_EPOCH_UPPER_BOUND_DELTA: u64 = 30;
+/// (protocol config `zklogin_max_epoch_upper_bound_delta`: 365 from protocol v113, up from 30).
+/// Must not be tighter than the chain's, or clients minting year-long proofs get a 401 here.
+const MAX_EPOCH_UPPER_BOUND_DELTA: u64 = 365;
 
 /// Where the current epoch comes from. The fullnode's gRPC in production.
 #[async_trait]
@@ -828,6 +829,8 @@ mod tests {
         assert!(check_epoch_window(10 + MAX_EPOCH_UPPER_BOUND_DELTA, 10).is_ok());
         assert!(check_epoch_window(11 + MAX_EPOCH_UPPER_BOUND_DELTA, 10).is_err());
         assert!(check_epoch_window(9, 10).is_err());
+        // Year-long proof minted at epoch 1, used at epoch 3 (the iOS session that hit the 401).
+        assert!(check_epoch_window(366, 3).is_ok());
     }
 
     #[tokio::test]
