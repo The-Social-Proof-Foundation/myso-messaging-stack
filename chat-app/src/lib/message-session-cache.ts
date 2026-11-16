@@ -4,7 +4,6 @@
  * Privacy: plaintext lives only in RAM for this tab. Cleared on logout /
  * messaging-client teardown. Never written to localStorage or IndexedDB.
  */
-import type { RelayerReactionEntry } from '@socialproof/myso-messaging-stack';
 import {
   coercePageLedger,
   emptyPageLedger,
@@ -35,13 +34,10 @@ export interface CachedMessage {
   payment?: unknown;
 }
 
-export type CachedReactions = Map<number, RelayerReactionEntry[]>;
-
 export type CachedThread = {
   messages: CachedMessage[];
   /** @deprecated Prefer `pageLedger.hasMoreOlder` — kept for callers during migration. */
   hasMore: boolean;
-  reactions: CachedReactions;
   pageLedger: ThreadPageLedger;
   cachedAt: number;
 };
@@ -53,11 +49,6 @@ const MAX_MESSAGES_PER_GROUP = 300;
 /** Insertion-ordered Map: oldest key is first; touch moves to end (LRU). */
 const threads = new Map<string, CachedThread>();
 
-function cloneReactions(reactions: CachedReactions): CachedReactions {
-  return new Map(
-    [...reactions.entries()].map(([order, rows]) => [order, [...rows]]),
-  );
-}
 
 function cloneLedger(ledger: ThreadPageLedger): ThreadPageLedger {
   return {
@@ -109,7 +100,6 @@ export function getCachedThread(uuid: string): CachedThread | null {
   return {
     messages: [...entry.messages],
     hasMore: pageLedger.hasMoreOlder,
-    reactions: cloneReactions(entry.reactions),
     pageLedger: cloneLedger(pageLedger),
     cachedAt: entry.cachedAt,
   };
@@ -120,7 +110,6 @@ export function setCachedThread(
   entry: {
     messages: CachedMessage[];
     hasMore?: boolean;
-    reactions: CachedReactions;
     pageLedger?: ThreadPageLedger;
     cachedAt?: number;
   },
@@ -135,7 +124,6 @@ export function setCachedThread(
   touch(uuid, {
     messages: trimmed.messages,
     hasMore: trimmed.ledger.hasMoreOlder,
-    reactions: cloneReactions(entry.reactions),
     pageLedger: trimmed.ledger,
     cachedAt: entry.cachedAt ?? Date.now(),
   });
@@ -153,7 +141,6 @@ export function updateCachedThread(
   const next = updater({
     messages: [...prev.messages],
     hasMore: pageLedger.hasMoreOlder,
-    reactions: cloneReactions(prev.reactions),
     pageLedger: cloneLedger(pageLedger),
     cachedAt: prev.cachedAt,
   });

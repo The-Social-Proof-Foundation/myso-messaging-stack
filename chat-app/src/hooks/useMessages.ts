@@ -33,7 +33,6 @@ import type {
   ReceiptMode,
   TokenTransferPayload,
   RelayerReactionEntry,
-  RelayerReactionEvent,
   RelayerReceiptEvent,
 } from '@socialproof/myso-messaging-stack';
 import {
@@ -84,7 +83,6 @@ import { publishSidebarMessagePreview } from './useSidebarMessagePreviews';
 import {
   applyPendingReactions,
   foldTimeline,
-  mergeReactionMaps,
 } from '../lib/timeline-fold';
 import type { MessageEvent } from '@socialproof/myso-messaging-stack';
 import {
@@ -351,47 +349,6 @@ function localAttachmentHandles(files: AttachmentFile[]): AttachmentHandle[] {
   });
 }
 
-/** Group flat reaction rows by message order. */
-function groupReactionsByOrder(rows: RelayerReactionEntry[]): MessageReactions {
-  const byOrder: MessageReactions = new Map();
-  for (const row of rows) {
-    const entries = byOrder.get(row.chainSeq) ?? [];
-    entries.push(row);
-    byOrder.set(row.chainSeq, entries);
-  }
-  return byOrder;
-}
-
-/**
- * Apply an absolute-state reaction event: replace the (order, emoji) entry
- * with the event's count/reactors, dropping it when the count reaches zero.
- * Idempotent — re-applying the same event is a no-op.
- */
-function applyReactionEvent(
-  prev: MessageReactions,
-  event: RelayerReactionEvent,
-): MessageReactions {
-  const next = new Map(prev);
-  const entries = (next.get(event.chainSeq) ?? []).filter(
-    (e) => e.emoji !== event.emoji,
-  );
-  if (event.count > 0) {
-    entries.push({
-      chainSeq: event.chainSeq,
-      emoji: event.emoji,
-      count: event.count,
-      reactors: event.reactors,
-    });
-  }
-  entries.sort((a, b) => a.emoji.localeCompare(b.emoji));
-  if (entries.length > 0) {
-    next.set(event.chainSeq, entries);
-  } else {
-    next.delete(event.chainSeq);
-  }
-  return next;
-}
-
 export function useMessages(
   uuid: string,
   groupId: string,
@@ -413,7 +370,6 @@ export function useMessages(
   const [error, setError] = useState<string | null>(null);
   const [hasMore, setHasMore] = useState(false);
   const [initialReadUpto, setInitialReadUpto] = useState(0);
-  const [reactions, setReactions] = useState<MessageReactions>(new Map());
   /** Typing members mapped to their expiry (ms epoch) — TTL is the recovery path. */
   const [typingUntil, setTypingUntil] = useState<Map<string, number>>(new Map());
   const [presenceRecords, setPresenceRecords] = useState<
@@ -486,23 +442,6 @@ export function useMessages(
   const isLoadingInitialRef = useRef(false);
   const isLoadingOlderRef = useRef(false);
   const isCatchingUpRef = useRef(false);
-  // Content envelope v2: does this group write encrypted events? (on-chain metadata flag)
-  const [writesV2, setWritesV2] = useState(false);
-  const writesV2Ref = useRef(false);
-  writesV2Ref.current = writesV2;
-  useEffect(() => {
-    let cancelled = false;
-    setWritesV2(false);
-    void client.messaging
-      .writesContentEnvelopeV2({ uuid })
-      .then((v2) => {
-        if (!cancelled) setWritesV2(v2);
-      })
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, [client, uuid]);
   /** My v2 reaction toggles not yet echoed back as events: `order|emoji` → add. */
   const [pendingV2Reactions, setPendingV2Reactions] = useState<Map<string, boolean>>(new Map());
 
@@ -511,11 +450,11 @@ export function useMessages(
   const visibleReactions = useMemo(
     () =>
       applyPendingReactions(
-        mergeReactionMaps(reactions, folded.reactionsByOrder),
+        folded.reactionsByOrder,
         pendingV2Reactions,
         myAddress,
       ) as MessageReactions,
-    [reactions, folded.reactionsByOrder, pendingV2Reactions, myAddress],
+    [folded.reactionsByOrder, pendingV2Reactions, myAddress],
   );
   // Drop pending toggles once the folded (echoed) state agrees with them.
   useEffect(() => {
@@ -769,13 +708,11 @@ export function useMessages(
       pageLedgerRef.current = cached.pageLedger;
       setMessages(cached.messages as Message[]);
       setHasMore(cached.pageLedger.hasMoreOlder);
-      setReactions(cached.reactions);
       setLoading(false);
     } else {
       pageLedgerRef.current = emptyPageLedger();
       setMessages([]);
       setHasMore(false);
-      setReactions(new Map());
       setLoading(true);
     }
     setLoadingOlder(false);
@@ -817,30 +754,6 @@ export function useMessages(
         setInitialReadUpto(readUpto);
       } catch (err) {
         console.warn('Failed to load read state:', err);
-      }
-    }
-
-    async function loadReactions(
-      fallback: MessageReactions | undefined,
-    ): Promise<MessageReactions> {
-      try {
-        const rows = await client.messaging.listReactions({
-          signer,
-          groupRef: {uuid},
-        });
-        if (cancelled || uuidRef.current !== uuid) {
-          return fallback ?? new Map();
-        }
-        const next = groupReactionsByOrder(rows);
-        setReactions(next);
-        return next;
-      } catch (err) {
-        console.warn('Failed to load reactions:', err);
-        if (fallback) {
-          setReactions(fallback);
-          return fallback;
-        }
-        return new Map();
       }
     }
 
@@ -1022,14 +935,10 @@ export function useMessages(
         setMessages(initial);
         setHasMore(nextLedger.hasMoreOlder);
 
-        const nextReactions = await loadReactions(cached?.reactions);
-        if (cancelled || uuidRef.current !== uuid) return;
-
         setCachedThread(uuid, {
           messages: initial as CachedMessage[],
           hasMore: nextLedger.hasMoreOlder,
           pageLedger: nextLedger,
-          reactions: nextReactions,
         });
 
         await loadPresence();
@@ -1074,7 +983,6 @@ export function useMessages(
       messages: messages as CachedMessage[],
       hasMore: pageLedgerRef.current.hasMoreOlder,
       pageLedger: pageLedgerRef.current,
-      reactions,
     });
     // Trim may invalidate older cursors — keep the live ref aligned.
     pageLedgerRef.current = stored;
@@ -1085,7 +993,7 @@ export function useMessages(
     if (tip && groupId) {
       publishSidebarMessagePreview(groupId, tip);
     }
-  }, [uuid, groupId, messages, hasMore, reactions, loading]);
+  }, [uuid, groupId, messages, hasMore, loading]);
 
   // ------------------------------------------------------------------
   // Real-time subscription (messages, reactions, typing, presence, receipts)
@@ -1135,9 +1043,6 @@ export function useMessages(
               }
               break;
             }
-            case 'reaction':
-              setReactions((prev) => applyReactionEvent(prev, event.reaction));
-              break;
             case 'typing': {
               if (event.typing.member === myAddress) break;
               const member = event.typing.member;
@@ -1711,85 +1616,32 @@ export function useMessages(
       const hasReacted =
         entry?.reactors.some((r) => r.toLowerCase() === myAddress.toLowerCase()) ?? false;
 
-      // v2: the reaction is an encrypted event addressed by message id; the relayer only learns
+      // The reaction is an encrypted event addressed by message id; the relayer only learns
       // that the target's author was notified.
-      if (writesV2Ref.current) {
-        const target = messagesRef.current.find(
-          (m) => m.order === order && m.kind !== 'event',
-        );
-        if (!target) return;
-        const key = `${order}|${emoji}`;
-        setPendingV2Reactions((prev) => new Map(prev).set(key, !hasReacted));
-        try {
-          const reaction = {
-            signer,
-            groupRef: { uuid: uuidRef.current },
-            order,
-            emoji,
-            messageId: target.messageId,
-            targetSenderAddress: target.senderAddress,
-          };
-          if (hasReacted) await client.messaging.removeReaction(reaction);
-          else await client.messaging.addReaction(reaction);
-        } catch (err) {
-          setPendingV2Reactions((prev) => {
-            const next = new Map(prev);
-            next.delete(key);
-            return next;
-          });
-          console.error('Failed to toggle reaction:', err);
-          setError(
-            err instanceof RelayerTransportError
-              ? formatRelayerError(err)
-              : err instanceof Error
-                ? err.message
-                : 'Failed to update reaction.',
-          );
-          throw err;
-        }
-        return;
-      }
-
-      // Optimistic absolute-state update, shaped like a relayer event so the
-      // eventual reaction.updated broadcast converges to the same state.
-      const optimistic: RelayerReactionEvent = hasReacted
-        ? {
-            groupId,
-            chainSeq: order,
-            emoji,
-            count: Math.max((entry?.count ?? 1) - 1, 0),
-            reactors: (entry?.reactors ?? []).filter((a) => a !== myAddress),
-          }
-        : {
-            groupId,
-            chainSeq: order,
-            emoji,
-            count: (entry?.count ?? 0) + 1,
-            reactors: [...(entry?.reactors ?? []), myAddress],
-          };
-
-      const snapshot = reactionsRef.current;
-      setReactions((prev) => applyReactionEvent(prev, optimistic));
-
+      const target = messagesRef.current.find(
+        (m) => m.order === order && m.kind !== 'event',
+      );
+      if (!target) return;
+      const key = `${order}|${emoji}`;
+      setPendingV2Reactions((prev) => new Map(prev).set(key, !hasReacted));
       try {
-        if (hasReacted) {
-          await client.messaging.removeReaction({
-            signer,
-            groupRef: {uuid: uuidRef.current},
-            order,
-            emoji,
-          });
-        } else {
-          await client.messaging.addReaction({
-            signer,
-            groupRef: {uuid: uuidRef.current},
-            order,
-            emoji,
-          });
-        }
+        const reaction = {
+          signer,
+          groupRef: { uuid: uuidRef.current },
+          order,
+          emoji,
+          messageId: target.messageId,
+          targetSenderAddress: target.senderAddress,
+        };
+        if (hasReacted) await client.messaging.removeReaction(reaction);
+        else await client.messaging.addReaction(reaction);
       } catch (err) {
+        setPendingV2Reactions((prev) => {
+          const next = new Map(prev);
+          next.delete(key);
+          return next;
+        });
         console.error('Failed to toggle reaction:', err);
-        setReactions(snapshot);
         setError(
           err instanceof RelayerTransportError
             ? formatRelayerError(err)

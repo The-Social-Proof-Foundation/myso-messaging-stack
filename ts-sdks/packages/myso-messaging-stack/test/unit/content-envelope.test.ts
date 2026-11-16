@@ -154,7 +154,6 @@ describe('client content envelope v2', () => {
 				sent.push(p);
 				return { messageId: 'new-id' };
 			}),
-			postGroupReaction: vi.fn(async () => {}),
 			fetchMessages: vi.fn(async () => ({ messages: rows, hasNext: false })),
 		};
 		const client = new MySoMessagingStackClient({
@@ -194,7 +193,6 @@ describe('client content envelope v2', () => {
 			messageId: 'target-1',
 			targetSenderAddress: author,
 		});
-		expect(transport.postGroupReaction).not.toHaveBeenCalled();
 		expect(sent).toHaveLength(1);
 		expect(sent[0]!.kind).toBe('event');
 		expect(sent[0]!.notifyWallets).toEqual([author]);
@@ -202,13 +200,6 @@ describe('client content envelope v2', () => {
 			t: 'event',
 			e: { type: 'reaction', target: 'target-1', emoji: '👍', add: true },
 		});
-	});
-
-	it('v1 group: reactions keep using the legacy endpoint', async () => {
-		const { client, transport, sent } = fixture(null);
-		await client.addReaction({ signer: Ed25519Keypair.generate(), groupRef, order: 4, emoji: '👍' });
-		expect(transport.postGroupReaction).toHaveBeenCalled();
-		expect(sent).toHaveLength(0);
 	});
 
 	it('v2 group: text messages hide their type and carry no relayer attachments', async () => {

@@ -1,18 +1,7 @@
-//! Off-chain mirror of group-level features (reactions, pins, receipts) for `/v1` APIs.
+//! Off-chain mirror of group-level features (pins, receipts, reaction activity) for `/v1` APIs.
 //! This is complementary to the on-chain `MessageLog` and is relayer-local.
 
 use serde::{Deserialize, Serialize};
-
-#[derive(Debug, Clone, Serialize)]
-pub struct ReactionEntry {
-    pub chain_seq: i64,
-    /// Canonical Unicode emoji string (NFC) — supports skin tones, ZWJ
-    /// sequences, and variation selectors.
-    pub emoji: String,
-    pub count: i32,
-    /// Wallet addresses of members who currently have this reaction set.
-    pub reactors: Vec<String>,
-}
 
 /// Reactions a member should see as inbox activity (same audience as reaction pushes:
 /// reactions by others on the member's messages, or by an author on their own message).

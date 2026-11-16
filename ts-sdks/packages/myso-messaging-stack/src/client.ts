@@ -63,7 +63,6 @@ import type {
 	RelayerConfig,
 	RelayerHTTPConfig,
 	RelayerMessage,
-	RelayerReactionEntry,
 	RelayerUserEvent,
 } from './relayer/types.js';
 import {
@@ -86,7 +85,6 @@ import type {
 	GetMessageOptions,
 	GetMessagesOptions,
 	GetMessagesResult,
-	ListReactionsOptions,
 	MessagingEvent,
 	ReactionOptions,
 	RecoverMessagesOptions,
@@ -207,7 +205,7 @@ export function mysoMessagingStack<
  *   text: 'Hello!',
  * });
  *
- * // Subscribe to new messages and reaction updates
+ * // Subscribe to new messages
  * for await (const event of client.messaging.subscribe({
  *   signer: keypair,
  *   groupRef: { uuid: 'my-group' },
@@ -896,13 +894,11 @@ export class MySoMessagingStackClient<TApproveContext = void> {
 	}
 
 	/**
-	 * Subscribe to real-time messages and reaction updates for a group as a
-	 * single event stream.
+	 * Subscribe to real-time messages for a group as a single event stream.
 	 *
-	 * Message events are decrypted before yielding; reaction events are passed
-	 * through as absolute state (count + reactor list), keyed by the target
-	 * message's relayer `order` (`chainSeq`). The iterable completes when the
-	 * AbortSignal fires or {@link disconnect} is called.
+	 * Message events (including encrypted reaction / edit / delete `event` rows) are
+	 * decrypted before yielding. The iterable completes when the AbortSignal fires or
+	 * {@link disconnect} is called.
 	 *
 	 * @example
 	 * ```ts
@@ -914,8 +910,6 @@ export class MySoMessagingStackClient<TApproveContext = void> {
 	 * })) {
 	 *   if (event.type === 'message') {
 	 *     console.log(event.message.text, event.message.attachments);
-	 *   } else {
-	 *     console.log(event.reaction.emoji, event.reaction.count);
 	 *   }
 	 * }
 	 * ```
@@ -966,9 +960,6 @@ export class MySoMessagingStackClient<TApproveContext = void> {
 					}
 					break;
 				}
-				case 'reaction.updated':
-					yield { type: 'reaction', reaction: event.reaction };
-					break;
 				case 'typing.start':
 					yield {
 						type: 'typing',
@@ -1000,59 +991,17 @@ export class MySoMessagingStackClient<TApproveContext = void> {
 
 	// === Reactions ===
 
-	/**
-	 * List reaction tallies for a group (optionally a single message).
-	 * Entries are keyed by the message's relayer `order` (`chainSeq`).
-	 */
-	async listReactions(options: ListReactionsOptions): Promise<RelayerReactionEntry[]> {
-		const { groupId } = this.derive.resolveGroupRef(options.groupRef);
-		return this.transport.listGroupReactions({
-			signer: options.signer,
-			groupId,
-			chainSeq: options.order,
-		});
-	}
-
-	/**
-	 * Add the signer's reaction to a message. Idempotent — re-adding an
-	 * existing reaction is a no-op on the relayer.
-	 */
+	/** Add the signer's reaction to a message (an encrypted `reaction` event). */
 	async addReaction(options: ReactionOptions): Promise<void> {
-		if (await this.#reactV2(options, true)) return;
-		const { groupId } = this.derive.resolveGroupRef(options.groupRef);
-		await this.transport.postGroupReaction({
-			signer: options.signer,
-			groupId,
-			chainSeq: options.order,
-			emoji: emojiToStorage(options.emoji),
-			add: true,
-		});
+		await this.#sendReaction(options, true);
 	}
 
-	/**
-	 * Remove the signer's reaction from a message. Idempotent — removing an
-	 * absent reaction is a no-op on the relayer.
-	 */
+	/** Remove the signer's reaction from a message (an encrypted `reaction` event). */
 	async removeReaction(options: ReactionOptions): Promise<void> {
-		if (await this.#reactV2(options, false)) return;
-		const { groupId } = this.derive.resolveGroupRef(options.groupRef);
-		await this.transport.postGroupReaction({
-			signer: options.signer,
-			groupId,
-			chainSeq: options.order,
-			emoji: emojiToStorage(options.emoji),
-			add: false,
-		});
+		await this.#sendReaction(options, false);
 	}
 
-	/** v2 groups: reactions are encrypted events. Returns false for v1 groups (caller uses the legacy API). */
-	async #reactV2(options: ReactionOptions, add: boolean): Promise<boolean> {
-		if (!(await this.writesContentEnvelopeV2(options.groupRef))) return false;
-		if (!options.messageId) {
-			throw new MySoMessagingStackClientError(
-				'messageId is required to react in a content-envelope-v2 group',
-			);
-		}
+	async #sendReaction(options: ReactionOptions, add: boolean): Promise<void> {
 		const sender = this.#relayerAddress(options.signer);
 		const target = options.targetSenderAddress?.toLowerCase();
 		await this.sendEvent({
@@ -1067,7 +1016,6 @@ export class MySoMessagingStackClient<TApproveContext = void> {
 			// Push the author on add, never on removal; reacting to yourself notifies nobody.
 			notifyWallets: add && target && target !== sender.toLowerCase() ? [target] : undefined,
 		});
-		return true;
 	}
 
 	// === Content envelope v2 ===

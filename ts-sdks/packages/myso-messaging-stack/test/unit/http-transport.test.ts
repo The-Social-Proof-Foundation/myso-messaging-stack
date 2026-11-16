@@ -736,95 +736,7 @@ describe('HTTPRelayerTransport', () => {
 		});
 	});
 
-	describe('group reactions', () => {
-		it('GET /v1/groups/:id/reactions with header auth and chain_seq query', async () => {
-			const transport = new HTTPRelayerTransport({
-				relayerUrl: MOCK_RELAYER_URL,
-				apiPrefix: '/v1',
-				fetch: mockFetch,
-			});
-			const keypair = Ed25519Keypair.generate();
-			const groupId = '0x' + 'ab'.repeat(32);
-			mockFetch.mockResolvedValueOnce(
-				new Response(
-					JSON.stringify([{ chain_seq: 1, emoji: '👍', count: 3, reactors: ['0xa', '0xb'] }]),
-					{ status: 200 },
-				),
-			);
-
-			const rows = await transport.listGroupReactions({
-				signer: keypair,
-				groupId,
-				chainSeq: 1,
-			});
-
-			expect(rows).toEqual([{ chainSeq: 1, emoji: '👍', count: 3, reactors: ['0xa', '0xb'] }]);
-			const url = mockFetch.mock.calls[0][0] as string;
-			expect(url).toBe(`${MOCK_RELAYER_URL}/v1/groups/${groupId}/reactions?chain_seq=1`);
-		});
-
-		it('subscribe polls messages and diffs reaction snapshots into events', async () => {
-			const transport = new HTTPRelayerTransport({
-				relayerUrl: MOCK_RELAYER_URL,
-				apiPrefix: '/v1',
-				pollingIntervalMs: 1,
-				fetch: mockFetch,
-			});
-			const controller = new AbortController();
-
-			let messagesCall = 0;
-			let reactionsCall = 0;
-			mockFetch.mockImplementation(async (input) => {
-				const url = String(input);
-				if (url.includes('/receipts')) {
-					return new Response(JSON.stringify({ members: [] }), { status: 200 });
-				}
-				if (url.includes('/reactions')) {
-					reactionsCall += 1;
-					// Poll 1: baseline (no events). Poll 2: reaction added. Poll 3: removed.
-					if (reactionsCall === 1) {
-						return new Response(JSON.stringify([]), { status: 200 });
-					}
-					if (reactionsCall === 2) {
-						return new Response(
-							JSON.stringify([{ chain_seq: 1, emoji: '👍', count: 1, reactors: ['0xa'] }]),
-							{ status: 200 },
-						);
-					}
-					return new Response(JSON.stringify([]), { status: 200 });
-				}
-				messagesCall += 1;
-				if (messagesCall === 1) {
-					return new Response(JSON.stringify({ messages: [WIRE_MESSAGE], hasNext: false }), {
-						status: 200,
-					});
-				}
-				return new Response(JSON.stringify({ messages: [], hasNext: false }), { status: 200 });
-			});
-
-			const events: string[] = [];
-			for await (const event of transport.subscribe({
-				signer: defaultKeypair,
-				groupId: WIRE_MESSAGE.group_id,
-				signal: controller.signal,
-			})) {
-				if (event.type === 'message.created') {
-					events.push(`message:${event.message.messageId}`);
-				} else if (event.type === 'reaction.updated') {
-					events.push(
-						`reaction:${event.reaction.chainSeq}:${event.reaction.emoji}:${event.reaction.count}:${event.reaction.reactors.join('|')}`,
-					);
-				}
-				if (events.length === 3) controller.abort();
-			}
-
-			expect(events).toEqual([
-				`message:${WIRE_MESSAGE.message_id}`,
-				'reaction:1:👍:1:0xa',
-				'reaction:1:👍:0:',
-			]);
-		});
-
+	describe('group subscribe polling', () => {
 		it('subscribe diffs receipt snapshots into receipt.updated events', async () => {
 			const transport = new HTTPRelayerTransport({
 				relayerUrl: MOCK_RELAYER_URL,
@@ -879,50 +791,6 @@ describe('HTTPRelayerTransport', () => {
 			}
 
 			expect(events).toEqual([`receipt:${peer}:3:0`, `receipt:${peer}:3:3`]);
-		});
-
-		it('defaults reactors to an empty array for legacy responses', async () => {
-			const transport = new HTTPRelayerTransport({
-				relayerUrl: MOCK_RELAYER_URL,
-				apiPrefix: '/v1',
-				fetch: mockFetch,
-			});
-			mockFetch.mockResolvedValueOnce(
-				new Response(JSON.stringify([{ chain_seq: 1, emoji: '👍', count: 3 }]), { status: 200 }),
-			);
-
-			const rows = await transport.listGroupReactions({
-				signer: defaultKeypair,
-				groupId: '0x' + 'ab'.repeat(32),
-			});
-
-			expect(rows).toEqual([{ chainSeq: 1, emoji: '👍', count: 3, reactors: [] }]);
-		});
-
-		it('POST /v1/groups/:id/reactions with body auth', async () => {
-			const transport = new HTTPRelayerTransport({
-				relayerUrl: MOCK_RELAYER_URL,
-				apiPrefix: '/v1',
-				fetch: mockFetch,
-			});
-			mockFetch.mockResolvedValueOnce(new Response(JSON.stringify({ ok: true }), { status: 200 }));
-
-			await transport.postGroupReaction({
-				signer: defaultKeypair,
-				groupId: '0x' + 'ab'.repeat(32),
-				chainSeq: 2,
-				emoji: '👍',
-				add: false,
-			});
-
-			const [url, init] = mockFetch.mock.calls[0];
-			expect(url).toBe(`${MOCK_RELAYER_URL}/v1/groups/0x${'ab'.repeat(32)}/reactions`);
-			expect(init?.method).toBe('POST');
-			const body = JSON.parse(init?.body as string);
-			expect(body.chain_seq).toBe(2);
-			expect(body.emoji).toBe('👍');
-			expect(body.add).toBe(false);
-			expect(body.group_id).toBe('0x' + 'ab'.repeat(32));
 		});
 	});
 

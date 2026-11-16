@@ -11,7 +11,6 @@ import type {
 	MessageKind,
 	PaymentMetadata,
 	PaymentRequestAction,
-	RelayerReactionEvent,
 	RelayerReceiptEvent,
 	SyncStatus,
 	SystemMessage,
@@ -261,12 +260,11 @@ export type SubscribeOptions<TApproveContext = void> = WithApproveContext<
 
 /**
  * Event yielded by {@link MySoMessagingStackClient.subscribe}: a decrypted
- * message, an absolute-state reaction update, ephemeral typing / presence,
+ * message, ephemeral typing / presence,
  * or peer-visible delivery/read receipts.
  */
 export type MessagingEvent =
 	| { type: 'message'; message: DecryptedMessage }
-	| { type: 'reaction'; reaction: RelayerReactionEvent }
 	| {
 			type: 'typing';
 			typing: {
@@ -281,14 +279,6 @@ export type MessagingEvent =
 
 // ── Reactions ────────────────────────────────────────────────────
 
-/** Options for {@link MySoMessagingStackClient.listReactions}. */
-export interface ListReactionsOptions {
-	signer: Signer;
-	groupRef: GroupRef;
-	/** When set, only reactions for the message with this relayer `order`. */
-	order?: number;
-}
-
 /** Options for {@link MySoMessagingStackClient.addReaction} / {@link MySoMessagingStackClient.removeReaction}. */
 export interface ReactionOptions {
 	signer: Signer;
@@ -297,9 +287,9 @@ export interface ReactionOptions {
 	order: number;
 	/** The reaction emoji. Canonicalized (NFC) by the client before sending. */
 	emoji: string;
-	/** Target message id. Required in content-envelope-v2 groups (reactions are encrypted events). */
-	messageId?: string;
-	/** Target message author, pushed about the reaction (v2 groups). */
+	/** Target message id (reactions are encrypted events addressed by id). */
+	messageId: string;
+	/** Target message author, pushed about the reaction. */
 	targetSenderAddress?: string;
 }
 

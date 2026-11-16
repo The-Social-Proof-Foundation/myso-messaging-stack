@@ -215,7 +215,7 @@ describe('WSRelayerTransport', () => {
 		expect(event.message.encryptedText).toEqual(new Uint8Array([4, 5, 6]));
 	});
 
-	it('yields both message.created and reaction.updated frames', async () => {
+	it('ignores legacy reaction.updated frames', async () => {
 		const keypair = Ed25519Keypair.generate();
 		const transport = new WSRelayerTransport({
 			relayerUrl: MOCK_RELAYER_URL,
@@ -233,7 +233,7 @@ describe('WSRelayerTransport', () => {
 				signal: controller.signal,
 			})) {
 				events.push(event);
-				if (events.length === 2) controller.abort();
+				if (events.length === 1) controller.abort();
 			}
 			return events;
 		})();
@@ -243,7 +243,6 @@ describe('WSRelayerTransport', () => {
 		});
 
 		const socket = MockWebSocket.instances[0]!;
-		socket.emitMessage(JSON.stringify({ type: 'message.created', message: WIRE_MESSAGE }));
 		socket.emitMessage(
 			JSON.stringify({
 				type: 'reaction.updated',
@@ -255,22 +254,11 @@ describe('WSRelayerTransport', () => {
 			}),
 		);
 
+		socket.emitMessage(JSON.stringify({ type: 'message.created', message: { ...WIRE_MESSAGE, order: 2 } }));
+
 		const events = await subscribePromise;
-		expect(events).toHaveLength(2);
-		expect(events[0]).toMatchObject({
-			type: 'message.created',
-			message: { messageId: WIRE_MESSAGE.message_id },
-		});
-		expect(events[1]).toEqual({
-			type: 'reaction.updated',
-			reaction: {
-				groupId: GROUP_ID,
-				chainSeq: 1,
-				emoji: '👨‍👩‍👧‍👦',
-				count: 2,
-				reactors: ['0xa', '0xb'],
-			},
-		});
+		expect(events).toHaveLength(1);
+		expect(events[0]).toMatchObject({ type: 'message.created' });
 	});
 
 	it('yields typing start/stop and presence frames on the group feed', async () => {

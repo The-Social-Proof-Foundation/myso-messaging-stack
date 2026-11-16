@@ -35,13 +35,11 @@ import type {
 	GroupReceiptState,
 	GroupUnreadCount,
 	ListGroupPinsParams,
-	ListGroupReactionsParams,
 	ListAgentConversationsParams,
 	ListGroupsForAgentParams,
 	ListMemberConversationsParams,
 	NotificationMode,
 	PostGroupReceiptsParams,
-	PostGroupReactionParams,
 	PostPresenceParams,
 	PostPushTokenParams,
 	PutConversationPrefsParams,
@@ -49,7 +47,6 @@ import type {
 	ReceiptMode,
 	PutUserReadStateResult,
 	RelayerMessage,
-	RelayerReactionEntry,
 	RelayerSubscriptionEvent,
 	RelayerUserEvent,
 	RelayerAgentConversation,
@@ -87,13 +84,6 @@ export interface HTTPRelayerTransportConfig extends HttpClientConfig {
 	 * @default 900_000 (15 minutes — matches the relayer's default)
 	 */
 	headerAuthTtlMs?: number;
-}
-
-interface WireReactionEntry {
-	chain_seq: number;
-	emoji: string;
-	count: number;
-	reactors?: string[];
 }
 
 interface WireMemberReceipt {
@@ -494,40 +484,6 @@ export class HTTPRelayerTransport implements RelayerTransport {
 		);
 	}
 
-	async listGroupReactions(params: ListGroupReactionsParams): Promise<RelayerReactionEntry[]> {
-		const q =
-			params.chainSeq !== undefined
-				? `?chain_seq=${encodeURIComponent(String(params.chainSeq))}`
-				: '';
-		const rows = await this.#requestWithGroupHeaderAuth<WireReactionEntry[]>(
-			params.signer,
-			params.groupId,
-			`${this.#relayerPath(`/groups/${params.groupId}/reactions`)}${q}`,
-			{ method: 'GET' },
-		);
-		return rows.map((r) => ({
-			chainSeq: r.chain_seq,
-			emoji: r.emoji,
-			count: r.count,
-			reactors: r.reactors ?? [],
-		}));
-	}
-
-	async postGroupReaction(params: PostGroupReactionParams): Promise<void> {
-		const payload: Record<string, unknown> = {
-			group_id: params.groupId,
-			chain_seq: params.chainSeq,
-			emoji: params.emoji,
-			add: params.add ?? true,
-		};
-		const { body, headers } = await createBodyAuth(params.signer, payload);
-		await this.#request(this.#relayerPath(`/groups/${params.groupId}/reactions`), {
-			method: 'POST',
-			headers: { ...headers, 'Content-Type': 'application/json' },
-			body: JSON.stringify(body),
-		});
-	}
-
 	async listGroupPins(params: ListGroupPinsParams): Promise<number[]> {
 		return this.#requestWithGroupHeaderAuth<number[]>(
 			params.signer,
@@ -861,13 +817,11 @@ export class HTTPRelayerTransport implements RelayerTransport {
 
 	/**
 	 * Polling implementation of the realtime event stream: polls messages and
-	 * diffs reaction listings / receipt watermarks into synthetic
-	 * `reaction.updated` / `receipt.updated` events. The first reaction and
-	 * receipt snapshots are baselines and do not emit events.
+	 * diffs receipt watermarks into synthetic `receipt.updated` events. The
+	 * first receipt snapshot is a baseline and does not emit events.
 	 */
 	async *subscribe(params: SubscribeParams): AsyncIterable<RelayerSubscriptionEvent> {
 		let lastOrder = params.afterOrder;
-		let reactionSnapshot: Map<string, RelayerReactionEntry> | undefined;
 		let receiptSnapshot: Map<string, { deliveredUpto: number; readUpto: number }> | undefined;
 
 		while (!this.#disconnected && !params.signal?.aborted) {
@@ -884,53 +838,6 @@ export class HTTPRelayerTransport implements RelayerTransport {
 					yield { type: 'message.created', message };
 					lastOrder = message.order;
 				}
-				if (this.#disconnected || params.signal?.aborted) return;
-
-				const rows = await this.listGroupReactions({
-					signer: params.signer,
-					groupId: params.groupId,
-				});
-				const next = new Map(rows.map((r) => [`${r.chainSeq}:${r.emoji}`, r]));
-
-				if (reactionSnapshot) {
-					for (const [key, entry] of next) {
-						const prev = reactionSnapshot.get(key);
-						if (
-							!prev ||
-							prev.count !== entry.count ||
-							prev.reactors.join(',') !== entry.reactors.join(',')
-						) {
-							if (this.#disconnected || params.signal?.aborted) return;
-							yield {
-								type: 'reaction.updated',
-								reaction: {
-									groupId: params.groupId,
-									chainSeq: entry.chainSeq,
-									emoji: entry.emoji,
-									count: entry.count,
-									reactors: entry.reactors,
-								},
-							};
-						}
-					}
-					for (const [key, prev] of reactionSnapshot) {
-						if (!next.has(key)) {
-							if (this.#disconnected || params.signal?.aborted) return;
-							yield {
-								type: 'reaction.updated',
-								reaction: {
-									groupId: params.groupId,
-									chainSeq: prev.chainSeq,
-									emoji: prev.emoji,
-									count: 0,
-									reactors: [],
-								},
-							};
-						}
-					}
-				}
-				reactionSnapshot = next;
-
 				if (this.#disconnected || params.signal?.aborted) return;
 
 				const receiptState = await this.getGroupReceipts({

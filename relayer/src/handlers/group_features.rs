@@ -1,64 +1,19 @@
-//! `/v1/groups/...` endpoints: off-chain mirrors for reactions, pins, and
+//! `/v1/groups/...` endpoints: off-chain mirrors for pins and
 //! receipts, plus ephemeral typing/presence (never persisted).
 
-use axum::extract::{Path, Query, State};
+use axum::extract::{Path, State};
 use axum::Extension;
 use axum::Json;
 use serde::{Deserialize, Serialize};
-use tracing::{info, warn};
+use tracing::warn;
 
 use crate::auth::AuthContext;
 use crate::handlers::messages::error::ApiError;
-use crate::handlers::messages::handlers::store_notification_envelopes;
-use crate::handlers::messages::request::NotificationEnvelopeRequest;
 use crate::models::{
-    ConversationPreferences, ConversationPreferencesPatch, GroupReceiptsResponse, ReactionEntry,
+    ConversationPreferences, ConversationPreferencesPatch, GroupReceiptsResponse,
 };
-use crate::services::realtime::{ReactionUpdatedEvent, ReceiptUpdatedEvent, TypingEvent};
+use crate::services::realtime::{ReceiptUpdatedEvent, TypingEvent};
 use crate::state::AppState;
-
-#[derive(Debug, Deserialize)]
-pub struct ReactionsQuery {
-    pub chain_seq: Option<i64>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct PostReactionBody {
-    pub chain_seq: i64,
-    /// Canonical Unicode emoji string (NFC). Supports skin tones, ZWJ
-    /// sequences, and variation selectors.
-    pub emoji: String,
-    #[serde(default = "default_true")]
-    pub add: bool,
-    /// Reacted-to message; lets the relayer push its author (verified against `chain_seq`).
-    #[serde(default)]
-    pub message_id: Option<uuid::Uuid>,
-    /// Opaque per-device previews sealed by the reactor for the author's devices only.
-    #[serde(default)]
-    pub notification_envelopes: Vec<NotificationEnvelopeRequest>,
-}
-
-/// Generous cap: the longest RGI emoji ZWJ sequences are ~35 bytes of UTF-8.
-const MAX_REACTION_EMOJI_BYTES: usize = 64;
-
-/// Boundary validation for reaction emoji. Clients canonicalize (NFC) before
-/// sending; the relayer only rejects clearly invalid payloads.
-fn validate_reaction_emoji(emoji: &str) -> Result<(), ApiError> {
-    if emoji.is_empty() {
-        return Err(ApiError::BadRequest("emoji must not be empty".to_string()));
-    }
-    if emoji.len() > MAX_REACTION_EMOJI_BYTES {
-        return Err(ApiError::BadRequest(format!(
-            "emoji must be at most {MAX_REACTION_EMOJI_BYTES} bytes"
-        )));
-    }
-    if emoji.chars().any(|c| c.is_control() || c.is_whitespace()) {
-        return Err(ApiError::BadRequest(
-            "emoji must not contain control or whitespace characters".to_string(),
-        ));
-    }
-    Ok(())
-}
 
 fn default_true() -> bool {
     true
@@ -111,142 +66,6 @@ fn ensure_group(auth: &AuthContext, group_id: &str) -> Result<(), ApiError> {
         ));
     }
     Ok(())
-}
-
-pub async fn post_reaction(
-    State(state): State<AppState>,
-    Path(group_id): Path<String>,
-    Extension(auth): Extension<AuthContext>,
-    Json(body): Json<PostReactionBody>,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    ensure_group(&auth, &group_id)?;
-    validate_reaction_emoji(&body.emoji)?;
-    let updated = state
-        .storage
-        .set_reaction(
-            &group_id,
-            body.chain_seq,
-            &body.emoji,
-            auth.sender_address.as_str(),
-            body.add,
-        )
-        .await
-        .map_err(ApiError::from)?;
-
-    // Postgres storage fans out via pg_notify; inline publish covers in-memory.
-    if let Some(entry) = &updated {
-        if state.realtime_enabled && state.inline_realtime_publish {
-            state.realtime_hub.publish_reaction(
-                &group_id,
-                ReactionUpdatedEvent::new(group_id.clone(), entry),
-            );
-        }
-    }
-
-    if body.add && updated.is_some() {
-        notify_reaction_author(&state, &group_id, &auth, &body).await?;
-    }
-
-    Ok(Json(
-        serde_json::json!({ "ok": true, "changed": updated.is_some() }),
-    ))
-}
-
-/// Pushes the author of the reacted-to message (never the reactor, never on removal).
-/// A reaction to your own message has no other author to tell, so it fans out to every
-/// other member of the chat instead.
-/// The author is resolved server-side from `(group_id, chain_seq)`, so it works even when
-/// the client omits `message_id` and a client can't aim a push at an arbitrary wallet.
-async fn notify_reaction_author(
-    state: &AppState,
-    group_id: &str,
-    auth: &AuthContext,
-    body: &PostReactionBody,
-) -> Result<(), ApiError> {
-    let seq = body.chain_seq;
-    let message = match state
-        .storage
-        .get_messages_by_group(group_id, Some(seq - 1), Some(seq + 1), 1)
-        .await
-    {
-        Ok(mut rows) if !rows.is_empty() => rows.remove(0),
-        Ok(_) => {
-            info!("reaction push skipped: no message at group={group_id} seq={seq}");
-            return Ok(());
-        }
-        Err(err) => {
-            warn!("reaction push skipped: lookup group={group_id} seq={seq} failed: {err}");
-            return Ok(());
-        }
-    };
-    if let Some(claimed) = body.message_id {
-        if claimed != message.id {
-            info!(
-                "reaction push: client message_id {claimed} != stored {} at seq={seq}; using stored",
-                message.id
-            );
-        }
-    }
-    let author = message.sender_wallet_addr.clone();
-    let self_reaction = author.eq_ignore_ascii_case(auth.sender_address.as_str());
-    // `None` = every member except the reactor (`notify_new_message` always skips the sender).
-    let only_recipient = if self_reaction { None } else { Some(author.clone()) };
-    info!(
-        "reaction push: group={group_id} seq={seq} author={author} audience={} envelopes={}",
-        if self_reaction { "all_members" } else { "author" },
-        body.notification_envelopes.len()
-    );
-
-    // Wake open inboxes (user feed) so badges / subtitles refetch reaction activity now.
-    if let Ok(activity) = state.storage.get_group_activity(group_id, i64::MAX).await {
-        state
-            .realtime_hub
-            .publish_group_activity(group_id, activity.latest_order);
-    }
-
-    // Envelopes are keyed by a fresh event id so they never collide with message previews.
-    let event_id = uuid::Uuid::new_v4();
-    store_notification_envelopes(state, event_id, &body.notification_envelopes)?;
-
-    let push = state.push_service.clone();
-    let storage = state.storage.clone();
-    let membership = state.membership_store.clone();
-    let notification_push = state.notification_push.clone();
-    let push_visible_alerts = state.push_service.visible_alerts();
-    let group_id = group_id.to_string();
-    let reactor = auth.sender_address.to_string();
-    tokio::spawn(async move {
-        push.notify_new_message(
-            &storage,
-            &membership,
-            &notification_push,
-            push_visible_alerts,
-            &group_id,
-            event_id,
-            &reactor,
-            &crate::models::MessageAttribution::human_message(),
-            "reaction",
-            only_recipient.as_deref(),
-            None,
-        )
-        .await;
-    });
-    Ok(())
-}
-
-pub async fn list_reactions(
-    State(state): State<AppState>,
-    Path(group_id): Path<String>,
-    Extension(auth): Extension<AuthContext>,
-    Query(q): Query<ReactionsQuery>,
-) -> Result<Json<Vec<ReactionEntry>>, ApiError> {
-    ensure_group(&auth, &group_id)?;
-    let rows = state
-        .storage
-        .list_reactions(&group_id, q.chain_seq)
-        .await
-        .map_err(ApiError::from)?;
-    Ok(Json(rows))
 }
 
 #[derive(Debug, Deserialize)]

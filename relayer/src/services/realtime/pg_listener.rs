@@ -8,12 +8,12 @@ use tracing::{info, warn};
 
 use super::{
     GroupDiscoveredNotifyEvent, GroupHiddenNotifyEvent, MessageCreatedEvent, MessageDeletedEvent,
-    MessageEditedEvent, PresenceChangedSignal, PresenceUpdatedEvent, ReactionUpdatedEvent,
+    MessageEditedEvent, PresenceChangedSignal, PresenceUpdatedEvent,
     ReadStateUpdatedEvent, ReceiptUpdatedEvent, RealtimeHub, TypingEvent, UserFeedEvent,
     WorkflowItemWireEvent, GROUP_DISCOVERED_EVENT_TYPE, GROUP_HIDDEN_EVENT_TYPE,
     MESSAGE_CREATED_EVENT_TYPE, MESSAGE_DELETED_EVENT_TYPE, MESSAGE_EDITED_EVENT_TYPE,
     MESSAGE_EVENTS_CHANNEL, PRESENCE_CHANGED_SIGNAL_TYPE, READ_STATE_UPDATED_EVENT_TYPE,
-    RECEIPT_UPDATED_EVENT_TYPE, REACTION_UPDATED_EVENT_TYPE, TYPING_START_EVENT_TYPE,
+    RECEIPT_UPDATED_EVENT_TYPE, TYPING_START_EVENT_TYPE,
     TYPING_STOP_EVENT_TYPE, WORKFLOW_ITEM_CREATED_EVENT_TYPE, WORKFLOW_ITEM_UPDATED_EVENT_TYPE,
 };
 use crate::auth::MembershipStore;
@@ -121,17 +121,6 @@ impl PgListenerService {
                     {
                         warn!("failed to load edited message for realtime fan-out: {err}");
                     }
-                }
-                Some(REACTION_UPDATED_EVENT_TYPE) => {
-                    // Self-contained payload — publish directly, no storage reload.
-                    let event: ReactionUpdatedEvent = match serde_json::from_str(payload) {
-                        Ok(event) => event,
-                        Err(err) => {
-                            warn!("invalid NOTIFY payload on {MESSAGE_EVENTS_CHANNEL}: {err}");
-                            continue;
-                        }
-                    };
-                    self.hub.publish_reaction(&event.group_id.clone(), event);
                 }
                 Some(RECEIPT_UPDATED_EVENT_TYPE) => {
                     let event: ReceiptUpdatedEvent = match serde_json::from_str(payload) {

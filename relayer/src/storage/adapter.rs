@@ -58,7 +58,7 @@ use uuid::Uuid;
 
 use crate::models::{
     Attachment, EncryptedBlobRecord, GroupActivity, Message, PaidEscrowRecord, PushTokenRecord,
-    ReactionEntry, ReceiptStateResponse, SyncStatus,
+    ReceiptStateResponse, SyncStatus,
 };
 
 /// Outcome of a compare-and-set write to the encrypted user read-state blob.
@@ -281,25 +281,6 @@ pub trait StorageAdapter: Send + Sync {
     ) -> StorageResult<GroupActivity>;
 
     // === /v1 group feature mirror (off-chain; complements on-chain MessageLog) ===
-
-    /// Sets or clears `member`'s reaction on a message. Idempotent: re-adding an
-    /// existing reaction or removing an absent one returns `Ok(None)` (no change).
-    /// On change, returns the updated entry (count + reactors; count may be 0).
-    /// `emoji` is the canonical Unicode emoji string (validated by the handler).
-    async fn set_reaction(
-        &self,
-        group_id: &str,
-        chain_seq: i64,
-        emoji: &str,
-        member: &str,
-        add: bool,
-    ) -> StorageResult<Option<ReactionEntry>>;
-
-    async fn list_reactions(
-        &self,
-        group_id: &str,
-        chain_seq: Option<i64>,
-    ) -> StorageResult<Vec<ReactionEntry>>;
 
     /// Inbox reaction activity for `viewer` in a group: unread qualifying reactions since
     /// `after` and the newest one when it postdates the latest message. Storage without

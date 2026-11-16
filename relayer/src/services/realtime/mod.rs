@@ -13,7 +13,7 @@ use uuid::Uuid;
 use crate::auth::MembershipStore;
 use crate::config::Config;
 use crate::handlers::messages::response::MessageResponse;
-use crate::models::{MemberReceipt, ReactionEntry};
+use crate::models::MemberReceipt;
 use crate::storage::{StorageAdapter, StorageResult};
 
 pub use pg_listener::PgListenerService;
@@ -23,7 +23,6 @@ pub const MESSAGE_EVENTS_CHANNEL: &str = "message_events";
 pub const MESSAGE_CREATED_EVENT_TYPE: &str = "message.created";
 pub const MESSAGE_DELETED_EVENT_TYPE: &str = "message.deleted";
 pub const MESSAGE_EDITED_EVENT_TYPE: &str = "message.edited";
-pub const REACTION_UPDATED_EVENT_TYPE: &str = "reaction.updated";
 pub const GROUP_ACTIVITY_EVENT_TYPE: &str = "group.activity";
 pub const READ_STATE_UPDATED_EVENT_TYPE: &str = "read_state.updated";
 pub const GROUP_DISCOVERED_EVENT_TYPE: &str = "group.discovered";
@@ -108,33 +107,6 @@ impl MessageEditedEvent {
             message_id,
             order,
             sender,
-        }
-    }
-}
-
-/// Cross-instance + WS payload for reaction changes. Carries absolute state
-/// (count + full reactor list) so duplicate delivery is idempotent.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ReactionUpdatedEvent {
-    #[serde(rename = "type")]
-    pub event_type: String,
-    pub group_id: String,
-    pub chain_seq: i64,
-    /// Canonical Unicode emoji string (NFC).
-    pub emoji: String,
-    pub count: i32,
-    pub reactors: Vec<String>,
-}
-
-impl ReactionUpdatedEvent {
-    pub fn new(group_id: String, entry: &ReactionEntry) -> Self {
-        Self {
-            event_type: REACTION_UPDATED_EVENT_TYPE.to_string(),
-            group_id,
-            chain_seq: entry.chain_seq,
-            emoji: entry.emoji.clone(),
-            count: entry.count,
-            reactors: entry.reactors.clone(),
         }
     }
 }
@@ -548,7 +520,7 @@ pub struct MessageWireEvent {
 
 /// Events fanned out to local WebSocket connections. Each variant serializes
 /// its own `type` discriminator (`message.created`, `message.deleted`,
-/// `message.edited`, `reaction.updated`, `typing.start`/`typing.stop`,
+/// `message.edited`, `typing.start`/`typing.stop`,
 /// `presence.updated`).
 #[derive(Debug, Clone, Serialize)]
 #[serde(untagged)]
@@ -556,7 +528,6 @@ pub enum RealtimeEvent {
     MessageCreated(MessageWireEvent),
     MessageDeleted(MessageWireEvent),
     MessageEdited(MessageWireEvent),
-    ReactionUpdated(ReactionUpdatedEvent),
     Typing(TypingEvent),
     PresenceUpdated(PresenceUpdatedEvent),
     ReceiptUpdated(ReceiptUpdatedEvent),
@@ -669,10 +640,6 @@ impl RealtimeHub {
             message,
         });
         self.publish_event(group_id, event);
-    }
-
-    pub fn publish_reaction(&self, group_id: &str, event: ReactionUpdatedEvent) {
-        self.publish_event(group_id, RealtimeEvent::ReactionUpdated(event));
     }
 
     pub fn publish_typing(&self, group_id: &str, event: TypingEvent) {
@@ -811,33 +778,6 @@ mod tests {
         };
         assert_eq!(wire.message.message_id, created.id);
         assert_eq!(wire.message.encrypted_text, "deadbeef");
-    }
-
-    #[tokio::test]
-    async fn publish_reaction_delivers_idempotent_payload() {
-        let hub = RealtimeHub::new();
-        let mut rx = hub.subscribe("group-1");
-
-        let entry = ReactionEntry {
-            chain_seq: 7,
-            emoji: "👍".to_string(),
-            count: 2,
-            reactors: vec!["0xa".to_string(), "0xb".to_string()],
-        };
-        hub.publish_reaction("group-1", ReactionUpdatedEvent::new("group-1".to_string(), &entry));
-
-        let event = rx.recv().await.expect("event");
-        let RealtimeEvent::ReactionUpdated(reaction) = event else {
-            panic!("expected reaction.updated event");
-        };
-        assert_eq!(reaction.event_type, REACTION_UPDATED_EVENT_TYPE);
-        assert_eq!(reaction.chain_seq, 7);
-        assert_eq!(reaction.emoji, "👍");
-        assert_eq!(reaction.count, 2);
-        assert_eq!(reaction.reactors, vec!["0xa", "0xb"]);
-
-        let json = serde_json::to_string(&RealtimeEvent::ReactionUpdated(reaction)).unwrap();
-        assert!(json.contains(r#""type":"reaction.updated""#));
     }
 
     #[tokio::test]

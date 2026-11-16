@@ -37,7 +37,6 @@ describe('message-session-cache pagination', () => {
     setCachedThread('u1', {
       messages,
       pageLedger,
-      reactions: new Map(),
     });
     const cached = getCachedThread('u1');
     expect(cached?.pageLedger.hasMoreOlder).toBe(true);
@@ -50,7 +49,6 @@ describe('message-session-cache pagination', () => {
     setCachedThread('legacy', {
       messages: [msg(5), msg(6)],
       hasMore: true,
-      reactions: new Map(),
     });
     const cached = getCachedThread('legacy');
     expect(cached?.pageLedger.minOrder).toBe(5);

@@ -22,19 +22,16 @@ import type {
 	GroupReceiptState,
 	GroupUnreadCount,
 	ListGroupPinsParams,
-	ListGroupReactionsParams,
 	ListAgentConversationsParams,
 	ListGroupsForAgentParams,
 	ListMemberConversationsParams,
 	PostGroupReceiptsParams,
-	PostGroupReactionParams,
 	PostPresenceParams,
 	PostPushTokenParams,
 	PutConversationPrefsParams,
 	PutUserReadStateParams,
 	PutUserReadStateResult,
 	RelayerMessage,
-	RelayerReactionEntry,
 	RelayerSubscriptionEvent,
 	RelayerUserEvent,
 	RelayerAgentConversation,
@@ -167,14 +164,6 @@ export class HybridRelayerTransport implements RelayerTransport {
 
 	fetchUnreadCounts(params: FetchUnreadCountsParams): Promise<GroupUnreadCount[]> {
 		return this.#http.fetchUnreadCounts(params);
-	}
-
-	listGroupReactions(params: ListGroupReactionsParams): Promise<RelayerReactionEntry[]> {
-		return this.#http.listGroupReactions(params);
-	}
-
-	postGroupReaction(params: PostGroupReactionParams): Promise<void> {
-		return this.#http.postGroupReaction(params);
 	}
 
 	sendTyping(params: SendTypingParams): Promise<void> {

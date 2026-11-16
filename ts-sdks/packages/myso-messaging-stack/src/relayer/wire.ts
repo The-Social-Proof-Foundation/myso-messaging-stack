@@ -11,7 +11,6 @@ import type {
 	PaymentRequestStatus,
 	RelayerMessage,
 	RelayerPresenceEvent,
-	RelayerReactionEvent,
 	RelayerReceiptEvent,
 	RelayerTypingEvent,
 	RelayerUserEvent,
@@ -75,16 +74,6 @@ export interface WireMessageDeletedEvent {
 export interface WireMessageEditedEvent {
 	type: 'message.edited';
 	message: WireMessageResponse;
-}
-
-/** `reaction.updated` WS frame / NOTIFY payload (snake_case). */
-export interface WireReactionUpdatedEvent {
-	type: 'reaction.updated';
-	group_id: string;
-	chain_seq: number;
-	emoji: string;
-	count: number;
-	reactors: string[];
 }
 
 /** `typing.start` / `typing.stop` WS frames (snake_case). */
@@ -168,17 +157,6 @@ export function toWireAttachment(attachment: Attachment): WireAttachment {
 		nonce: attachment.nonce,
 		encrypted_metadata: attachment.encryptedMetadata,
 		metadata_nonce: attachment.metadataNonce,
-	};
-}
-
-/** Convert a `reaction.updated` wire frame to a RelayerReactionEvent domain object. */
-export function fromWireReactionEvent(wire: WireReactionUpdatedEvent): RelayerReactionEvent {
-	return {
-		groupId: wire.group_id,
-		chainSeq: wire.chain_seq,
-		emoji: wire.emoji,
-		count: wire.count,
-		reactors: wire.reactors ?? [],
 	};
 }
 

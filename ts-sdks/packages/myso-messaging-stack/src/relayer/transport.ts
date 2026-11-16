@@ -20,19 +20,16 @@ import type {
 	GroupReceiptState,
 	GroupUnreadCount,
 	ListGroupPinsParams,
-	ListGroupReactionsParams,
 	ListAgentConversationsParams,
 	ListGroupsForAgentParams,
 	ListMemberConversationsParams,
 	PostGroupReceiptsParams,
-	PostGroupReactionParams,
 	PostPresenceParams,
 	PostPushTokenParams,
 	PutConversationPrefsParams,
 	PutUserReadStateParams,
 	PutUserReadStateResult,
 	RelayerMessage,
-	RelayerReactionEntry,
 	RelayerSubscriptionEvent,
 	RelayerUserEvent,
 	RelayerAgentConversation,
@@ -65,7 +62,7 @@ export interface RelayerTransport {
 	 */
 	respondToPaymentRequest(params: RespondToPaymentRequestParams): Promise<RelayerMessage>;
 	/**
-	 * Subscribe to a group's real-time events (messages, reactions, typing,
+	 * Subscribe to a group's real-time events (messages, typing,
 	 * presence) as a single stream. Use afterOrder for message resumability.
 	 */
 	subscribe(params: SubscribeParams): AsyncIterable<RelayerSubscriptionEvent>;
@@ -81,9 +78,6 @@ export interface RelayerTransport {
 	 * are omitted from the result.
 	 */
 	fetchUnreadCounts(params: FetchUnreadCountsParams): Promise<GroupUnreadCount[]>;
-	/** Off-chain reaction tallies (`/v1/groups/.../reactions`). */
-	listGroupReactions(params: ListGroupReactionsParams): Promise<RelayerReactionEntry[]>;
-	postGroupReaction(params: PostGroupReactionParams): Promise<void>;
 	/** Ephemeral typing indicator broadcast (`/v1/groups/.../typing`). */
 	sendTyping(params: SendTypingParams): Promise<void>;
 	/** Presence snapshot for a group's members (`/v1/groups/.../presence`). */

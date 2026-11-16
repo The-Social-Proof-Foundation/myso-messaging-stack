@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 use crate::models::{
     Attachment, ConversationPreferences, ConversationPreferencesPatch, ConversationReport,
-    EncryptedBlobRecord, GroupActivity, Message, PaidEscrowRecord, PushTokenRecord, ReactionEntry,
+    EncryptedBlobRecord, GroupActivity, Message, PaidEscrowRecord, PushTokenRecord,
     ReceiptStateResponse, SyncStatus,
 };
 
@@ -26,10 +26,6 @@ pub struct InMemoryStorage {
     group_orders: RwLock<HashMap<String, i64>>,
     /// All message nonces for O(1) duplicate detection
     nonces: RwLock<HashSet<Vec<u8>>>,
-    /// Per-user reactions keyed by `(group_id, chain_seq, emoji)` — `chain_seq` is the
-    /// relayer-assigned message order, `emoji` the canonical Unicode string.
-    /// Values are the reacting member addresses.
-    reactions: RwLock<HashMap<(String, i64, String), BTreeSet<String>>>,
     /// Pinned on-chain sequence numbers per group.
     pins_by_group: RwLock<HashMap<String, BTreeSet<i64>>>,
     /// Delivery watermark per `(group_id, member_address) )`.
@@ -55,7 +51,6 @@ impl InMemoryStorage {
             messages: RwLock::new(HashMap::new()),
             group_orders: RwLock::new(HashMap::new()),
             nonces: RwLock::new(HashSet::new()),
-            reactions: RwLock::new(HashMap::new()),
             pins_by_group: RwLock::new(HashMap::new()),
             delivered_watermarks: RwLock::new(HashMap::new()),
             read_watermarks: RwLock::new(HashMap::new()),
@@ -547,81 +542,6 @@ impl StorageAdapter for InMemoryStorage {
             created_at_ms: r.5.timestamp_millis(),
         });
         Ok(crate::models::ReactionActivity { unread_count, latest })
-    }
-
-    async fn set_reaction(
-        &self,
-        group_id: &str,
-        chain_seq: i64,
-        emoji: &str,
-        member: &str,
-        add: bool,
-    ) -> StorageResult<Option<ReactionEntry>> {
-        let mut reactions = self
-            .reactions
-            .write()
-            .map_err(|e| StorageError::OperationFailed(format!("Lock poisoned: {}", e)))?;
-        let key = (group_id.to_string(), chain_seq, emoji.to_string());
-        let changed = if add {
-            reactions
-                .entry(key.clone())
-                .or_default()
-                .insert(member.to_string())
-        } else {
-            match reactions.get_mut(&key) {
-                Some(set) => {
-                    let removed = set.remove(member);
-                    if set.is_empty() {
-                        reactions.remove(&key);
-                    }
-                    removed
-                }
-                None => false,
-            }
-        };
-
-        if !changed {
-            return Ok(None);
-        }
-
-        let reactors: Vec<String> = reactions
-            .get(&key)
-            .map(|set| set.iter().cloned().collect())
-            .unwrap_or_default();
-        Ok(Some(ReactionEntry {
-            chain_seq,
-            emoji: emoji.to_string(),
-            count: reactors.len() as i32,
-            reactors,
-        }))
-    }
-
-    async fn list_reactions(
-        &self,
-        group_id: &str,
-        chain_seq: Option<i64>,
-    ) -> StorageResult<Vec<ReactionEntry>> {
-        let reactions = self
-            .reactions
-            .read()
-            .map_err(|e| StorageError::OperationFailed(format!("Lock poisoned: {}", e)))?;
-        let mut out: Vec<ReactionEntry> = reactions
-            .iter()
-            .filter(|(k, set)| k.0 == group_id && !set.is_empty())
-            .filter(|(k, _)| chain_seq.map(|s| s == k.1).unwrap_or(true))
-            .map(|(k, set)| ReactionEntry {
-                chain_seq: k.1,
-                emoji: k.2.clone(),
-                count: set.len() as i32,
-                reactors: set.iter().cloned().collect(),
-            })
-            .collect();
-        out.sort_by(|a, b| {
-            a.chain_seq
-                .cmp(&b.chain_seq)
-                .then_with(|| a.emoji.cmp(&b.emoji))
-        });
-        Ok(out)
     }
 
     async fn set_pin_for_seq(&self, group_id: &str, chain_seq: i64, on: bool) -> StorageResult<()> {
@@ -1388,103 +1308,6 @@ mod tests {
             .has_message_from("group_2", "0xalice")
             .await
             .unwrap());
-    }
-
-    #[tokio::test]
-    async fn test_set_reaction_add_remove_idempotent() {
-        let storage = InMemoryStorage::new();
-
-        let first = storage
-            .set_reaction("group_1", 1, "👍", "0xalice", true)
-            .await
-            .unwrap()
-            .expect("first add changes state");
-        assert_eq!(first.count, 1);
-        assert_eq!(first.reactors, vec!["0xalice"]);
-
-        // Re-adding the same reaction is a no-op.
-        let dup = storage
-            .set_reaction("group_1", 1, "👍", "0xalice", true)
-            .await
-            .unwrap();
-        assert!(dup.is_none());
-
-        let second = storage
-            .set_reaction("group_1", 1, "👍", "0xbob", true)
-            .await
-            .unwrap()
-            .expect("second reactor changes state");
-        assert_eq!(second.count, 2);
-        assert_eq!(second.reactors, vec!["0xalice", "0xbob"]);
-
-        let removed = storage
-            .set_reaction("group_1", 1, "👍", "0xalice", false)
-            .await
-            .unwrap()
-            .expect("removal changes state");
-        assert_eq!(removed.count, 1);
-        assert_eq!(removed.reactors, vec!["0xbob"]);
-
-        // Removing an absent reaction is a no-op.
-        let absent = storage
-            .set_reaction("group_1", 1, "👍", "0xalice", false)
-            .await
-            .unwrap();
-        assert!(absent.is_none());
-    }
-
-    #[tokio::test]
-    async fn test_set_reaction_supports_multi_code_point_emoji() {
-        let storage = InMemoryStorage::new();
-
-        // ZWJ sequence (family) and variation selector (red heart).
-        for emoji in ["👨‍👩‍👧‍👦", "❤️", "👍🏻", "🏳️‍🌈"] {
-            let entry = storage
-                .set_reaction("group_1", 1, emoji, "0xalice", true)
-                .await
-                .unwrap()
-                .expect("add changes state");
-            assert_eq!(entry.emoji, emoji);
-            assert_eq!(entry.count, 1);
-        }
-
-        let all = storage.list_reactions("group_1", Some(1)).await.unwrap();
-        assert_eq!(all.len(), 4);
-    }
-
-    #[tokio::test]
-    async fn test_list_reactions_filters_by_chain_seq() {
-        let storage = InMemoryStorage::new();
-        storage
-            .set_reaction("group_1", 1, "👍", "0xalice", true)
-            .await
-            .unwrap();
-        storage
-            .set_reaction("group_1", 2, "😂", "0xalice", true)
-            .await
-            .unwrap();
-        storage
-            .set_reaction("group_2", 1, "👍", "0xbob", true)
-            .await
-            .unwrap();
-
-        let all = storage.list_reactions("group_1", None).await.unwrap();
-        assert_eq!(all.len(), 2);
-        assert_eq!(all[0].chain_seq, 1);
-        assert_eq!(all[1].chain_seq, 2);
-
-        let filtered = storage.list_reactions("group_1", Some(2)).await.unwrap();
-        assert_eq!(filtered.len(), 1);
-        assert_eq!(filtered[0].emoji, "😂");
-        assert_eq!(filtered[0].reactors, vec!["0xalice"]);
-
-        // Fully removed entries disappear from listings.
-        storage
-            .set_reaction("group_1", 2, "😂", "0xalice", false)
-            .await
-            .unwrap();
-        let after_remove = storage.list_reactions("group_1", None).await.unwrap();
-        assert_eq!(after_remove.len(), 1);
     }
 
     #[tokio::test]

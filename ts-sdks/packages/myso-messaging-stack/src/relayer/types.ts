@@ -225,26 +225,13 @@ export interface FetchMessagesResult {
 	hasNext: boolean;
 }
 
-/** One row from `GET /v1/groups/:group_id/reactions`. */
+/** A reaction chip folded from encrypted `event` rows, keyed by the target message's `order`. */
 export interface RelayerReactionEntry {
 	chainSeq: number;
 	/** Canonical Unicode emoji string (NFC), e.g. `👍`, `❤️`, `👨‍👩‍👧‍👦`. */
 	emoji: string;
 	count: number;
 	/** Wallet addresses of members who currently have this reaction set. */
-	reactors: string[];
-}
-
-/**
- * Absolute-state reaction change (`reaction.updated` realtime event).
- * Carries the full count + reactor list so duplicate delivery is idempotent.
- */
-export interface RelayerReactionEvent {
-	groupId: string;
-	chainSeq: number;
-	/** Canonical Unicode emoji string (NFC). */
-	emoji: string;
-	count: number;
 	reactors: string[];
 }
 
@@ -279,7 +266,6 @@ export type RelayerSubscriptionEvent =
 	| { type: 'message.created'; message: RelayerMessage }
 	| { type: 'message.deleted'; message: RelayerMessage }
 	| { type: 'message.edited'; message: RelayerMessage }
-	| { type: 'reaction.updated'; reaction: RelayerReactionEvent }
 	| { type: 'typing.start'; typing: RelayerTypingEvent }
 	| { type: 'typing.stop'; typing: RelayerTypingEvent }
 	| { type: 'presence.updated'; presence: RelayerPresenceEvent }
@@ -384,23 +370,6 @@ export interface SubscribeUserEventsParams {
 	 * WebSocket path (the relayer filters by membership server-side).
 	 */
 	groupIds?: string[];
-}
-
-export interface ListGroupReactionsParams {
-	signer: Signer;
-	groupId: string;
-	/** When set, only reactions for this `chain_seq` index. */
-	chainSeq?: number;
-}
-
-export interface PostGroupReactionParams {
-	signer: Signer;
-	groupId: string;
-	chainSeq: number;
-	/** Canonical Unicode emoji string (NFC) — see `emojiToStorage()`. */
-	emoji: string;
-	/** When false, removes the signer's reaction (idempotent on server). */
-	add?: boolean;
 }
 
 export interface ListGroupPinsParams {

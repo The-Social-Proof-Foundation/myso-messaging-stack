@@ -12,11 +12,11 @@ use uuid::Uuid;
 use crate::models::{
     Attachment, ConversationPreferences, ConversationPreferencesPatch, ConversationReport,
     EncryptedBlobRecord, GroupActivity, MemberReceipt, Message, MessageAttribution,
-    PaidEscrowRecord, PushTokenRecord, ReactionEntry, ReceiptStateResponse, SyncStatus,
+    PaidEscrowRecord, PushTokenRecord, ReceiptStateResponse, SyncStatus,
 };
 use crate::services::realtime::{
-    MessageCreatedEvent, MessageDeletedEvent, MessageEditedEvent, ReactionUpdatedEvent,
-    ReadStateUpdatedEvent, ReceiptUpdatedEvent, MESSAGE_EVENTS_CHANNEL,
+    MessageCreatedEvent, MessageDeletedEvent, MessageEditedEvent, ReadStateUpdatedEvent,
+    ReceiptUpdatedEvent, MESSAGE_EVENTS_CHANNEL,
 };
 
 use super::adapter::{PutUserReadStateResult, StorageAdapter, StorageError, StorageResult};
@@ -716,64 +716,7 @@ impl StorageAdapter for PostgresStorage {
         viewer: &str,
         after: chrono::DateTime<chrono::Utc>,
     ) -> StorageResult<crate::models::ReactionActivity> {
-        // Audience mirrors reaction pushes: someone else reacted to the viewer's message, or
-        // an author reacted to their own message. Reactions on deleted messages never count.
-        let row = sqlx::query(
-            r#"WITH qualifying AS (
-                   SELECT r.member_address, r.emoji, r.chain_seq, r.created_at,
-                          m.id AS message_id,
-                          COALESCE(m.kind, 'text') AS message_kind,
-                          m.sender_wallet_addr AS message_sender
-                   FROM message_reactions r
-                   JOIN messages m ON m.group_id = r.group_id AND m.order_num = r.chain_seq
-                   WHERE r.group_id = $1
-                     AND LOWER(r.member_address) <> LOWER($2)
-                     AND (LOWER(m.sender_wallet_addr) = LOWER($2)
-                          OR LOWER(m.sender_wallet_addr) = LOWER(r.member_address))
-                     AND m.sync_status NOT IN ('DELETE_PENDING', 'DELETED')
-               ),
-               latest_message AS (
-                   SELECT MAX(created_at) AS at FROM messages
-                   WHERE group_id = $1
-                     AND sync_status NOT IN ('DELETE_PENDING', 'DELETED')
-                     AND COALESCE(kind, 'text') NOT IN ('system', 'event', 'commit')
-               ),
-               newest AS (
-                   SELECT q.* FROM qualifying q, latest_message lm
-                   WHERE q.created_at > COALESCE(lm.at, 'epoch'::timestamptz)
-                   ORDER BY q.created_at DESC
-                   LIMIT 1
-               )
-               SELECT (SELECT COUNT(*) FROM qualifying WHERE created_at > $3) AS unread_count,
-                      n.member_address, n.emoji, n.chain_seq, n.created_at,
-                      n.message_id, n.message_kind, n.message_sender
-               FROM (SELECT 1) one
-               LEFT JOIN newest n ON TRUE"#,
-        )
-        .bind(group_id)
-        .bind(viewer)
-        .bind(after)
-        .fetch_one(&self.pool)
-        .await
-        .map_err(|e| StorageError::OperationFailed(e.to_string()))?;
-
-        let unread_count: i64 = row.try_get("unread_count").unwrap_or(0);
-        let latest = match row.try_get::<Option<String>, _>("member_address").ok().flatten() {
-            Some(member) => {
-                let created_at: chrono::DateTime<chrono::Utc> = row.get("created_at");
-                Some(crate::models::LatestReaction {
-                    member,
-                    emoji: row.get("emoji"),
-                    chain_seq: row.get("chain_seq"),
-                    message_id: row.get("message_id"),
-                    message_kind: row.get("message_kind"),
-                    message_sender: row.get("message_sender"),
-                    created_at_ms: created_at.timestamp_millis(),
-                })
-            }
-            None => None,
-        };
-        let mut activity = crate::models::ReactionActivity { unread_count, latest };
+        let mut activity = crate::models::ReactionActivity::default();
         merge_event_notification_activity(&self.pool, group_id, viewer, after, &mut activity)
             .await?;
         Ok(activity)
@@ -802,136 +745,6 @@ impl StorageAdapter for PostgresStorage {
             .map_err(|e| StorageError::OperationFailed(e.to_string()))?;
         }
         Ok(())
-    }
-
-    async fn set_reaction(
-        &self,
-        group_id: &str,
-        chain_seq: i64,
-        emoji: &str,
-        member: &str,
-        add: bool,
-    ) -> StorageResult<Option<ReactionEntry>> {
-        let mut tx = self
-            .pool
-            .begin()
-            .await
-            .map_err(|e| StorageError::OperationFailed(e.to_string()))?;
-
-        let changed = if add {
-            sqlx::query(
-                r#"INSERT INTO message_reactions (group_id, chain_seq, emoji, member_address)
-                   VALUES ($1, $2, $3, $4)
-                   ON CONFLICT DO NOTHING"#,
-            )
-            .bind(group_id)
-            .bind(chain_seq)
-            .bind(emoji)
-            .bind(member)
-            .execute(&mut *tx)
-            .await
-            .map_err(|e| StorageError::OperationFailed(e.to_string()))?
-            .rows_affected()
-                > 0
-        } else {
-            sqlx::query(
-                "DELETE FROM message_reactions WHERE group_id = $1 AND chain_seq = $2 AND emoji = $3 AND member_address = $4",
-            )
-            .bind(group_id)
-            .bind(chain_seq)
-            .bind(emoji)
-            .bind(member)
-            .execute(&mut *tx)
-            .await
-            .map_err(|e| StorageError::OperationFailed(e.to_string()))?
-            .rows_affected()
-                > 0
-        };
-
-        if !changed {
-            tx.commit()
-                .await
-                .map_err(|e| StorageError::OperationFailed(e.to_string()))?;
-            return Ok(None);
-        }
-
-        let reactors: Vec<String> = sqlx::query_scalar(
-            "SELECT member_address FROM message_reactions WHERE group_id = $1 AND chain_seq = $2 AND emoji = $3 ORDER BY member_address",
-        )
-        .bind(group_id)
-        .bind(chain_seq)
-        .bind(emoji)
-        .fetch_all(&mut *tx)
-        .await
-        .map_err(|e| StorageError::OperationFailed(e.to_string()))?;
-
-        let entry = ReactionEntry {
-            chain_seq,
-            emoji: emoji.to_string(),
-            count: reactors.len() as i32,
-            reactors,
-        };
-
-        // Cross-instance realtime fan-out (self-contained payload — no reload needed).
-        let notify = ReactionUpdatedEvent::new(group_id.to_string(), &entry);
-        let notify_json = serde_json::to_string(&notify)
-            .map_err(|e| StorageError::OperationFailed(e.to_string()))?;
-        sqlx::query("SELECT pg_notify($1, $2)")
-            .bind(MESSAGE_EVENTS_CHANNEL)
-            .bind(notify_json)
-            .execute(&mut *tx)
-            .await
-            .map_err(|e| StorageError::OperationFailed(e.to_string()))?;
-
-        tx.commit()
-            .await
-            .map_err(|e| StorageError::OperationFailed(e.to_string()))?;
-
-        Ok(Some(entry))
-    }
-
-    async fn list_reactions(
-        &self,
-        group_id: &str,
-        chain_seq: Option<i64>,
-    ) -> StorageResult<Vec<ReactionEntry>> {
-        let rows = if let Some(seq) = chain_seq {
-            sqlx::query(
-                r#"SELECT chain_seq, emoji, COUNT(*)::INT AS count,
-                          ARRAY_AGG(member_address ORDER BY member_address) AS reactors
-                   FROM message_reactions
-                   WHERE group_id = $1 AND chain_seq = $2
-                   GROUP BY chain_seq, emoji
-                   ORDER BY chain_seq, emoji"#,
-            )
-            .bind(group_id)
-            .bind(seq)
-            .fetch_all(&self.pool)
-            .await
-        } else {
-            sqlx::query(
-                r#"SELECT chain_seq, emoji, COUNT(*)::INT AS count,
-                          ARRAY_AGG(member_address ORDER BY member_address) AS reactors
-                   FROM message_reactions
-                   WHERE group_id = $1
-                   GROUP BY chain_seq, emoji
-                   ORDER BY chain_seq, emoji"#,
-            )
-            .bind(group_id)
-            .fetch_all(&self.pool)
-            .await
-        }
-        .map_err(|e| StorageError::OperationFailed(e.to_string()))?;
-
-        Ok(rows
-            .iter()
-            .map(|r| ReactionEntry {
-                chain_seq: r.get("chain_seq"),
-                emoji: r.get("emoji"),
-                count: r.get("count"),
-                reactors: r.get("reactors"),
-            })
-            .collect())
     }
 
     async fn set_pin_for_seq(&self, group_id: &str, chain_seq: i64, on: bool) -> StorageResult<()> {

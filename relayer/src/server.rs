@@ -265,10 +265,6 @@ pub fn build_router(app_state: AppState, auth_state: AuthState, config: &Config)
 
     let v1_group_routes = Router::new()
         .route(
-            "/groups/:group_id/reactions",
-            get(group_features::list_reactions).post(group_features::post_reaction),
-        )
-        .route(
             "/groups/:group_id/pins",
             get(group_features::list_pins).post(group_features::set_pin),
         )

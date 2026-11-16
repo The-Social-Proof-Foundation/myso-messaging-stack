@@ -59,12 +59,6 @@ const noopTransport: RelayerTransport = {
 	getGroupPresence: () => {
 		throw new Error('noopTransport: getGroupPresence not implemented');
 	},
-	listGroupReactions: () => {
-		throw new Error('noopTransport: listGroupReactions not implemented');
-	},
-	postGroupReaction: () => {
-		throw new Error('noopTransport: postGroupReaction not implemented');
-	},
 	listGroupPins: () => {
 		throw new Error('noopTransport: listGroupPins not implemented');
 	},

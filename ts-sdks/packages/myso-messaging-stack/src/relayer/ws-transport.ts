@@ -8,7 +8,6 @@ import type { RelayerSubscriptionEvent, RelayerUserEvent } from './types.js';
 import {
 	fromWireMessage,
 	fromWirePresenceEvent,
-	fromWireReactionEvent,
 	fromWireReceiptEvent,
 	fromWireTypingEvent,
 	fromWireUserFeedEvent,
@@ -16,7 +15,6 @@ import {
 	type WireMessageDeletedEvent,
 	type WireMessageEditedEvent,
 	type WirePresenceEvent,
-	type WireReactionUpdatedEvent,
 	type WireReceiptUpdatedEvent,
 	type WireTypingEvent,
 	type WireUserFeedEvent,
@@ -99,7 +97,6 @@ function parseGroupFrame(
 		| WireMessageCreatedEvent
 		| WireMessageDeletedEvent
 		| WireMessageEditedEvent
-		| WireReactionUpdatedEvent
 		| WireTypingEvent
 		| WirePresenceEvent
 		| WireReceiptUpdatedEvent
@@ -119,9 +116,6 @@ function parseGroupFrame(
 	if (frame.type === 'message.edited' && 'message' in frame) {
 		const message = fromWireMessage(frame.message);
 		return { type: 'message.edited', message };
-	}
-	if (frame.type === 'reaction.updated' && 'chain_seq' in frame) {
-		return { type: 'reaction.updated', reaction: fromWireReactionEvent(frame) };
 	}
 	if ((frame.type === 'typing.start' || frame.type === 'typing.stop') && 'member' in frame) {
 		return { type: frame.type, typing: fromWireTypingEvent(frame as WireTypingEvent) };
@@ -149,7 +143,7 @@ function parseUserFrame(data: string): RelayerUserEvent | null {
 
 /**
  * WebSocket transport for the realtime streams:
- * - `subscribe()` — per-group feed (`/v1/ws`): messages, reactions, typing, presence
+ * - `subscribe()` — per-group feed (`/v1/ws`): messages, typing, presence
  * - `subscribeUserEvents()` — wallet feed (`/v1/users/ws`): activity, read-state, discovery
  *
  * Frames are parsed into domain events directly — no HTTP refetch after delivery.
