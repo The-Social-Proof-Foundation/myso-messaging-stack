@@ -15,6 +15,8 @@ use crate::services::transfer_confirmation::normalize_address;
 use crate::state::AppState;
 
 use super::error::ApiError;
+use super::handlers::store_notification_envelopes;
+use super::request::NotificationEnvelopeRequest;
 use super::response::MessageResponse;
 
 /// Request body for POST /messages/respond.
@@ -29,6 +31,9 @@ pub struct RespondToPaymentRequestBody {
     pub message_id: Uuid,
     /// `reject` (payer) or `cancel` (requester).
     pub action: String,
+    /// Per-device sealed previews ("Declined your request…") for the other party's devices.
+    #[serde(default)]
+    pub notification_envelopes: Vec<NotificationEnvelopeRequest>,
 }
 
 /// POST /messages/respond - reject (payer) or cancel (requester) an open payment request.
@@ -54,14 +59,15 @@ pub async fn respond_to_payment_request(
     }
 
     let actor = normalize_address(&auth.sender_address);
+    let requester = normalize_address(&request.sender_wallet_addr);
+    let payer = request
+        .metadata
+        .as_ref()
+        .and_then(|m| m.get("payer"))
+        .and_then(|v| v.as_str())
+        .map(normalize_address);
     match action {
         RequestAction::Reject => {
-            let payer = request
-                .metadata
-                .as_ref()
-                .and_then(|m| m.get("payer"))
-                .and_then(|v| v.as_str())
-                .map(normalize_address);
             if payer.as_deref() != Some(actor.as_str()) {
                 return Err(ApiError::Forbidden(
                     "Only the payer can reject a payment request".to_string(),
@@ -69,7 +75,7 @@ pub async fn respond_to_payment_request(
             }
         }
         RequestAction::Cancel => {
-            if normalize_address(&request.sender_wallet_addr) != actor {
+            if requester != actor {
                 return Err(ApiError::Forbidden(
                     "Only the requester can cancel a payment request".to_string(),
                 ));
@@ -82,6 +88,10 @@ pub async fn respond_to_payment_request(
             "Payment request is no longer open".to_string(),
         ));
     }
+
+    // Fresh id: the request's own preview envelopes stay untouched.
+    let push_id = Uuid::new_v4();
+    store_notification_envelopes(&state, push_id, &req.notification_envelopes)?;
 
     let patch = serde_json::json!({ "status": action.target_status().as_str() });
     // CAS on status: if a transfer links (open -> paid) concurrently, exactly one side wins.
@@ -96,6 +106,36 @@ pub async fn respond_to_payment_request(
         state
             .realtime_hub
             .publish_edited_wire(&request.group_id, wire.clone());
+    }
+
+    let notify = match action {
+        RequestAction::Reject => Some(requester),
+        RequestAction::Cancel => payer,
+    };
+    if let Some(recipient) = notify.filter(|wallet| !wallet.is_empty() && *wallet != actor) {
+        let push = state.push_service.clone();
+        let storage = state.storage.clone();
+        let membership = state.membership_store.clone();
+        let notification_push = state.notification_push.clone();
+        let visible = state.push_service.visible_alerts();
+        let group_id = request.group_id.clone();
+        let sender = auth.sender_address.clone();
+        tokio::spawn(async move {
+            push.notify_new_message(
+                &storage,
+                &membership,
+                &notification_push,
+                visible,
+                &group_id,
+                push_id,
+                &sender,
+                &crate::models::MessageAttribution::human_message(),
+                MessageKind::RequestPayment.as_str(),
+                Some(recipient.as_str()),
+                None,
+            )
+            .await;
+        });
     }
     Ok(Json(wire))
 }
