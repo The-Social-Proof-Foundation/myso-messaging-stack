@@ -694,7 +694,10 @@ impl StorageAdapter for PostgresStorage {
                                  ) > 0
                             THEN 1 ELSE 0
                           END
-                      )::bigint AS unread_count
+                      )::bigint AS unread_count,
+                      (EXTRACT(EPOCH FROM MAX(created_at) FILTER (
+                         WHERE COALESCE(kind, 'text') <> 'commit'
+                       )) * 1000)::bigint AS latest_activity_ms
                FROM messages
                WHERE group_id = $1"#,
         )
@@ -707,6 +710,7 @@ impl StorageAdapter for PostgresStorage {
         Ok(GroupActivity {
             latest_order: row.get("latest_order"),
             unread_count: row.get("unread_count"),
+            latest_activity_ms: row.get("latest_activity_ms"),
         })
     }
 

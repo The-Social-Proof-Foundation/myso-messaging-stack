@@ -49,6 +49,8 @@ pub struct GroupActivityWire {
     pub latest_order: i64,
     pub unread_count: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub latest_activity_ms: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub reaction_unread_count: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub latest_reaction: Option<crate::models::LatestReaction>,
@@ -107,6 +109,7 @@ pub async fn post_unread_counts(
             group_id: item.group_id.clone(),
             latest_order: activity.latest_order,
             unread_count: activity.unread_count,
+            latest_activity_ms: activity.latest_activity_ms,
             reaction_unread_count: reactions.as_ref().map(|r| r.unread_count),
             latest_reaction: reactions.and_then(|r| r.latest),
         });

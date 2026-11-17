@@ -87,4 +87,6 @@ pub struct GroupActivity {
     pub latest_order: i64,
     /// Count of non-deleted messages with `order > after_order`.
     pub unread_count: i64,
+    /// Unix ms of the newest non-commit row (messages, system rows, reactions and other events).
+    pub latest_activity_ms: Option<i64>,
 }

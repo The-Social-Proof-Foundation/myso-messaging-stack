@@ -461,9 +461,14 @@ impl StorageAdapter for InMemoryStorage {
         let mut human = 0i64;
         let mut other_system = 0i64;
         let mut has_join = false;
+        let mut latest_activity_ms: Option<i64> = None;
         for m in messages.values().filter(|m| m.group_id == group_id) {
             let order = m.order.unwrap_or(0);
             latest_order = latest_order.max(order);
+            if m.kind != MessageKind::Commit {
+                let ms = m.created_at.timestamp_millis();
+                latest_activity_ms = Some(latest_activity_ms.map_or(ms, |v| v.max(ms)));
+            }
             let deleted = matches!(
                 m.sync_status,
                 SyncStatus::DeletePending | SyncStatus::Deleted
@@ -493,6 +498,7 @@ impl StorageAdapter for InMemoryStorage {
         Ok(GroupActivity {
             latest_order,
             unread_count,
+            latest_activity_ms,
         })
     }
 
@@ -971,6 +977,7 @@ mod tests {
         let empty = storage.get_group_activity("group_1", 0).await.unwrap();
         assert_eq!(empty.latest_order, 0);
         assert_eq!(empty.unread_count, 0);
+        assert_eq!(empty.latest_activity_ms, None);
 
         for i in 0..4u8 {
             storage
@@ -987,6 +994,7 @@ mod tests {
         let all = storage.get_group_activity("group_1", 0).await.unwrap();
         assert_eq!(all.latest_order, 4);
         assert_eq!(all.unread_count, 4);
+        assert!(all.latest_activity_ms.is_some());
 
         // after_order is exclusive: order > 2 leaves orders 3 and 4.
         let after = storage.get_group_activity("group_1", 2).await.unwrap();
