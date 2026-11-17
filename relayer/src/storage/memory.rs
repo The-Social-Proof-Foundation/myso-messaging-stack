@@ -796,6 +796,14 @@ impl StorageAdapter for InMemoryStorage {
             .push_tokens
             .write()
             .map_err(|e| StorageError::OperationFailed(format!("Lock poisoned: {}", e)))?;
+        tokens.retain(|(wallet, token), existing| {
+            if *token == record.token {
+                return *wallet == record.wallet;
+            }
+            !(*wallet == record.wallet
+                && record.device_id.is_some()
+                && existing.device_id == record.device_id)
+        });
         tokens.insert((record.wallet.clone(), record.token.clone()), record);
         Ok(())
     }

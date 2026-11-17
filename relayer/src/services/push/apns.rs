@@ -74,7 +74,7 @@ impl std::fmt::Display for ApnsSendError {
 
 #[derive(Clone)]
 enum ApnsBackend {
-    A2(Client),
+    A2 { sandbox: Client, production: Client },
     HttpTest {
         client: reqwest::Client,
         base_url: String,
@@ -252,23 +252,23 @@ impl ApnsClient {
             bytes
         };
 
-        let client_config = ClientConfig::new(environment.to_a2_endpoint());
-        let client = match Client::token(
-            key_bytes.as_slice(),
-            key_id,
-            team_id,
-            client_config,
-        ) {
-            Ok(client) => client,
-            Err(err) => {
-                warn!("Failed to create APNs client: {}", err);
-                return None;
-            }
+        let build_client = |env: ApnsEnvironment| {
+            Client::token(
+                key_bytes.as_slice(),
+                key_id.clone(),
+                team_id.clone(),
+                ClientConfig::new(env.to_a2_endpoint()),
+            )
+            .map_err(|err| warn!("Failed to create APNs {:?} client: {}", env, err))
+            .ok()
         };
+        let sandbox = build_client(ApnsEnvironment::Sandbox)?;
+        let production = build_client(ApnsEnvironment::Production)?;
 
         info!(
-            "APNs client initialized: host={} env={:?} topic={}",
-            apns_host(&environment),
+            "APNs clients initialized: hosts={},{} default_env={:?} topic={}",
+            apns_host(&ApnsEnvironment::Sandbox),
+            apns_host(&ApnsEnvironment::Production),
             environment,
             bundle_id
         );
@@ -276,7 +276,10 @@ impl ApnsClient {
         Some(Self {
             bundle_id,
             environment,
-            backend: ApnsBackend::A2(client),
+            backend: ApnsBackend::A2 {
+                sandbox,
+                production,
+            },
         })
     }
 
@@ -301,10 +304,23 @@ impl ApnsClient {
         token.platform.eq_ignore_ascii_case("ios")
     }
 
-    pub fn token_environment_matches(&self, token: &PushTokenRecord) -> bool {
-        ApnsEnvironment::from_token_str(&token.environment)
-            .map(|env| env == self.environment)
-            .unwrap_or(false)
+    pub fn supports_token_environment(&self, token: &PushTokenRecord) -> bool {
+        self.resolve_token_environment(token).is_ok()
+    }
+
+    fn resolve_token_environment(
+        &self,
+        token: &PushTokenRecord,
+    ) -> Result<ApnsEnvironment, ApnsSendError> {
+        let token_environment = ApnsEnvironment::from_token_str(&token.environment)
+            .map_err(ApnsSendError::Other)?;
+        match self.backend {
+            ApnsBackend::A2 { .. } => Ok(token_environment),
+            ApnsBackend::HttpTest { .. } if token_environment == self.environment => {
+                Ok(token_environment)
+            }
+            ApnsBackend::HttpTest { .. } => Err(ApnsSendError::EnvironmentMismatch),
+        }
     }
 
     pub async fn send_new_message(
@@ -317,14 +333,11 @@ impl ApnsClient {
             return Err(ApnsSendError::Other("non-ios platform".to_string()));
         }
 
-        let token_environment = ApnsEnvironment::from_token_str(&token.environment)
-            .map_err(ApnsSendError::Other)?;
-        if token_environment != self.environment {
-            return Err(ApnsSendError::EnvironmentMismatch);
-        }
+        let token_environment = self.resolve_token_environment(token)?;
 
         match &self.backend {
-            ApnsBackend::A2(client) => {
+            ApnsBackend::A2 { sandbox, production } => {
+                let client = select_a2_client(token_environment, sandbox, production);
                 self.send_via_a2(client, token, group_id, attribution)
                     .await
             }
@@ -356,14 +369,11 @@ impl ApnsClient {
             return Err(ApnsSendError::Other("non-ios platform".to_string()));
         }
 
-        let token_environment = ApnsEnvironment::from_token_str(&token.environment)
-            .map_err(ApnsSendError::Other)?;
-        if token_environment != self.environment {
-            return Err(ApnsSendError::EnvironmentMismatch);
-        }
+        let token_environment = self.resolve_token_environment(token)?;
 
         match &self.backend {
-            ApnsBackend::A2(client) => {
+            ApnsBackend::A2 { sandbox, production } => {
+                let client = select_a2_client(token_environment, sandbox, production);
                 self.send_alert_via_a2(
                     client,
                     token,
@@ -405,14 +415,11 @@ impl ApnsClient {
             return Err(ApnsSendError::Other("non-ios platform".to_string()));
         }
 
-        let token_environment = ApnsEnvironment::from_token_str(&token.environment)
-            .map_err(ApnsSendError::Other)?;
-        if token_environment != self.environment {
-            return Err(ApnsSendError::EnvironmentMismatch);
-        }
+        let token_environment = self.resolve_token_environment(token)?;
 
         match &self.backend {
-            ApnsBackend::A2(client) => {
+            ApnsBackend::A2 { sandbox, production } => {
+                let client = select_a2_client(token_environment, sandbox, production);
                 self.send_workflow_via_a2(client, token, item_type, item_id)
                     .await
             }
@@ -449,13 +456,13 @@ impl ApnsClient {
             .map_err(|err| ApnsSendError::Other(err.to_string()))?;
 
         debug!(
-            "APNs workflow push: topic={} env={:?} token={} item_type={} item_id={}",
-            self.bundle_id, self.environment, token.token, item_type, item_id
+            "APNs workflow push: topic={} env={} token={} item_type={} item_id={}",
+            self.bundle_id, token.environment, token.token, item_type, item_id
         );
 
         match client.send(payload).await {
             Ok(_) => Ok(()),
-            Err(A2Error::ResponseError(response)) => map_apns_status(response.code),
+            Err(A2Error::ResponseError(response)) => map_a2_response(&response),
             Err(A2Error::RequestTimeout(secs)) => Err(ApnsSendError::Transient(format!(
                 "request timeout after {secs}s"
             ))),
@@ -522,13 +529,13 @@ impl ApnsClient {
         }
 
         debug!(
-            "APNs metadata push: topic={} env={:?} token={} group={}",
-            self.bundle_id, self.environment, token.token, group_id
+            "APNs metadata push: topic={} env={} token={} group={}",
+            self.bundle_id, token.environment, token.token, group_id
         );
 
         match client.send(payload).await {
             Ok(_) => Ok(()),
-            Err(A2Error::ResponseError(response)) => map_apns_status(response.code),
+            Err(A2Error::ResponseError(response)) => map_a2_response(&response),
             Err(A2Error::RequestTimeout(secs)) => Err(ApnsSendError::Transient(format!(
                 "request timeout after {secs}s"
             ))),
@@ -583,13 +590,13 @@ impl ApnsClient {
         }
 
         debug!(
-            "APNs alert push: topic={} env={:?} token={} group={} message={}",
-            self.bundle_id, self.environment, token.token, group_id, message_id
+            "APNs alert push: topic={} env={} token={} group={} message={}",
+            self.bundle_id, token.environment, token.token, group_id, message_id
         );
 
         match client.send(payload).await {
             Ok(_) => Ok(()),
-            Err(A2Error::ResponseError(response)) => map_apns_status(response.code),
+            Err(A2Error::ResponseError(response)) => map_a2_response(&response),
             Err(A2Error::RequestTimeout(secs)) => Err(ApnsSendError::Transient(format!(
                 "request timeout after {secs}s"
             ))),
@@ -675,6 +682,28 @@ fn map_apns_status(code: u16) -> Result<(), ApnsSendError> {
         429 | 500..=599 => Err(ApnsSendError::Transient(format!("APNs status {code}"))),
         other => Err(ApnsSendError::Other(format!("APNs status {other}"))),
     }
+}
+
+fn select_a2_client<'a>(
+    environment: ApnsEnvironment,
+    sandbox: &'a Client,
+    production: &'a Client,
+) -> &'a Client {
+    match environment {
+        ApnsEnvironment::Sandbox => sandbox,
+        ApnsEnvironment::Production => production,
+    }
+}
+
+fn map_a2_response(response: &a2::Response) -> Result<(), ApnsSendError> {
+    let bad_device_token = matches!(
+        response.error.as_ref().map(|body| &body.reason),
+        Some(a2::ErrorReason::BadDeviceToken)
+    );
+    if response.code == 400 && bad_device_token {
+        return Err(ApnsSendError::Unregistered);
+    }
+    map_apns_status(response.code)
 }
 
 fn classify_a2_error(err: A2Error) -> Result<(), ApnsSendError> {
@@ -828,7 +857,7 @@ mod tests {
             ApnsEnvironment::Sandbox,
         );
         let token = sample_token("production");
-        assert!(!client.token_environment_matches(&token));
+        assert!(!client.supports_token_environment(&token));
     }
 
     #[test]

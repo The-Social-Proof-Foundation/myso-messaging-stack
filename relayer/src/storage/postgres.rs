@@ -1136,6 +1136,31 @@ impl StorageAdapter for PostgresStorage {
     }
 
     async fn upsert_push_token(&self, record: PushTokenRecord) -> StorageResult<()> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| StorageError::OperationFailed(e.to_string()))?;
+
+        sqlx::query("DELETE FROM push_tokens WHERE token = $1 AND wallet <> $2")
+            .bind(&record.token)
+            .bind(&record.wallet)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| StorageError::OperationFailed(e.to_string()))?;
+
+        if let Some(device_id) = &record.device_id {
+            sqlx::query(
+                "DELETE FROM push_tokens WHERE wallet = $1 AND device_id = $2 AND token <> $3",
+            )
+            .bind(&record.wallet)
+            .bind(device_id)
+            .bind(&record.token)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| StorageError::OperationFailed(e.to_string()))?;
+        }
+
         sqlx::query(
             r#"INSERT INTO push_tokens (wallet, token, platform, environment, device_id, updated_at)
                VALUES ($1,$2,$3,$4,$5,$6)
@@ -1151,9 +1176,13 @@ impl StorageAdapter for PostgresStorage {
         .bind(&record.environment)
         .bind(&record.device_id)
         .bind(record.updated_at)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await
         .map_err(|e| StorageError::OperationFailed(e.to_string()))?;
+
+        tx.commit()
+            .await
+            .map_err(|e| StorageError::OperationFailed(e.to_string()))?;
         Ok(())
     }
 

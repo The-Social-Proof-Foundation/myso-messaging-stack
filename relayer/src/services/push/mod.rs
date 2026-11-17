@@ -216,9 +216,9 @@ impl PushService {
                     debug!("skip push token for {} — platform {}", member, token.platform);
                     continue;
                 }
-                if !apns.token_environment_matches(token) {
+                if !apns.supports_token_environment(token) {
                     debug!(
-                        "skip push token for {} — environment {} does not match server {:?}",
+                        "skip push token for {} — environment {} not supported by server {:?}",
                         member,
                         token.environment,
                         apns.environment()
@@ -412,7 +412,7 @@ impl PushService {
         };
         for token in tokens {
             if let Some(apns) = self.apns.as_ref() {
-                if ApnsClient::is_ios_token(&token) && apns.token_environment_matches(&token) {
+                if ApnsClient::is_ios_token(&token) && apns.supports_token_environment(&token) {
                     match apns.send_workflow_item(&token, item_type, item_id).await {
                         Ok(()) => {}
                         Err(ApnsSendError::Unregistered) => {
