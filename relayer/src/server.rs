@@ -299,6 +299,12 @@ pub fn build_router(app_state: AppState, auth_state: AuthState, config: &Config)
             get(attachments::download_attachment),
         )
         .route(
+            "/groups/:group_id/push-previews",
+            post(attachments::upload_push_preview).layer(axum::extract::DefaultBodyLimit::max(
+                attachments::max_push_preview_request_bytes(),
+            )),
+        )
+        .route(
             "/groups/:group_id/mls/welcomes",
             post(crate::handlers::mls::post_welcome),
         )
@@ -392,6 +398,10 @@ pub fn build_router(app_state: AppState, auth_state: AuthState, config: &Config)
 
     let public_routes = Router::new()
         .route("/health_check", get(health_check))
+        .route(
+            "/v1/push-previews/:preview_id",
+            get(attachments::download_push_preview),
+        )
         .with_state(app_state.clone());
 
     let internal_routes = Router::new()

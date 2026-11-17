@@ -125,6 +125,81 @@ pub async fn download_attachment(
         .into_response())
 }
 
+/// Push-preview images: a small copy of a sent photo, encrypted by the sender with a one-time
+/// key that only rides inside each recipient device's sealed notification envelope. The
+/// notification service extension has no relayer credentials, so reads are unauthenticated
+/// by unguessable id; the relayer and R2 still only ever hold ciphertext.
+pub const MAX_PUSH_PREVIEW_BYTES: usize = 512 * 1024;
+
+pub fn max_push_preview_request_bytes() -> usize {
+    MAX_PUSH_PREVIEW_BYTES / 3 * 4 + 16 * 1024
+}
+
+fn push_preview_key(id: &uuid::Uuid) -> String {
+    format!("push-previews/{id}")
+}
+
+/// `POST /v1/groups/:group_id/push-previews` (body-signed): `{ group_id, sender_address,
+/// timestamp, data }` → `{ preview_id }`.
+pub async fn upload_push_preview(
+    State(state): State<AppState>,
+    Path(group_id): Path<String>,
+    Extension(auth): Extension<AuthContext>,
+    body: Bytes,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    ensure_group(&auth, &group_id)?;
+    let store = state
+        .attachment_store
+        .as_ref()
+        .ok_or_else(|| ApiError::Internal("attachment storage is not configured".to_string()))?;
+    let parsed: UploadBody = serde_json::from_slice(&body)
+        .map_err(|e| ApiError::BadRequest(format!("invalid upload body: {e}")))?;
+    let bytes = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, parsed.data.trim())
+        .map_err(|_| ApiError::BadRequest("data must be base64".to_string()))?;
+    if bytes.is_empty() {
+        return Err(ApiError::BadRequest("push preview is empty".to_string()));
+    }
+    if bytes.len() > MAX_PUSH_PREVIEW_BYTES {
+        return Err(ApiError::PayloadTooLarge(format!(
+            "push preview exceeds {MAX_PUSH_PREVIEW_BYTES} bytes"
+        )));
+    }
+    let id = uuid::Uuid::new_v4();
+    let size = bytes.len();
+    store.put_object(&push_preview_key(&id), bytes).await.map_err(|e| {
+        warn!("push preview upload failed group={group_id}: {e}");
+        ApiError::Internal("push preview upload failed".to_string())
+    })?;
+    info!("push preview stored group={group_id} id={id} bytes={size}");
+    Ok(Json(serde_json::json!({ "preview_id": id.to_string() })))
+}
+
+/// `GET /v1/push-previews/:preview_id` (public): ciphertext bytes.
+pub async fn download_push_preview(
+    State(state): State<AppState>,
+    Path(preview_id): Path<String>,
+) -> Result<Response, ApiError> {
+    let store = state
+        .attachment_store
+        .as_ref()
+        .ok_or_else(|| ApiError::Internal("attachment storage is not configured".to_string()))?;
+    let id = uuid::Uuid::parse_str(&preview_id)
+        .map_err(|_| ApiError::BadRequest("invalid preview id".to_string()))?;
+    let bytes = store
+        .get_object(&push_preview_key(&id))
+        .await
+        .map_err(|_| ApiError::NotFound("push preview not found".to_string()))?;
+    Ok((
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, "application/octet-stream"),
+            (header::CACHE_CONTROL, "private, max-age=604800, immutable"),
+        ],
+        bytes,
+    )
+        .into_response())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -136,6 +211,20 @@ mod tests {
             object_key("0xABC", &id),
             "attachments/0xabc/00000000-0000-0000-0000-000000000000"
         );
+    }
+
+    #[test]
+    fn push_preview_keys_are_not_group_scoped() {
+        let id = uuid::Uuid::nil();
+        assert_eq!(
+            push_preview_key(&id),
+            "push-previews/00000000-0000-0000-0000-000000000000"
+        );
+    }
+
+    #[test]
+    fn push_preview_request_cap_covers_base64_of_max_payload() {
+        assert!(max_push_preview_request_bytes() > MAX_PUSH_PREVIEW_BYTES * 4 / 3);
     }
 
     #[test]
