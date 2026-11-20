@@ -3006,6 +3006,7 @@ dependencies = [
  "bytes",
  "chrono",
  "dotenvy",
+ "ed25519-dalek",
  "futures-util",
  "hex",
  "hmac 0.12.1",

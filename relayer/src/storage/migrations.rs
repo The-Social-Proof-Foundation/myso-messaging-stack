@@ -88,6 +88,7 @@ const MIGRATIONS: &[(i32, &str)] = &[
     (29, include_str!("../../migrations/029_push_retry_queue.sql")),
     (30, include_str!("../../migrations/030_drop_message_reactions.sql")),
     (31, include_str!("../../migrations/031_push_token_single_owner.sql")),
+    (32, include_str!("../../migrations/032_device_receipt_keys.sql")),
 ];
 
 /// Strip line comments, then split into individual SQL statements.

@@ -22,6 +22,7 @@ pub struct DeviceNotificationKeyRecord {
     pub updated_at: DateTime<Utc>,
     /// Wallet-signed certificate over this key (`None` = legacy unsigned registration).
     pub certificate: Option<DeviceKeyCertificate>,
+    pub receipt_public_key: Option<String>,
 }
 
 /// The owning wallet's signature over a device notification key. Stored and served verbatim
@@ -101,7 +102,8 @@ impl NotificationPushStore {
     pub async fn attach_postgres(&self, pool: PgPool) -> Result<(), sqlx::Error> {
         let key_rows = sqlx::query(
             "SELECT wallet, device_id, public_key, platform, updated_at,
-                    cert_version, cert_issued_at_ms, cert_signature, cert_public_key
+                    cert_version, cert_issued_at_ms, cert_signature, cert_public_key,
+                    receipt_public_key
              FROM device_notification_keys",
         )
         .fetch_all(&pool)
@@ -124,6 +126,7 @@ impl NotificationPushStore {
                         row.get("cert_signature"),
                         row.get("cert_public_key"),
                     ),
+                    receipt_public_key: row.get("receipt_public_key"),
                 };
                 inner
                     .keys
@@ -152,8 +155,9 @@ impl NotificationPushStore {
             sqlx::query(
                 "INSERT INTO device_notification_keys
                     (wallet, device_id, public_key, platform, updated_at,
-                     cert_version, cert_issued_at_ms, cert_signature, cert_public_key)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                     cert_version, cert_issued_at_ms, cert_signature, cert_public_key,
+                     receipt_public_key)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
                  ON CONFLICT (wallet, device_id) DO UPDATE
                  SET public_key = EXCLUDED.public_key,
                      platform = EXCLUDED.platform,
@@ -161,7 +165,8 @@ impl NotificationPushStore {
                      cert_version = EXCLUDED.cert_version,
                      cert_issued_at_ms = EXCLUDED.cert_issued_at_ms,
                      cert_signature = EXCLUDED.cert_signature,
-                     cert_public_key = EXCLUDED.cert_public_key",
+                     cert_public_key = EXCLUDED.cert_public_key,
+                     receipt_public_key = COALESCE(EXCLUDED.receipt_public_key, device_notification_keys.receipt_public_key)",
             )
             .bind(&record.wallet)
             .bind(&record.device_id)
@@ -172,6 +177,7 @@ impl NotificationPushStore {
             .bind(record.certificate.as_ref().map(|c| c.issued_at_ms))
             .bind(record.certificate.as_ref().map(|c| c.signature.clone()))
             .bind(record.certificate.as_ref().map(|c| c.public_key.clone()))
+            .bind(record.receipt_public_key.clone())
             .execute(pool)
             .await?;
         }
@@ -201,11 +207,21 @@ impl NotificationPushStore {
         Ok(())
     }
 
-    pub fn upsert_device_key(&self, record: DeviceNotificationKeyRecord) {
+    pub fn upsert_device_key(&self, mut record: DeviceNotificationKeyRecord) {
         let mut inner = self.inner.write().expect("notification push store poisoned");
+        let key = (record.wallet.clone(), record.device_id.clone());
+        if record.receipt_public_key.is_none() {
+            record.receipt_public_key = inner.keys.get(&key).and_then(|k| k.receipt_public_key.clone());
+        }
+        inner.keys.insert(key, record);
+    }
+
+    pub fn device_key(&self, wallet: &str, device_id: &str) -> Option<DeviceNotificationKeyRecord> {
+        let inner = self.inner.read().expect("notification push store poisoned");
         inner
             .keys
-            .insert((record.wallet.clone(), record.device_id.clone()), record);
+            .get(&(wallet.to_string(), device_id.to_string()))
+            .cloned()
     }
 
     pub fn list_device_keys_for_wallets(&self, wallets: &[String]) -> Vec<DeviceNotificationKeyRecord> {

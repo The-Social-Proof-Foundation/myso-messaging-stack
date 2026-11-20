@@ -402,6 +402,10 @@ pub fn build_router(app_state: AppState, auth_state: AuthState, config: &Config)
             "/v1/push-previews/:preview_id",
             get(attachments::download_push_preview),
         )
+        .route(
+            "/v1/push/delivered",
+            post(notification_push::post_push_delivered),
+        )
         .with_state(app_state.clone());
 
     let internal_routes = Router::new()
