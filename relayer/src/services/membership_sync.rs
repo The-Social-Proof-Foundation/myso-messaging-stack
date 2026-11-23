@@ -170,6 +170,87 @@ async fn fetch_event_checkpoints(
     Ok(out)
 }
 
+/// One event from the indexer GraphQL, shaped for `parse_myso_event` / `apply_event`.
+struct IndexedEvent {
+    event: myso_rpc::proto::myso::rpc::v2::Event,
+    tx_digest: String,
+    /// Index within its transaction (system message idempotency keys depend on it).
+    event_index: usize,
+    tx_sender: String,
+    timestamp: chrono::DateTime<Utc>,
+}
+
+/// Every event matching `event_type`, in chain order, with its Move value BCS.
+async fn fetch_indexed_events(
+    graphql_url: &str,
+    event_type: &str,
+) -> Result<Vec<IndexedEvent>, Box<dyn std::error::Error + Send + Sync>> {
+    use base64::Engine as _;
+    const QUERY: &str = "query($t: String!, $a: String) { events(first: 50, after: $a, filter: { type: $t }) { pageInfo { hasNextPage endCursor } nodes { sequenceNumber timestamp contents { type { repr } bcs } transaction { digest sender { address } } } } }";
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .build()?;
+    let mut after: Option<String> = None;
+    let mut out = Vec::new();
+    loop {
+        let body = serde_json::json!({ "query": QUERY, "variables": { "t": event_type, "a": after } });
+        let response: serde_json::Value = client
+            .post(graphql_url)
+            .json(&body)
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+        if let Some(errors) = response.get("errors") {
+            return Err(format!("GraphQL events({event_type}): {errors}").into());
+        }
+        let events = &response["data"]["events"];
+        for node in events["nodes"].as_array().into_iter().flatten() {
+            let (Some(type_repr), Some(bcs_b64), Some(digest)) = (
+                node["contents"]["type"]["repr"].as_str(),
+                node["contents"]["bcs"].as_str(),
+                node["transaction"]["digest"].as_str(),
+            ) else {
+                return Err(format!("GraphQL events({event_type}): node missing type/bcs/digest").into());
+            };
+            let bcs = base64::engine::general_purpose::STANDARD.decode(bcs_b64)?;
+            let event_index = node["sequenceNumber"]
+                .as_u64()
+                .or_else(|| node["sequenceNumber"].as_str().and_then(|s| s.parse().ok()))
+                .ok_or("GraphQL event missing sequenceNumber")? as usize;
+            let timestamp = node["timestamp"]
+                .as_str()
+                .and_then(|ts| chrono::DateTime::parse_from_rfc3339(ts).ok())
+                .map(|ts| ts.with_timezone(&Utc))
+                .unwrap_or_else(Utc::now);
+            let mut event = myso_rpc::proto::myso::rpc::v2::Event::default();
+            event.event_type = Some(type_repr.to_string());
+            let mut contents = myso_rpc::proto::myso::rpc::v2::Bcs::default();
+            contents.value = Some(bytes::Bytes::from(bcs));
+            event.contents = Some(contents);
+            out.push(IndexedEvent {
+                event,
+                tx_digest: digest.to_string(),
+                event_index,
+                tx_sender: node["transaction"]["sender"]["address"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string(),
+                timestamp,
+            });
+        }
+        if events["pageInfo"]["hasNextPage"].as_bool() != Some(true) {
+            break;
+        }
+        after = events["pageInfo"]["endCursor"].as_str().map(str::to_string);
+        if after.is_none() {
+            break;
+        }
+    }
+    Ok(out)
+}
+
 /// A regenesis restarts sequence numbers near zero. A checkpoint a little behind the
 /// cursor is the live stream delivering its backlog after an idle poll or replay
 /// already advanced past it, and must not wipe membership.
@@ -591,9 +672,10 @@ impl MembershipSyncService {
         Ok(())
     }
 
-    /// Rebuilds membership by replaying, in order, only the checkpoints that contain
-    /// `permissioned_group` or `AgentGroupCreated` events, then jumps the cursor to the tip.
-    /// Membership events are rare, so this takes seconds where a full replay takes days.
+    /// Rebuilds membership from every `permissioned_group` event in the indexer GraphQL,
+    /// applied in chain order through the same parser and `apply_event` path as the live
+    /// stream, then jumps the cursor to the tip. Reads events rather than checkpoints:
+    /// fullnodes prune old checkpoints, the indexer keeps every event.
     async fn rebuild_membership_from_events(
         &mut self,
         ledger: &mut Ledger,
@@ -602,27 +684,70 @@ impl MembershipSyncService {
             .graphql_url
             .clone()
             .ok_or("MEMBERSHIP_REBUILD_FROM_EVENTS needs MYSO_GRAPHQL_URL")?;
-        let event_types = [
-            format!("{}::permissioned_group", self.groups_package_id),
-            format!("{}::messaging::AgentGroupCreated", self.messaging_package_id),
-        ];
-        let mut checkpoints = std::collections::BTreeSet::new();
-        for event_type in &event_types {
-            let found = fetch_event_checkpoints(&url, event_type).await?;
-            info!("Membership rebuild: {} checkpoints with {} events", found.len(), event_type);
-            checkpoints.extend(found);
-        }
         let Some((tip, tip_checkpoint)) = Self::fetch_latest_checkpoint(ledger).await? else {
             return Err("membership rebuild: no latest checkpoint".into());
         };
+        let events =
+            fetch_indexed_events(&url, &format!("{}::permissioned_group", self.groups_package_id))
+                .await?;
         info!(
-            "Membership rebuild: replaying {} checkpoints, then resuming at {}",
-            checkpoints.len(),
+            "Membership rebuild: applying {} permissioned_group events, then resuming at {}",
+            events.len(),
             tip
         );
-        for seq in checkpoints.into_iter().filter(|seq| *seq <= tip) {
-            self.replay_checkpoints(ledger, seq, seq + 1).await?;
+
+        let mut applied = 0usize;
+        let mut start = 0usize;
+        while start < events.len() {
+            let digest = events[start].tx_digest.clone();
+            let end = events[start..]
+                .iter()
+                .position(|e| e.tx_digest != digest)
+                .map_or(events.len(), |offset| start + offset);
+            let tx_events = &events[start..end];
+
+            let mut creators_in_tx: HashMap<String, String> = HashMap::new();
+            for indexed in tx_events {
+                if let Some(AgentDetectionEvent::GroupCreated(created)) =
+                    parse_agent_detection_event(&indexed.event, &self.groups_package_id)
+                {
+                    creators_in_tx.insert(
+                        created.group_id.to_ascii_lowercase(),
+                        created.creator.to_ascii_lowercase(),
+                    );
+                }
+            }
+            for indexed in tx_events {
+                if let Some(groups_event) = parse_myso_event(&indexed.event, &self.groups_package_id) {
+                    self.apply_event(
+                        &groups_event,
+                        &creators_in_tx,
+                        &indexed.tx_digest,
+                        indexed.event_index,
+                        &indexed.tx_sender,
+                        indexed.timestamp,
+                    )
+                    .await;
+                    applied += 1;
+                }
+            }
+            start = end;
         }
+        info!("Membership rebuild: applied {applied} membership events");
+
+        let agent_type = format!("{}::messaging::AgentGroupCreated", self.messaging_package_id);
+        let agent_checkpoints: std::collections::BTreeSet<u64> =
+            fetch_event_checkpoints(&url, &agent_type).await?.into_iter().collect();
+        if !agent_checkpoints.is_empty() {
+            info!(
+                "Membership rebuild: replaying {} checkpoints with AgentGroupCreated events",
+                agent_checkpoints.len()
+            );
+            for seq in agent_checkpoints.into_iter().filter(|seq| *seq <= tip) {
+                self.replay_checkpoints(ledger, seq, seq + 1).await?;
+            }
+        }
+
         self.process_checkpoint(&tip_checkpoint, tip).await;
         self.last_cursor = Some(tip);
         self.membership_store.set_last_checkpoint_cursor(tip);
@@ -1321,5 +1446,24 @@ mod backfill_tests {
         .await
         .expect("GraphQL events");
         assert!(found.contains(&2_771_716), "{found:?}");
+    }
+
+    #[tokio::test]
+    #[ignore = "hits testnet GraphQL"]
+    async fn indexed_events_parse_into_membership_for_pruned_groups() {
+        let events = fetch_indexed_events(
+            "https://graphql.testnet.mysocial.network/graphql",
+            "0x2::permissioned_group",
+        )
+        .await
+        .expect("GraphQL events");
+        let group = "0x1123c31ca2c713f49e85e3d0cc15e6c05f00f297c011e0f163143ce1f9fbc778";
+        let wallet = "0x6b27c51107b378c9a1c6f1b471e43407d3027e8485464b0f7e9be8d196cbd8e0";
+        let parsed: Vec<GroupsEvent> = events
+            .iter()
+            .filter_map(|e| super::super::event_parser::parse_myso_event(&e.event, "0x2"))
+            .collect();
+        let rendered = format!("{parsed:?}").to_ascii_lowercase();
+        assert!(rendered.contains(group) && rendered.contains(wallet), "{rendered}");
     }
 }
