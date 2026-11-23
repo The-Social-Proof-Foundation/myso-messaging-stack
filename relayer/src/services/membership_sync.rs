@@ -120,6 +120,56 @@ fn backfill_range(last: u64, streamed: u64, limit: u64) -> Option<(u64, u64, boo
     }
 }
 
+fn env_flag(value: Option<&str>) -> bool {
+    matches!(
+        value.map(|v| v.trim().to_ascii_lowercase()).as_deref(),
+        Some("1" | "true" | "yes")
+    )
+}
+
+/// Checkpoint sequence numbers of every event matching `event_type` (a module or full
+/// type filter), paged from the indexer GraphQL.
+async fn fetch_event_checkpoints(
+    graphql_url: &str,
+    event_type: &str,
+) -> Result<Vec<u64>, Box<dyn std::error::Error + Send + Sync>> {
+    const QUERY: &str = "query($t: String!, $a: String) { events(first: 50, after: $a, filter: { type: $t }) { pageInfo { hasNextPage endCursor } nodes { transaction { effects { checkpoint { sequenceNumber } } } } } }";
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .build()?;
+    let mut after: Option<String> = None;
+    let mut out = Vec::new();
+    loop {
+        let body = serde_json::json!({ "query": QUERY, "variables": { "t": event_type, "a": after } });
+        let response: serde_json::Value = client
+            .post(graphql_url)
+            .json(&body)
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+        if let Some(errors) = response.get("errors") {
+            return Err(format!("GraphQL events({event_type}): {errors}").into());
+        }
+        let events = &response["data"]["events"];
+        for node in events["nodes"].as_array().into_iter().flatten() {
+            let seq = &node["transaction"]["effects"]["checkpoint"]["sequenceNumber"];
+            if let Some(seq) = seq.as_u64().or_else(|| seq.as_str().and_then(|s| s.parse().ok())) {
+                out.push(seq);
+            }
+        }
+        if events["pageInfo"]["hasNextPage"].as_bool() != Some(true) {
+            break;
+        }
+        after = events["pageInfo"]["endCursor"].as_str().map(str::to_string);
+        if after.is_none() {
+            break;
+        }
+    }
+    Ok(out)
+}
+
 /// A regenesis restarts sequence numbers near zero. A checkpoint a little behind the
 /// cursor is the live stream delivering its backlog after an idle poll or replay
 /// already advanced past it, and must not wipe membership.
@@ -153,6 +203,11 @@ pub struct MembershipSyncService {
     /// Debounced join notify shared with HTTP create_message cancel path.
     begin_chat_notify: BeginChatNotify,
     last_cursor: Option<u64>,
+    /// `MEMBERSHIP_REBUILD_FROM_EVENTS`: on the next connect, replay only the checkpoints
+    /// that carry group membership events (found via GraphQL) instead of the whole chain.
+    rebuild_from_events: bool,
+    /// `MYSO_GRAPHQL_URL`, used to find those checkpoints.
+    graphql_url: Option<String>,
 }
 
 impl MembershipSyncService {
@@ -206,6 +261,11 @@ impl MembershipSyncService {
             ),
             begin_chat_notify,
             last_cursor,
+            rebuild_from_events: env_flag(std::env::var("MEMBERSHIP_REBUILD_FROM_EVENTS").ok().as_deref()),
+            graphql_url: std::env::var("MYSO_GRAPHQL_URL")
+                .ok()
+                .map(|url| url.trim().to_string())
+                .filter(|url| !url.is_empty()),
         }
     }
 
@@ -459,6 +519,11 @@ impl MembershipSyncService {
                 .as_deref(),
         );
 
+        if self.rebuild_from_events {
+            self.rebuild_membership_from_events(&mut ledger).await?;
+            self.rebuild_from_events = false;
+        }
+
         if self.last_cursor.is_none() {
             self.catch_up_recent(&mut ledger, backfill_max).await?;
         }
@@ -523,6 +588,45 @@ impl MembershipSyncService {
             "Startup catch-up complete at checkpoint {:?}",
             self.last_cursor
         );
+        Ok(())
+    }
+
+    /// Rebuilds membership by replaying, in order, only the checkpoints that contain
+    /// `permissioned_group` or `AgentGroupCreated` events, then jumps the cursor to the tip.
+    /// Membership events are rare, so this takes seconds where a full replay takes days.
+    async fn rebuild_membership_from_events(
+        &mut self,
+        ledger: &mut Ledger,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let url = self
+            .graphql_url
+            .clone()
+            .ok_or("MEMBERSHIP_REBUILD_FROM_EVENTS needs MYSO_GRAPHQL_URL")?;
+        let event_types = [
+            format!("{}::permissioned_group", self.groups_package_id),
+            format!("{}::messaging::AgentGroupCreated", self.messaging_package_id),
+        ];
+        let mut checkpoints = std::collections::BTreeSet::new();
+        for event_type in &event_types {
+            let found = fetch_event_checkpoints(&url, event_type).await?;
+            info!("Membership rebuild: {} checkpoints with {} events", found.len(), event_type);
+            checkpoints.extend(found);
+        }
+        let Some((tip, tip_checkpoint)) = Self::fetch_latest_checkpoint(ledger).await? else {
+            return Err("membership rebuild: no latest checkpoint".into());
+        };
+        info!(
+            "Membership rebuild: replaying {} checkpoints, then resuming at {}",
+            checkpoints.len(),
+            tip
+        );
+        for seq in checkpoints.into_iter().filter(|seq| *seq <= tip) {
+            self.replay_checkpoints(ledger, seq, seq + 1).await?;
+        }
+        self.process_checkpoint(&tip_checkpoint, tip).await;
+        self.last_cursor = Some(tip);
+        self.membership_store.set_last_checkpoint_cursor(tip);
+        info!("Membership rebuild complete at checkpoint {tip}; unset MEMBERSHIP_REBUILD_FROM_EVENTS");
         Ok(())
     }
 
@@ -1197,5 +1301,25 @@ mod backfill_tests {
     #[test]
     fn a_reset_to_low_sequence_numbers_is_a_regenesis() {
         assert!(is_regenesis_rewind(5_933_551, 12));
+    }
+
+    #[test]
+    fn the_rebuild_flag_parses() {
+        assert!(env_flag(Some("1")));
+        assert!(env_flag(Some(" TRUE ")));
+        assert!(!env_flag(Some("0")));
+        assert!(!env_flag(None));
+    }
+
+    #[tokio::test]
+    #[ignore = "hits testnet GraphQL"]
+    async fn membership_event_checkpoints_page_from_testnet() {
+        let found = fetch_event_checkpoints(
+            "https://graphql.testnet.mysocial.network/graphql",
+            "0x2::permissioned_group",
+        )
+        .await
+        .expect("GraphQL events");
+        assert!(found.contains(&2_771_716), "{found:?}");
     }
 }
