@@ -34,6 +34,7 @@ pub struct InMemoryStorage {
     user_read_states: RwLock<HashMap<String, EncryptedBlobRecord>>,
     push_tokens: RwLock<HashMap<(String, String), PushTokenRecord>>,
     presence: RwLock<HashMap<String, chrono::DateTime<chrono::Utc>>>,
+    last_active: RwLock<HashMap<String, chrono::DateTime<chrono::Utc>>>,
     /// On-chain paid DM escrows keyed by `(group_id, seq)`.
     paid_escrows: RwLock<HashMap<(String, i64), PaidEscrowRecord>>,
     /// Per-member conversation prefs keyed by `(group_id, wallet)`.
@@ -57,6 +58,7 @@ impl InMemoryStorage {
             user_read_states: RwLock::new(HashMap::new()),
             push_tokens: RwLock::new(HashMap::new()),
             presence: RwLock::new(HashMap::new()),
+            last_active: RwLock::new(HashMap::new()),
             paid_escrows: RwLock::new(HashMap::new()),
             conversation_preferences: RwLock::new(HashMap::new()),
             conversation_reports: RwLock::new(Vec::new()),
@@ -866,8 +868,25 @@ impl StorageAdapter for InMemoryStorage {
             .presence
             .write()
             .map_err(|e| StorageError::OperationFailed(format!("Lock poisoned: {}", e)))?;
-        presence.insert(wallet.to_string(), Utc::now());
+        let now = Utc::now();
+        presence.insert(wallet.to_string(), now);
+        drop(presence);
+        self.last_active
+            .write()
+            .map_err(|e| StorageError::OperationFailed(format!("Lock poisoned: {}", e)))?
+            .insert(wallet.to_string(), now);
         Ok(())
+    }
+
+    async fn get_last_active(
+        &self,
+        wallet: &str,
+    ) -> StorageResult<Option<chrono::DateTime<chrono::Utc>>> {
+        let last_active = self
+            .last_active
+            .read()
+            .map_err(|e| StorageError::OperationFailed(format!("Lock poisoned: {}", e)))?;
+        Ok(last_active.get(wallet).copied())
     }
 
     async fn clear_presence(&self, wallet: &str) -> StorageResult<()> {

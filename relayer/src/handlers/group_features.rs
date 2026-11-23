@@ -159,9 +159,10 @@ pub async fn get_group_presence(
             });
             continue;
         }
+        // Durable last-active: `presence` is cleared the moment a wallet goes offline (push gating).
         let last_seen = state
             .storage
-            .get_presence_last_seen(&member)
+            .get_last_active(&member)
             .await
             .map_err(ApiError::from)?;
         let online = state.presence_registry.is_online(&member);

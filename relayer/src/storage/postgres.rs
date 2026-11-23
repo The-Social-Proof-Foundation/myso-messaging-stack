@@ -1259,7 +1259,29 @@ impl StorageAdapter for PostgresStorage {
         .execute(&self.pool)
         .await
         .map_err(|e| StorageError::OperationFailed(e.to_string()))?;
+        sqlx::query(
+            r#"INSERT INTO presence_last_active (wallet, last_active_at) VALUES ($1, $2)
+               ON CONFLICT (wallet) DO UPDATE
+               SET last_active_at = GREATEST(presence_last_active.last_active_at, EXCLUDED.last_active_at)"#,
+        )
+        .bind(wallet)
+        .bind(Utc::now())
+        .execute(&self.pool)
+        .await
+        .map_err(|e| StorageError::OperationFailed(e.to_string()))?;
         Ok(())
+    }
+
+    async fn get_last_active(
+        &self,
+        wallet: &str,
+    ) -> StorageResult<Option<chrono::DateTime<chrono::Utc>>> {
+        let row = sqlx::query("SELECT last_active_at FROM presence_last_active WHERE wallet = $1")
+            .bind(wallet)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| StorageError::OperationFailed(e.to_string()))?;
+        Ok(row.map(|r| r.get("last_active_at")))
     }
 
     async fn clear_presence(&self, wallet: &str) -> StorageResult<()> {

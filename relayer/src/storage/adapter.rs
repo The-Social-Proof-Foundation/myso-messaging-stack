@@ -428,6 +428,14 @@ pub trait StorageAdapter: Send + Sync {
         wallet: &str,
     ) -> StorageResult<Option<chrono::DateTime<chrono::Utc>>>;
 
+    /// Last time the wallet was active. Survives `clear_presence` (that only resets push gating).
+    async fn get_last_active(
+        &self,
+        wallet: &str,
+    ) -> StorageResult<Option<chrono::DateTime<chrono::Utc>>> {
+        self.get_presence_last_seen(wallet).await
+    }
+
     /// Postgres pool for cross-instance NOTIFY when this backend uses Postgres.
     fn postgres_pool(&self) -> Option<&sqlx::PgPool> {
         None
