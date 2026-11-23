@@ -196,6 +196,9 @@ pub struct LocalZkLoginCheck {
     jwks: Arc<dyn JwkSource>,
     epochs: Arc<dyn EpochSource>,
     last_fetch: Mutex<HashMap<String, Instant>>,
+    /// Serializes JWKS fetches so requests arriving mid-fetch wait for its keys
+    /// instead of failing against a cache that is about to be filled.
+    fetch_gate: tokio::sync::Mutex<()>,
     epoch: Mutex<Option<(u64, Instant)>>,
 }
 
@@ -206,6 +209,7 @@ impl LocalZkLoginCheck {
             jwks,
             epochs,
             last_fetch: Mutex::new(HashMap::new()),
+            fetch_gate: tokio::sync::Mutex::new(()),
             epoch: Mutex::new(None),
         }
     }
@@ -243,6 +247,10 @@ impl LocalZkLoginCheck {
                 "zkLogin issuer not supported: {}",
                 id.iss
             )));
+        }
+        let _gate = self.fetch_gate.lock().await;
+        if self.has_jwk(id) {
+            return Ok(());
         }
         let may_fetch = {
             let mut last = self.last_fetch.lock().unwrap_or_else(|e| e.into_inner());

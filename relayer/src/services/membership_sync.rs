@@ -120,6 +120,13 @@ fn backfill_range(last: u64, streamed: u64, limit: u64) -> Option<(u64, u64, boo
     }
 }
 
+/// A regenesis restarts sequence numbers near zero. A checkpoint a little behind the
+/// cursor is the live stream delivering its backlog after an idle poll or replay
+/// already advanced past it, and must not wipe membership.
+fn is_regenesis_rewind(last: u64, cursor: u64) -> bool {
+    cursor < last / 2
+}
+
 pub struct MembershipSyncService {
     myso_rpc_url: String,
     groups_package_id: String,
@@ -543,7 +550,13 @@ impl MembershipSyncService {
         backfill_max: u64,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         if let Some(last) = self.last_cursor {
-            if cursor < last {
+            if cursor < last && !is_regenesis_rewind(last, cursor) {
+                debug!(
+                    "Skipping stale checkpoint {} behind cursor {} (stream catching up after a replay)",
+                    cursor, last
+                );
+                return Ok(());
+            } else if cursor < last {
                 warn!(
                     "Checkpoint cursor rewound from {} to {} (chain regenesis?) — clearing membership cache",
                     last, cursor
@@ -1174,5 +1187,15 @@ mod backfill_tests {
         );
         assert_eq!(backfill_limit(Some(" 250 ")), 250);
         assert_eq!(backfill_limit(Some("0")), 0);
+    }
+
+    #[test]
+    fn a_stream_backlog_behind_the_cursor_is_not_a_regenesis() {
+        assert!(!is_regenesis_rewind(5_933_551, 5_933_208));
+    }
+
+    #[test]
+    fn a_reset_to_low_sequence_numbers_is_a_regenesis() {
+        assert!(is_regenesis_rewind(5_933_551, 12));
     }
 }
