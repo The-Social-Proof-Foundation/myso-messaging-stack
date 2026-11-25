@@ -1,6 +1,6 @@
 //! WebSocket subscription for realtime encrypted message delivery.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use axum::{
     extract::{
@@ -64,6 +64,8 @@ async fn handle_socket(
     let (mut ws_tx, mut ws_rx) = socket.split();
     let mut hub_rx = state.realtime_hub.subscribe(&group_id);
     let mut ping_tick = tokio::time::interval(ping_interval);
+    let mut last_client_frame = Instant::now();
+    let liveness_window = ping_interval * 2 + Duration::from_secs(5);
 
     if let Err(err) = state.storage.update_presence(&sender).await {
         warn!("ws presence update failed for {}: {}", sender, err);
@@ -99,6 +101,9 @@ async fn handle_socket(
                 }
             }
             msg = ws_rx.next() => {
+                if matches!(msg, Some(Ok(_))) {
+                    last_client_frame = Instant::now();
+                }
                 match msg {
                     Some(Ok(Message::Text(text))) => {
                         if let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) {
@@ -122,7 +127,16 @@ async fn handle_socket(
                 }
             }
             _ = ping_tick.tick() => {
-                let _ = state.storage.update_presence(&sender).await;
+                if last_client_frame.elapsed() > liveness_window {
+                    debug!("ws client unresponsive for {}s, closing", last_client_frame.elapsed().as_secs());
+                    break;
+                }
+                if ws_tx.send(Message::Ping(Vec::new().into())).await.is_err() {
+                    break;
+                }
+                if last_client_frame.elapsed() <= ping_interval + Duration::from_secs(5) {
+                    let _ = state.storage.update_presence(&sender).await;
+                }
             }
         }
     }
