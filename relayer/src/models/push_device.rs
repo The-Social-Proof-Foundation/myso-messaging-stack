@@ -11,5 +11,7 @@ pub struct PushTokenRecord {
     pub environment: String,
     #[serde(default)]
     pub device_id: Option<String>,
+    #[serde(default)]
+    pub app_bundle_id: Option<String>,
     pub updated_at: DateTime<Utc>,
 }

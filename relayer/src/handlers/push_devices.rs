@@ -21,6 +21,18 @@ pub struct PostPushTokenBody {
     pub environment: String,
     #[serde(default)]
     pub device_id: Option<String>,
+    #[serde(default)]
+    pub bundle_id: Option<String>,
+}
+
+fn normalized_bundle_id(raw: Option<&String>) -> Option<String> {
+    let value = raw?.trim();
+    let valid = !value.is_empty()
+        && value.len() <= 155
+        && value
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-');
+    valid.then(|| value.to_string())
 }
 
 fn validate_push_token_body(body: &PostPushTokenBody) -> Result<(), ApiError> {
@@ -77,6 +89,7 @@ pub async fn post_push_token(
             .as_ref()
             .map(|id| id.trim().to_string())
             .filter(|id| !id.is_empty()),
+        app_bundle_id: normalized_bundle_id(body.bundle_id.as_ref()),
         updated_at: Utc::now(),
     };
 
@@ -114,6 +127,7 @@ mod tests {
             token: "a".repeat(64),
             environment: "sandbox".to_string(),
             device_id: None,
+            bundle_id: None,
         }
     }
 

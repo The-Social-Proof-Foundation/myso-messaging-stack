@@ -1166,13 +1166,14 @@ impl StorageAdapter for PostgresStorage {
         }
 
         sqlx::query(
-            r#"INSERT INTO push_tokens (wallet, token, platform, environment, device_id, updated_at)
-               VALUES ($1,$2,$3,$4,$5,$6)
+            r#"INSERT INTO push_tokens (wallet, token, platform, environment, device_id, updated_at, app_bundle_id)
+               VALUES ($1,$2,$3,$4,$5,$6,$7)
                ON CONFLICT (wallet, token) DO UPDATE SET
                  platform = EXCLUDED.platform,
                  environment = EXCLUDED.environment,
                  device_id = EXCLUDED.device_id,
-                 updated_at = EXCLUDED.updated_at"#,
+                 updated_at = EXCLUDED.updated_at,
+                 app_bundle_id = COALESCE(EXCLUDED.app_bundle_id, push_tokens.app_bundle_id)"#,
         )
         .bind(&record.wallet)
         .bind(&record.token)
@@ -1180,6 +1181,7 @@ impl StorageAdapter for PostgresStorage {
         .bind(&record.environment)
         .bind(&record.device_id)
         .bind(record.updated_at)
+        .bind(&record.app_bundle_id)
         .execute(&mut *tx)
         .await
         .map_err(|e| StorageError::OperationFailed(e.to_string()))?;
@@ -1217,6 +1219,7 @@ impl StorageAdapter for PostgresStorage {
                 token: r.get("token"),
                 environment: r.get("environment"),
                 device_id: r.try_get("device_id").ok(),
+                app_bundle_id: r.try_get("app_bundle_id").ok(),
                 updated_at: r.get("updated_at"),
             })
             .collect())
@@ -1242,6 +1245,7 @@ impl StorageAdapter for PostgresStorage {
                 token: r.get("token"),
                 environment: r.get("environment"),
                 device_id: r.try_get("device_id").ok(),
+                app_bundle_id: r.try_get("app_bundle_id").ok(),
                 updated_at: r.get("updated_at"),
             };
             out.entry(record.wallet.clone()).or_default().push(record);

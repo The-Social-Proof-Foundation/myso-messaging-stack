@@ -56,6 +56,7 @@ pub enum ApnsSendError {
     EnvironmentMismatch,
     Unregistered,
     InvalidToken,
+    WrongTopic,
     Transient(String),
     Other(String),
 }
@@ -66,6 +67,7 @@ impl std::fmt::Display for ApnsSendError {
             Self::EnvironmentMismatch => write!(f, "token environment does not match server"),
             Self::Unregistered => write!(f, "device token unregistered"),
             Self::InvalidToken => write!(f, "invalid device token"),
+            Self::WrongTopic => write!(f, "device token belongs to a different app"),
             Self::Transient(msg) => write!(f, "transient APNs error: {msg}"),
             Self::Other(msg) => write!(f, "APNs error: {msg}"),
         }
@@ -84,6 +86,7 @@ enum ApnsBackend {
 #[derive(Clone)]
 pub struct ApnsClient {
     bundle_id: String,
+    extra_topics: Vec<String>,
     environment: ApnsEnvironment,
     backend: ApnsBackend,
 }
@@ -275,6 +278,7 @@ impl ApnsClient {
 
         Some(Self {
             bundle_id,
+            extra_topics: config.apns_extra_bundle_ids.clone(),
             environment,
             backend: ApnsBackend::A2 {
                 sandbox,
@@ -288,6 +292,7 @@ impl ApnsClient {
     pub fn from_test_http(base_url: String, bundle_id: String, environment: ApnsEnvironment) -> Self {
         Self {
             bundle_id,
+            extra_topics: Vec::new(),
             environment,
             backend: ApnsBackend::HttpTest {
                 client: reqwest::Client::new(),
@@ -296,8 +301,30 @@ impl ApnsClient {
         }
     }
 
+    #[doc(hidden)]
+    pub fn with_extra_topics(mut self, topics: Vec<String>) -> Self {
+        self.extra_topics = topics;
+        self
+    }
+
     pub fn environment(&self) -> ApnsEnvironment {
         self.environment
+    }
+
+    pub fn alternate_topics(&self, token: &PushTokenRecord) -> Vec<String> {
+        let current = self.topic_for(token);
+        std::iter::once(&self.bundle_id)
+            .chain(self.extra_topics.iter())
+            .filter(|topic| topic.as_str() != current)
+            .cloned()
+            .collect()
+    }
+
+    fn topic_for<'a>(&'a self, token: &'a PushTokenRecord) -> &'a str {
+        match token.app_bundle_id.as_deref() {
+            Some(app) if app == self.bundle_id || self.extra_topics.iter().any(|t| t == app) => app,
+            _ => &self.bundle_id,
+        }
     }
 
     pub fn is_ios_token(token: &PushTokenRecord) -> bool {
@@ -442,7 +469,7 @@ impl ApnsClient {
             .build(
                 &token.token,
                 NotificationOptions {
-                    apns_topic: Some(&self.bundle_id),
+                    apns_topic: Some(self.topic_for(token)),
                     apns_push_type: Some(PushType::Background),
                     apns_priority: Some(Priority::Normal),
                     ..Default::default()
@@ -457,7 +484,7 @@ impl ApnsClient {
 
         debug!(
             "APNs workflow push: topic={} env={} token={} item_type={} item_id={}",
-            self.bundle_id, token.environment, token.token, item_type, item_id
+            self.topic_for(token), token.environment, token.token, item_type, item_id
         );
 
         match client.send(payload).await {
@@ -487,7 +514,7 @@ impl ApnsClient {
 
         let response = client
             .post(url)
-            .header("apns-topic", &self.bundle_id)
+            .header("apns-topic", self.topic_for(token))
             .header("apns-push-type", "background")
             .header("apns-priority", "5")
             .json(&body)
@@ -510,7 +537,7 @@ impl ApnsClient {
             .build(
                 &token.token,
                 NotificationOptions {
-                    apns_topic: Some(&self.bundle_id),
+                    apns_topic: Some(self.topic_for(token)),
                     apns_push_type: Some(PushType::Background),
                     apns_priority: Some(Priority::Normal),
                     ..Default::default()
@@ -530,7 +557,7 @@ impl ApnsClient {
 
         debug!(
             "APNs metadata push: topic={} env={} token={} group={}",
-            self.bundle_id, token.environment, token.token, group_id
+            self.topic_for(token), token.environment, token.token, group_id
         );
 
         match client.send(payload).await {
@@ -572,7 +599,7 @@ impl ApnsClient {
             .build(
                 &token.token,
                 NotificationOptions {
-                    apns_topic: Some(&self.bundle_id),
+                    apns_topic: Some(self.topic_for(token)),
                     apns_push_type: Some(PushType::Alert),
                     apns_priority: Some(Priority::High),
                     ..Default::default()
@@ -591,7 +618,7 @@ impl ApnsClient {
 
         debug!(
             "APNs alert push: topic={} env={} token={} group={} message={}",
-            self.bundle_id, token.environment, token.token, group_id, message_id
+            self.topic_for(token), token.environment, token.token, group_id, message_id
         );
 
         match client.send(payload).await {
@@ -621,7 +648,7 @@ impl ApnsClient {
 
         let response = client
             .post(url)
-            .header("apns-topic", &self.bundle_id)
+            .header("apns-topic", self.topic_for(token))
             .header("apns-push-type", "background")
             .header("apns-priority", "5")
             .json(&body)
@@ -662,7 +689,7 @@ impl ApnsClient {
 
         let response = client
             .post(url)
-            .header("apns-topic", &self.bundle_id)
+            .header("apns-topic", self.topic_for(token))
             .header("apns-push-type", "alert")
             .header("apns-priority", "10")
             .json(&body)
@@ -703,6 +730,13 @@ fn map_a2_response(response: &a2::Response) -> Result<(), ApnsSendError> {
     if response.code == 400 && bad_device_token {
         return Err(ApnsSendError::Unregistered);
     }
+    let wrong_topic = matches!(
+        response.error.as_ref().map(|body| &body.reason),
+        Some(a2::ErrorReason::DeviceTokenNotForTopic)
+    );
+    if response.code == 400 && wrong_topic {
+        return Err(ApnsSendError::WrongTopic);
+    }
     map_apns_status(response.code)
 }
 
@@ -728,6 +762,7 @@ mod tests {
             token: "a".repeat(64),
             environment: environment.to_string(),
             device_id: None,
+            app_bundle_id: None,
             updated_at: Utc::now(),
         }
     }

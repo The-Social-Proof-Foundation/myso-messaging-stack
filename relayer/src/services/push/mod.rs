@@ -281,26 +281,36 @@ impl PushService {
                     let send_alert = push_visible_alerts
                         && job.wallet_mode == WalletNotificationMode::All;
                     let result = if send_alert {
-                        apns
-                            .send_new_message_alert(
-                                &job.token,
-                                &group_id,
-                                message_id,
-                                &sender_wallet,
-                                message_kind,
-                                encrypted_notification.as_deref(),
-                                message_wire.as_deref(),
-                                &attribution,
-                            )
-                            .await
+                        send_with_topic_fallback(&storage, &apns, &job.token, |token| {
+                            let apns = &apns;
+                            let group_id = &group_id;
+                            let sender_wallet = &sender_wallet;
+                            let encrypted_notification = encrypted_notification.as_deref();
+                            let message_wire = message_wire.as_deref();
+                            let attribution = &attribution;
+                            async move {
+                                apns.send_new_message_alert(
+                                    &token,
+                                    group_id,
+                                    message_id,
+                                    sender_wallet,
+                                    message_kind,
+                                    encrypted_notification,
+                                    message_wire,
+                                    attribution,
+                                )
+                                .await
+                            }
+                        })
+                        .await
                     } else {
-                        apns
-                            .send_new_message(
-                                &job.token,
-                                &group_id,
-                                &attribution,
-                            )
-                            .await
+                        send_with_topic_fallback(&storage, &apns, &job.token, |token| {
+                            let apns = &apns;
+                            let group_id = &group_id;
+                            let attribution = &attribution;
+                            async move { apns.send_new_message(&token, group_id, attribution).await }
+                        })
+                        .await
                     };
                     match result {
                         Ok(()) => PushSendOutcome::Sent,
@@ -322,6 +332,13 @@ impl PushService {
                         }
                         Err(ApnsSendError::InvalidToken) => {
                             warn!("invalid APNs token for {}: {}", job.member, job.token.token);
+                            PushSendOutcome::Failed
+                        }
+                        Err(ApnsSendError::WrongTopic) => {
+                            warn!(
+                                "APNs token for {} matches no configured app topic: {}",
+                                job.member, job.token.token
+                            );
                             PushSendOutcome::Failed
                         }
                         Err(ApnsSendError::Transient(err)) => {
@@ -413,7 +430,11 @@ impl PushService {
         for token in tokens {
             if let Some(apns) = self.apns.as_ref() {
                 if ApnsClient::is_ios_token(&token) && apns.supports_token_environment(&token) {
-                    match apns.send_workflow_item(&token, item_type, item_id).await {
+                    let sent = send_with_topic_fallback(storage, apns, &token, |token| async move {
+                        apns.send_workflow_item(&token, item_type, item_id).await
+                    })
+                    .await;
+                    match sent {
                         Ok(()) => {}
                         Err(ApnsSendError::Unregistered) => {
                             let _ = storage.delete_push_token(recipient, &token.token).await;
@@ -464,6 +485,17 @@ impl PushService {
             debug!("drop push retry for {wallet} — recipient active again");
             return Ok(());
         }
+        send_with_topic_fallback(storage, apns, token, |token| async move {
+            Self::redeliver_once(apns, &token, job).await
+        })
+        .await
+    }
+
+    async fn redeliver_once(
+        apns: &ApnsClient,
+        token: &PushTokenRecord,
+        job: &PushRetryJob,
+    ) -> Result<(), ApnsSendError> {
         match job {
             PushRetryJob::NewMessage { group_id, attribution } => {
                 apns.send_new_message(token, group_id, attribution).await
@@ -511,6 +543,41 @@ impl PushService {
     }
 }
 
+async fn send_with_topic_fallback<F, Fut>(
+    storage: &Arc<dyn StorageAdapter>,
+    apns: &ApnsClient,
+    token: &PushTokenRecord,
+    send: F,
+) -> Result<(), ApnsSendError>
+where
+    F: Fn(PushTokenRecord) -> Fut,
+    Fut: std::future::Future<Output = Result<(), ApnsSendError>>,
+{
+    match send(token.clone()).await {
+        Err(ApnsSendError::WrongTopic) => {}
+        other => return other,
+    }
+    for topic in apns.alternate_topics(token) {
+        let mut retry = token.clone();
+        retry.app_bundle_id = Some(topic.clone());
+        match send(retry.clone()).await {
+            Ok(()) => {
+                info!(
+                    "APNs token for {} belongs to {}; remembering it",
+                    token.wallet, topic
+                );
+                if let Err(err) = storage.upsert_push_token(retry).await {
+                    warn!("failed to save APNs topic for {}: {}", token.wallet, err);
+                }
+                return Ok(());
+            }
+            Err(ApnsSendError::WrongTopic) => continue,
+            Err(err) => return Err(err),
+        }
+    }
+    Err(ApnsSendError::WrongTopic)
+}
+
 fn is_wallet_recently_active(last_seen: DateTime<Utc>, presence_ttl_secs: u64) -> bool {
     let elapsed = Utc::now().signed_duration_since(last_seen);
     elapsed.num_seconds() >= 0 && (elapsed.num_seconds() as u64) < presence_ttl_secs
@@ -542,6 +609,67 @@ mod tests {
         let service = PushService::from_config(&config);
         assert_eq!(service.notify_concurrency, 25);
         assert_eq!(service.large_group_warn_members, 1000);
+    }
+
+    #[tokio::test]
+    async fn wrong_topic_retries_other_app_and_remembers_it() {
+        let storage: Arc<dyn StorageAdapter> = Arc::new(crate::storage::InMemoryStorage::new());
+        let apns = ApnsClient::from_test_http(
+            "http://127.0.0.1:1".to_string(),
+            "com.projectyz.dev".to_string(),
+            ApnsEnvironment::Production,
+        )
+        .with_extra_topics(vec!["com.projectyz.app".to_string()]);
+        let token = PushTokenRecord {
+            wallet: "0xabc".to_string(),
+            platform: "ios".to_string(),
+            token: "a".repeat(64),
+            environment: "production".to_string(),
+            device_id: None,
+            app_bundle_id: None,
+            updated_at: Utc::now(),
+        };
+        storage.upsert_push_token(token.clone()).await.unwrap();
+        let attempts = std::sync::Mutex::new(Vec::new());
+
+        let result = send_with_topic_fallback(&storage, &apns, &token, |t| {
+            attempts.lock().unwrap().push(t.app_bundle_id.clone());
+            let ok = t.app_bundle_id.as_deref() == Some("com.projectyz.app");
+            async move { if ok { Ok(()) } else { Err(ApnsSendError::WrongTopic) } }
+        })
+        .await;
+
+        assert!(result.is_ok());
+        assert_eq!(
+            *attempts.lock().unwrap(),
+            vec![None, Some("com.projectyz.app".to_string())]
+        );
+        let saved = storage.list_push_tokens_for_wallet("0xabc").await.unwrap();
+        assert_eq!(saved[0].app_bundle_id.as_deref(), Some("com.projectyz.app"));
+    }
+
+    #[tokio::test]
+    async fn wrong_topic_with_no_alternative_reports_wrong_topic() {
+        let storage: Arc<dyn StorageAdapter> = Arc::new(crate::storage::InMemoryStorage::new());
+        let apns = ApnsClient::from_test_http(
+            "http://127.0.0.1:1".to_string(),
+            "com.projectyz.dev".to_string(),
+            ApnsEnvironment::Production,
+        );
+        let token = PushTokenRecord {
+            wallet: "0xabc".to_string(),
+            platform: "ios".to_string(),
+            token: "a".repeat(64),
+            environment: "production".to_string(),
+            device_id: None,
+            app_bundle_id: None,
+            updated_at: Utc::now(),
+        };
+        let result = send_with_topic_fallback(&storage, &apns, &token, |_| async {
+            Err(ApnsSendError::WrongTopic)
+        })
+        .await;
+        assert_eq!(result, Err(ApnsSendError::WrongTopic));
     }
 
     #[test]

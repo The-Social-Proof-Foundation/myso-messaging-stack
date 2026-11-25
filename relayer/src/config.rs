@@ -131,6 +131,7 @@ pub struct Config {
     pub apns_team_id: Option<String>,
     /// APNs bundle id (optional).
     pub apns_bundle_id: Option<String>,
+    pub apns_extra_bundle_ids: Vec<String>,
     /// Path to APNs .p8 auth key (optional). Ignored when `apns_auth_key` is set.
     pub apns_auth_key_path: Option<String>,
     /// APNs .p8 auth key contents from `APNS_AUTH_KEY` (optional). Lets hosted deploys
@@ -321,6 +322,15 @@ impl Config {
         let apns_key_id = env::var("APNS_KEY_ID").ok();
         let apns_team_id = env::var("APNS_TEAM_ID").ok();
         let apns_bundle_id = env::var("APNS_BUNDLE_ID").ok();
+        let apns_extra_bundle_ids = env::var("APNS_EXTRA_BUNDLE_IDS")
+            .ok()
+            .map(|raw| {
+                raw.split(',')
+                    .map(|id| id.trim().to_string())
+                    .filter(|id| !id.is_empty())
+                    .collect()
+            })
+            .unwrap_or_default();
         let apns_auth_key_path = env::var("APNS_AUTH_KEY_PATH").ok();
         let apns_auth_key = env::var("APNS_AUTH_KEY")
             .ok()
@@ -414,6 +424,7 @@ impl Config {
             apns_key_id,
             apns_team_id,
             apns_bundle_id,
+            apns_extra_bundle_ids,
             apns_auth_key_path,
             apns_auth_key,
             apns_environment,
@@ -504,6 +515,7 @@ impl Default for Config {
             apns_key_id: None,
             apns_team_id: None,
             apns_bundle_id: None,
+            apns_extra_bundle_ids: Vec::new(),
             apns_auth_key_path: None,
             apns_auth_key: None,
             apns_environment: "sandbox".to_string(),

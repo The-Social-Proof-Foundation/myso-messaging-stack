@@ -24,6 +24,7 @@ fn sample_token(environment: &str) -> PushTokenRecord {
         token: DEVICE_TOKEN.to_string(),
         environment: environment.to_string(),
         device_id: None,
+        app_bundle_id: None,
         updated_at: Utc::now(),
     }
 }
