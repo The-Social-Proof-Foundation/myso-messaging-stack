@@ -25,7 +25,7 @@ use crate::handlers::health::health_check;
 use crate::handlers::messages::payments::respond_to_payment_request;
 use crate::handlers::messages::{create_message, delete_message, get_messages, update_message};
 use crate::handlers::notification_push;
-use crate::handlers::presence::post_presence;
+use crate::handlers::presence::{get_user_presence, post_presence};
 use crate::handlers::push_devices::{delete_push_token, post_push_token};
 use crate::handlers::reports::post_report;
 use crate::handlers::unread_counts::post_unread_counts;
@@ -323,6 +323,7 @@ pub fn build_router(app_state: AppState, auth_state: AuthState, config: &Config)
         .route("/devices/push-tokens", post(post_push_token))
         .route("/devices/push-tokens/:token", delete(delete_push_token))
         .route("/devices/presence", post(post_presence))
+        .route("/users/presence", get(get_user_presence))
         .route(
             "/devices/notification-keys",
             put(notification_push::put_notification_key),

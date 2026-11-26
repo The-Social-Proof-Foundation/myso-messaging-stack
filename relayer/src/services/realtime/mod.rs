@@ -247,8 +247,10 @@ pub async fn notify_user_feed_event(pool: &sqlx::PgPool, event: &UserFeedEvent) 
         }),
         UserFeedEvent::GroupActivity { .. }
         | UserFeedEvent::ReadStateUpdated { .. }
-        | UserFeedEvent::ReceiptUpdated { .. } => {
-            // Fan-out via storage-side NOTIFY (message.created / read-state / receipts).
+        | UserFeedEvent::ReceiptUpdated { .. }
+        | UserFeedEvent::PresenceUpdated { .. } => {
+            // Fan-out via storage-side NOTIFY (message.created / read-state / receipts) or,
+            // for presence, the wallet-level `presence.changed` signal each instance expands.
             return Ok(());
         }
     }
@@ -296,6 +298,13 @@ pub enum UserFeedEvent {
     /// A conversation should leave `wallet`'s sidebar (membership removed
     /// today; archived/blocked/workflow hiding tomorrow).
     GroupHidden { wallet: String, group_id: String },
+    /// `member`'s effective online state in `group_id` changed — membership-
+    /// filtered so inbox avatars update without an open group socket.
+    PresenceUpdated {
+        group_id: String,
+        member: String,
+        online: bool,
+    },
     /// A workflow inbox item was created for `wallet`.
     WorkflowItemCreated {
         wallet: String,
@@ -359,6 +368,10 @@ impl UserFeedEvent {
             | UserFeedEvent::ReceiptUpdated { group_id, .. } => {
                 membership_allows(membership, group_id, wallet)
             }
+            UserFeedEvent::PresenceUpdated { group_id, member, .. } => {
+                !member.eq_ignore_ascii_case(wallet)
+                    && membership_allows(membership, group_id, wallet)
+            }
             UserFeedEvent::ReadStateUpdated { wallet: target, .. } => target == wallet,
             UserFeedEvent::GroupDiscovered { wallet: target, .. } => target == wallet,
             UserFeedEvent::GroupHidden { wallet: target, .. } => target == wallet,
@@ -407,6 +420,16 @@ impl UserFeedEvent {
             UserFeedEvent::GroupHidden { group_id, .. } => serde_json::json!({
                 "type": GROUP_HIDDEN_EVENT_TYPE,
                 "group_id": group_id,
+            }),
+            UserFeedEvent::PresenceUpdated {
+                group_id,
+                member,
+                online,
+            } => serde_json::json!({
+                "type": PRESENCE_UPDATED_EVENT_TYPE,
+                "group_id": group_id,
+                "member": member,
+                "online": online,
             }),
             UserFeedEvent::WorkflowItemCreated {
                 item_id,
@@ -646,7 +669,13 @@ impl RealtimeHub {
         self.publish_event(group_id, RealtimeEvent::Typing(event));
     }
 
+    /// Group channel (open thread) + membership-filtered user feed (inbox avatars).
     pub fn publish_presence(&self, group_id: &str, event: PresenceUpdatedEvent) {
+        self.publish_user_event(UserFeedEvent::PresenceUpdated {
+            group_id: event.group_id.clone(),
+            member: event.member.clone(),
+            online: event.online,
+        });
         self.publish_event(group_id, RealtimeEvent::PresenceUpdated(event));
     }
 
@@ -989,6 +1018,7 @@ mod tests {
     async fn publish_presence_delivers_on_group_channel() {
         let hub = RealtimeHub::new();
         let mut rx = hub.subscribe("group-1");
+        let mut feed_rx = hub.subscribe_user_feed();
 
         hub.publish_presence(
             "group-1",
@@ -1003,5 +1033,36 @@ mod tests {
         assert!(event.online);
         let json = serde_json::to_string(&RealtimeEvent::PresenceUpdated(event)).unwrap();
         assert!(json.contains(r#""type":"presence.updated""#));
+
+        let feed_event = feed_rx.recv().await.expect("user feed presence");
+        assert_eq!(
+            feed_event.wire_frame(),
+            serde_json::json!({
+                "type": "presence.updated",
+                "group_id": "group-1",
+                "member": "0xalice",
+                "online": true,
+            })
+        );
+    }
+
+    #[test]
+    fn user_feed_presence_goes_to_co_members_only() {
+        let store = crate::auth::InMemoryMembershipStore::new();
+        for wallet in ["0xalice", "0xbob"] {
+            store.add_member(
+                "group-1",
+                wallet,
+                vec![crate::auth::MessagingPermission::MessagingReader],
+            );
+        }
+        let presence = UserFeedEvent::PresenceUpdated {
+            group_id: "group-1".to_string(),
+            member: "0xalice".to_string(),
+            online: true,
+        };
+        assert!(presence.matches_wallet("0xbob", &store));
+        assert!(!presence.matches_wallet("0xAlice", &store), "no echo to self");
+        assert!(!presence.matches_wallet("0xcarol", &store), "non-members never see it");
     }
 }
